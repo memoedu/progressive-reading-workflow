@@ -15,6 +15,7 @@ const code=(await fs.readFile(new URL('../site-import/web/app.mjs',import.meta.u
 const {mountImportCenter}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 const mounted=mountImportCenter(doc,{fetchImpl,pollMs:1000000});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const pollMs=Number(value('--poll-ms','10000'));if(!Number.isSafeInteger(pollMs)||pollMs<2500||pollMs>60000)throw Error('invalid_canary_poll_interval');
 async function state(){const deadline=Date.now()+180000;for(let attempt=0;;attempt++){try{const response=await fetchImpl('/api/site-imports',{signal:AbortSignal.timeout(30000)});if(!response.ok){const error=new Error('state_unavailable:'+response.status);error.terminal=[401,403].includes(response.status);throw error;}return await response.json();}catch(error){if(error.terminal||Date.now()>=deadline)throw error;if(attempt%10===0)console.log(JSON.stringify({connection:'waiting',error:error.message,read_only_retry:true}));await delay(Math.min(3000,500*(attempt+1)));}}}
 try{
   await delay(100);await mounted.refresh();let data=await state();
@@ -43,7 +44,7 @@ try{
       await mounted.refresh();console.log(JSON.stringify({rendered_summary:doc.getElementById('site-sources').textContent,output}));
       if(run.phase!=='completed')process.exitCode=1;break;
     }
-    await delay(2500);
+    await delay(pollMs);
   }
   if(!terminal&&Date.now()>=deadline)throw Error('site_canary_deadline_exceeded_no_completion_claimed');
 }finally{mounted.stop();dom.window.close();}
