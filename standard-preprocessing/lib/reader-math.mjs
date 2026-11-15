@@ -95,6 +95,9 @@ export function normalizeReaderMath(markdown) {
         // Turndown also escapes ordinary square brackets. Keep bracketed prose
         // literal unless it contains explicit TeX or mathematical operators.
         const explicitMath=/\\[A-Za-z]+|[=^_{}]/u.test(content);
+        // Numeric footnotes, short duration labels and initialisms are common
+        // escaped CommonMark brackets, not alternate display equations.
+        if(!explicitMath&&/^\s*(?:\d+(?:[.,]\d+)?(?:\s*(?:ms|s|m|h|d|min|sec|hrs?|hours?|minutes?))?|\d+(?:\s*[,–-]\s*\d+)+|[A-Z]{2,8}|[*†‡]+)\s*$/u.test(content))return whole;
         if(!explicitMath&&(/\p{Script=Han}/u.test(content)||/\b[A-Za-z]{3,}\b/u.test(content)))return whole;
         display++;return '$$'+normalize(content)+'$$';
       });
@@ -117,5 +120,5 @@ export function normalizeReaderMath(markdown) {
     if(opening){flush();fence=opening[1];output.push(line);}else plain.push(line);
   }
   flush();
-  return {markdown:output.join('\n'),report:{policy:'reader-math-compatibility/v2',inline_converted:inline,display_converted:display,literal_currency_escaped:currency,text_underscores_escaped:textUnderscores,formula_content_unchanged:textUnderscores===0}};
+  return {markdown:output.join('\n'),report:{policy:'reader-math-compatibility/v3',inline_converted:inline,display_converted:display,literal_currency_escaped:currency,text_underscores_escaped:textUnderscores,formula_content_unchanged:textUnderscores===0}};
 }

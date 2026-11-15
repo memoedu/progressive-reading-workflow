@@ -4,7 +4,7 @@ export function browserCaptureProcessingOptions(action, overrides = {}) {
   if (!['save', 'import'].includes(action)) throw new Error('unsupported_browser_capture_action');
   return action === 'save'
     ? { ...overrides, spoken_to_written: false, structure_body: false, translate: false, include_reading_guide: false }
-    : { ...overrides, include_reading_guide: true };
+    : { include_reading_guide: true, ...overrides };
 }
 
 export async function preprocessBrowserCapture({

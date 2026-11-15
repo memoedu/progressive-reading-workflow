@@ -1028,6 +1028,11 @@ async function browserPreprocessProducer() {
   if (!mode) return undefined;
   if (process.env.NODE_ENV !== "test") throw new Error("browser_preprocess_test_producer_requires_test_environment");
   const { SyntheticProducer } = await import("../standard-preprocessing/test-support/synthetic-producer.mjs");
+  if(mode==='synthetic-delayed'){
+    const producer=new SyntheticProducer();
+    for(const method of ['classifyWorkflow','generate','refineFullText']){const original=producer[method].bind(producer);producer[method]=async(...args)=>{await fs.mkdir(path.join(workflowRoot,'.local-ir'),{recursive:true});await writeFileAtomic(path.join(workflowRoot,'.local-ir','synthetic-producer-active.json'),JSON.stringify({method,at:Date.now()}));await new Promise(resolve=>setTimeout(resolve,750));return original(...args);};}
+    return producer;
+  }
   if (mode === "synthetic") return new SyntheticProducer();
   if (mode === "synthetic-invalid") return new SyntheticProducer({ invalid: true });
   if (mode === "synthetic-uncertain") return new SyntheticProducer({ uncertain: true });
@@ -1246,12 +1251,17 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   await fs.mkdir(browserStateRoot, { recursive: true });
   const target = await browserDraftTarget(root, parsed.href, converted.title || draft.title);
   const metadataTarget = path.join(browserStateRoot, `${path.basename(target)}.browser-ir.json`);
+  let reimportSnapshot = null;
   if (standardize && draft.sourceType !== "url_import" && await pathExists(target)) {
-    const previous = await fs.readFile(metadataTarget, "utf8").then(JSON.parse).catch(() => null);
+    const metadataBytes = await fs.readFile(metadataTarget).catch(() => null);
+    const previous = metadataBytes ? JSON.parse(metadataBytes.toString('utf8')) : null;
     const contents = await fs.readFile(target);
     if (!previous?.content?.markdownSha256 || createHash("sha256").update(contents).digest("hex") !== previous.content.markdownSha256) {
       throw new Error("existing_article_changed_preserved:本地文章已有后续修改，已保留文章与批注，未覆盖。");
     }
+    reimportSnapshot = {body:createHash('sha256').update(contents).digest('hex'),metadata:createHash('sha256').update(metadataBytes).digest('hex')};
+    const expected=draft.importJob?.expectedPublication;
+    if(expected&&(expected.markdown_sha256!==reimportSnapshot.body||expected.metadata_sha256!==reimportSnapshot.metadata||expected.document_id!==previous.document.id||expected.revision!==previous.document.revision))throw new Error('existing_article_changed_before_reimport_preserved:排队后正文或批注已变化，已保留现有内容。');
   }
   if (draft.sourceType === "url_import"
     && (await pathExists(target) || await pathExists(metadataTarget))) {
@@ -1308,6 +1318,10 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     committedAt: nowIso()
   });
   metadata.annotations = LocalIrDocumentCore.anchorAnnotationsToMarkdown(metadata.annotations, markdown, documentPath);
+  if(reimportSnapshot){
+    const body=await fs.readFile(target),state=await fs.readFile(metadataTarget);
+    if(createHash('sha256').update(body).digest('hex')!==reimportSnapshot.body||createHash('sha256').update(state).digest('hex')!==reimportSnapshot.metadata)throw new Error('existing_article_changed_during_processing_preserved:处理期间正文或批注发生变化，已保留现有内容。');
+  }
   await writeFileAtomic(target, markdown);
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
   return {

@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.6";
+export const PROCESSOR_VERSION = "1.12.7";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -1090,12 +1090,12 @@ export function renderReadingMarkdown({ materialId, metadata, sourceType, hashes
       lines.push(itemLines.join("\n"), "");
     } else lines.push(block.markdown, "", `^${block.block_id}`, "");
   }
-  if (translationState === "generated_translation" && originalBlocks.length) {
-    lines.push("---", "", "## 原文", "");
-    for (const block of originalBlocks) lines.push(block.markdown, "");
-  }
   const rendered = `${trimOuterBlankLines(lines.join("\n"))}\n`;
-  return normalizeReaderMath(pruneUnreferencedReadingAnchors(rendered, bodyBlocks.map((block) => block.block_id)).markdown).markdown;
+  let reading = normalizeReaderMath(pruneUnreferencedReadingAnchors(rendered, bodyBlocks.map((block) => block.block_id)).markdown).markdown;
+  // Reader compatibility applies to the translated reading view. The original
+  // appendix is immutable source evidence, including escaped punctuation.
+  if(translationState==='generated_translation'&&originalBlocks.length)reading+='\n---\n\n## 原文\n\n'+originalBlocks.map(block=>block.source_markdown||block.markdown).join('\n\n')+'\n';
+  return reading;
 }
 
 function renderQuarantineMarkdown({ materialId, metadata, sourceType, hashes, blocks }) {

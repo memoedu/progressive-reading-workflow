@@ -816,8 +816,8 @@ const ENGLISH_PHRASE_PATTERN = /[A-Za-z]+(?:['’-][A-Za-z]+)?(?:[\t ,;:，；�
 export function translationNaturalLanguage(markdown) {
   return String(markdown || "")
     .replace(/```[\s\S]*?```/gu, "")
-    .replace(/\$\$[\s\S]*?\$\$/gu, "")
     .replace(INLINE_CODE_PATTERN, "")
+    .replace(/\$\$[\s\S]*?\$\$/gu, "")
     .replace(/(?<!\\)\$(?!\$)(?:\\.|[^$\n])+(?<!\\)\$/gu, "")
     .replace(/!\[[^\]\n]*\]\([^\n]*?\)/gu, "")
     .replace(MARKDOWN_LINK_DESTINATION_PATTERN, "")
@@ -879,6 +879,10 @@ export function isBibliographicReferenceBlock(markdown) {
   const startsWithAuthor = initialLedNames.some(name => text.startsWith(name.trim()))
     || /^[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2},\s*(?:[A-Z]\.|[A-Z][a-z]+)(?:[.,\s]|$)/u.test(text);
   if (!startsWithAuthor) return false;
+  const namedJournalCitation = /^[A-ZÀ-Ž][A-Za-zÀ-ž'’.-]+,\s+[A-ZÀ-Ž][A-Za-zÀ-ž'’.-]*(?:[,\s]+(?:[A-ZÀ-Ž][A-Za-zÀ-ž'’.-]*|and|et|al|&))*\.\s+(?:(?:18|19|20)\d{2}[a-z]?\.\s+)?[“"][^”"\n]+[”"]\s+([\s\S]+)$/u.exec(text);
+  if (namedJournalCitation && /\b(?:18|19|20)\d{2}\b/u.test(text)
+      && /\b(?:doi|ISBN|vol(?:ume)?\.?\s*\d+|pp?\.?\s+\d+[-–]\d+)\b/iu.test(text)
+      && !/\b(?:is|are|was|were|argues?|explains?|discusses?|provides?|shows?|suggests?|concludes?|demonstrates?|found|finds?|reports?)\b/iu.test(namedJournalCitation[1])) return true;
   const hasMultipleAuthors = initialLedNames.length >= 2
     || (initialLedNames.length >= 1 && /(?:,|\band\b)\s+(?:[A-Z]\.?\s*)?[A-Z][A-Za-z'’-]+/u.test(text));
   const hasCitationMetadata = /\b(?:ISBN|doi|(?:19|20)\d{2}|\d+(?:st|nd|rd|th)\s+(?:ed(?:ition)?|edition)|\d+e)\b/iu.test(text);
@@ -950,10 +954,10 @@ export function protectTranslationMarkdown(markdown, { includeMath = false, prot
     });
   };
   protect(/```[\s\S]*?```/gu);
+  protect(INLINE_CODE_PATTERN);
   protect(/<(math|svg)\b[^>]*>[\s\S]*?<\/\1>/giu);
   protect(/^(\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+|:::\s*))/gmu);
   if (includeMath) protect(/\$\$[\s\S]*?\$\$/gu);
-  protect(INLINE_CODE_PATTERN);
   if (includeMath) protect(/(?<!\\)\$(?!\$)(?:\\.|[^$\n])+(?<!\\)\$/gu);
   for (const term of protectedTerms) {
     const escaped = String(term).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -1107,13 +1111,16 @@ export function extractProtectedHttpUrls(markdown) {
 
 export function translationProtectedSyntax(markdown, { includeMath = false } = {}) {
   const value = String(markdown || "");
-  const displayMath = includeMath ? value.match(/\$\$[\s\S]*?\$\$/gu) || [] : [];
-  const withoutDisplay = includeMath ? value.replace(/\$\$[\s\S]*?\$\$/gu, "") : value;
+  const fencedCode = value.match(/```[\s\S]*?```/gu) || [];
+  const outsideFences = value.replace(/```[\s\S]*?```/gu, '');
+  const inlineCode = [...outsideFences.matchAll(INLINE_CODE_PATTERN)].map(match => match[0]);
+  const outsideCode = outsideFences.replace(INLINE_CODE_PATTERN, '');
+  const displayMath = includeMath ? outsideCode.match(/\$\$[\s\S]*?\$\$/gu) || [] : [];
+  const withoutDisplay = includeMath ? outsideCode.replace(/\$\$[\s\S]*?\$\$/gu, "") : outsideCode;
   const inlineMath = includeMath ? withoutDisplay.match(/(?<!\\)\$(?!\$)(?:\\.|[^$\n])+(?<!\\)\$/gu) || [] : [];
-  const inlineCode = [...withoutDisplay.matchAll(INLINE_CODE_PATTERN)].map((match) => match[0]);
   const urls = extractProtectedHttpUrls(value);
   const linkDestinations = value.match(MARKDOWN_LINK_DESTINATION_PATTERN) || [];
-  return { displayMath: [...displayMath].sort(), inlineMath: [...inlineMath].sort(), inlineCode, urls, linkDestinations };
+  return { displayMath: [...displayMath].sort(), inlineMath: [...inlineMath].sort(), fencedCode, inlineCode, urls, linkDestinations };
 }
 
 function countedValues(values) {
@@ -1125,11 +1132,14 @@ function countedValues(values) {
 export function stripUnexpectedTranslationInlineSyntax(markdown, sourceMarkdown, { includeMath = false } = {}) {
   const sourceSyntax = translationProtectedSyntax(sourceMarkdown, { includeMath });
   const codeCounts = countedValues(sourceSyntax.inlineCode);
-  let stripped = String(markdown || "").replace(INLINE_CODE_PATTERN, (full, delimiter, content) => {
+  const codeValues = [];
+  const fencedValues = [];
+  let stripped = String(markdown || "").replace(/```[\s\S]*?```/gu, value => {const token=`ZXQKEEPFENCE${String(fencedValues.length).padStart(4,'0')}QXZ`;fencedValues.push({token,value});return token;}).replace(INLINE_CODE_PATTERN, (full, delimiter, content) => {
     const remaining = codeCounts.get(full) || 0;
     if (remaining > 0) {
       codeCounts.set(full, remaining - 1);
-      return full;
+      const token = `ZXQKEEPCODE${String(codeValues.length).padStart(4,'0')}QXZ`;
+      codeValues.push({token,value:full});return token;
     }
     return content;
   });
@@ -1152,6 +1162,8 @@ export function stripUnexpectedTranslationInlineSyntax(markdown, sourceMarkdown,
     });
     for (const { token, value } of displayValues) stripped = stripped.replace(token, () => value);
   }
+  for (const {token,value} of codeValues) stripped = stripped.replace(token, () => value);
+  for (const {token,value} of fencedValues) stripped = stripped.replace(token, () => value);
   return stripped;
 }
 
