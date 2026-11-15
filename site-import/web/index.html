@@ -14,15 +14,16 @@
       <label>名称<input id="site-name" maxlength="160" autocomplete="off" placeholder="例如：某作者的博客"></label>
       <label>网站或栏目链接<input id="site-url" type="url" required aria-required="true" placeholder="https://example.com/blog" autocomplete="off"></label>
       <label>收录范围<select id="site-scope"><option value="blog">博客文章</option><option value="documents">文章与文档</option><option value="content">全部正文页面</option></select></label>
-      <label>导入方式<select id="site-mode"><option value="standard_preprocess">标准处理后入库</option><option value="original_text">原文直接入库</option></select></label>
+      <label>导入方式<select id="site-mode"><option value="standard_preprocess">保留正文，外语翻译</option><option value="original_text">原文直接入库（不翻译）</option></select></label>
       <label class="wide">阅读区内的目录<input id="site-destination" required aria-required="true" placeholder="例如：整站/某作者"></label>
       <label data-site-standard>翻译方式<select id="site-translation"><option value="terminology">最新翻译，保留原文术语</option><option value="plain">普通简体中文翻译</option></select></label>
       <label data-site-standard>生成导读卡<select id="site-guide"><option value="false">不生成</option><option value="true">生成</option></select></label>
-      <p id="site-mode-hint" class="hint wide">标准处理复用现有翻译与校验流程。</p>
+      <p id="site-mode-hint" class="hint wide">默认保留正文与结构，英文等外语译为中文，不生成导读卡，不做结构改写或口语整理。</p>
       <label class="wide">范围说明与加工要求<textarea id="site-instruction" rows="3" maxlength="6000" placeholder="例如：只收录技术文章，不收录更新日志。"></textarea></label>
     </div>
     <details><summary>路径范围（可选）</summary><p class="hint">每行一项，支持 * 通配符；留空时由后台识别文章范围。</p><div class="form-grid"><label>只包含这些路径<textarea id="site-include" rows="3" placeholder="/blog/*"></textarea></label><label>排除这些路径<textarea id="site-exclude" rows="3" placeholder="/blog/search*"></textarea></label></div></details>
     <label class="check"><input id="site-index" type="checkbox" checked>生成可打开文章的阅读目录</label>
+    <label class="check"><input id="site-rss" type="checkbox">同时加入 RSS 订阅</label><p class="hint">沿用同一阅读目录和处理方式，由现有订阅流程接收更新；已有正文直接复用。</p>
     <p id="site-form-error" class="error helper" role="alert"></p><div class="actions"><button id="site-save" type="submit">保存设置</button><span class="hint">保存后可点击“开始导入”。</span></div></form>
   </section>
   <section class="section" id="site-detail" aria-labelledby="site-detail-title" hidden><div class="section-head"><h2 id="site-detail-title">整站导入结果</h2><button id="site-detail-close" class="secondary" type="button">收起结果</button></div><p id="site-detail-summary" role="status"></p><p id="site-detail-error" class="error"></p><div id="site-detail-results"></div></section>

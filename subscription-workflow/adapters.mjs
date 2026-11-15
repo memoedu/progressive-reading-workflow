@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig, paths, readJson, writeJson, withLock, digest, platform } from './config.mjs';
+import { loadConfig, paths, readJson, writeJson, withLock, digest, platform,sourceProcessingOptions } from './config.mjs';
 import { saveSourceMaterial, findExistingPublication, materialKey } from './catalog.mjs';
 import { RssImporter, acquireLock } from '../rss-import/core.mjs';
 import { syncAll, fetchText } from '../rss-source/cli.mjs';
@@ -24,7 +24,7 @@ import {scanRepositories} from './repositories.mjs';
 export function autoConfig(config, onlyRss = false) {
   const subscriptions = config.subscriptions.filter(s => s.enabled && s.kind!=='github_repository' && !s.kind.startsWith('bilibili_') && s.mode !== 'reports' && (!onlyRss || s.kind === 'rss'))
     .map(s => ({ url: s.url, name: s.name, route: s.mode, destination: readingDestination({platform:s.kind==='rss'?'rss':s.kind,destination:s.destination,subscription_name:s.name}), subscription_id: s.id,
-      history_mode: s.history_mode, earliest_date: s.earliest_date }));
+      history_mode: s.history_mode, earliest_date: s.earliest_date,processing_options:sourceProcessingOptions(s) }));
   return { ...config.rss_defaults, enabled: config.enabled, subscriptions, feeds: subscriptions.map(s => s.url),
     report_feeds: config.subscriptions.filter(s => s.enabled && s.kind === 'rss' && s.mode === 'reports').map(s => s.url),
     current_feed_only: true, poll_minutes: 1440, max_in_flight: 2, retry_minutes: 60, destination_folder: 'RSS' };

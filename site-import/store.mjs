@@ -35,11 +35,11 @@ export function normalizeSiteSource(value,previous={}) {
   const destination=normalizeRelativeDestinationFolder(value.destination ?? previous.destination ?? '整站/'+name.replace(/[<>:"/\\|?*]/gu,'－'),{required:true});
   const instruction=String(value.instruction ?? previous.instruction ?? '').trim();
   if(instruction.length>6000)throw new Error('范围说明或加工要求过长');
-  for(const key of ['generate_guide','generate_index'])if(value[key]!==undefined&&typeof value[key]!=='boolean')throw new Error('导读或目录选项无效');
+  for(const key of ['generate_guide','generate_index','subscribe_rss'])if(value[key]!==undefined&&typeof value[key]!=='boolean')throw new Error('导读、目录或订阅选项无效');
   return {...previous,id:previous.id || 'site-'+randomUUID(),name,url,scope,destination,processing_mode:mode,
     translation_mode:translation,generate_guide:value.generate_guide ?? previous.generate_guide ?? false,
     include_paths:patterns('include_paths'),exclude_paths:patterns('exclude_paths'),instruction,
-    generate_index:value.generate_index ?? previous.generate_index ?? true,
+    generate_index:value.generate_index ?? previous.generate_index ?? true,subscribe_rss:value.subscribe_rss ?? previous.subscribe_rss ?? false,
     ...((value.repository || previous.repository)?{repository:repositoryConfig(value.repository || previous.repository,url)}:{}),
     created_at:previous.created_at || now(),updated_at:now()};
 }

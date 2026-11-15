@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { JSDOM } from 'jsdom';
 
 const args=process.argv.slice(2),value=(flag,fallback)=>args.includes(flag)?args[args.indexOf(flag)+1]:fallback;
-const target=value('--url'),endpoint=value('--endpoint','http://127.0.0.1:37829'),mode=value('--mode','original_text');
+const target=value('--url'),endpoint=value('--endpoint','http://127.0.0.1:37829'),mode=value('--mode','standard_preprocess'),subscribeRss=args.includes('--subscribe-rss');
 if(!target)throw new Error('usage: node scripts/canary-site-import.mjs --url https://example.com [--name Name] [--output absolute.json]');
 const fetchImpl=(route,options)=>fetch(endpoint+route,options);
 const response=await fetchImpl('/imports');if(!response.ok)throw new Error('import_center_unavailable');
@@ -19,9 +19,10 @@ async function state(){for(let attempt=0;;attempt++){try{const response=await fe
 try{
   await delay(100);await mounted.refresh();let data=await state();
   let source=data.sources.find(source=>new URL(source.url).href===new URL(target).href);
-  if(!source || source.processing_mode!==mode){
+  if(!source || source.processing_mode!==mode || subscribeRss&&!source.subscribe_rss){
     mounted.editor(source);doc.getElementById('site-url').value=target;doc.getElementById('site-name').value=value('--name',source?.name||new URL(target).hostname);
     doc.getElementById('site-mode').value=mode;doc.getElementById('site-mode').dispatchEvent(new dom.window.Event('change'));
+    if(subscribeRss)doc.getElementById('site-rss').checked=true;
     doc.getElementById('site-form').dispatchEvent(new dom.window.Event('submit',{cancelable:true}));
     const deadline=Date.now()+30000;
     while(!doc.getElementById('site-editor').hidden&&Date.now()<deadline){if(doc.getElementById('site-form-error').textContent)throw new Error(doc.getElementById('site-form-error').textContent);await delay(100);}

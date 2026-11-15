@@ -236,6 +236,7 @@ export class RssImporter {
             urls: [item.url], source: 'rss_auto_import', entry_route: 'ai',
             destination_folder: item.destination_folder, client_request_id: item.client_request_id, user_instruction: '',
             processing_mode:item.import_mode || 'standard_preprocess',
+            processing_options:item.processing_options || {},
             ...(cached ? {cached_rss_article:cached} : {})
           });
           if (!created.request_id) throw new Error('missing_request_id');
@@ -276,9 +277,11 @@ export class RssImporter {
       const routes = this.importModes(item,config);
       if (routes.length!==1) { item.status='route_conflict'; item.error='article_in_multiple_import_modes'; await this.save(); continue; }
       item.attempt++;
-      const destination = config.subscriptions.find(source=>item.feeds.includes(source.url) && source.route===routes[0]
-        && includesPublication(source,item.published_at))?.destination || config.destination_folder;
+      const subscription = config.subscriptions.find(source=>item.feeds.includes(source.url) && source.route===routes[0]
+        && includesPublication(source,item.published_at));
+      const destination=subscription?.destination || config.destination_folder;
       Object.assign(item, { status: 'processing', destination_folder: destination,
+        processing_options:structuredClone(subscription?.processing_options || {}),
         import_mode:routes[0], client_request_id: `rss-auto-${item.id}-${routes[0]}-${item.attempt}`, request_id: null, error: null, started_at: stamp(this.now) });
       await this.save();
       inFlight++;
