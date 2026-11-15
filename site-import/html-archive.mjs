@@ -1,5 +1,7 @@
 import {JSDOM} from 'jsdom';
 import {scopedUrl} from './network.mjs';
+import {bookResources} from './book-resources.mjs';
+import {htmlEvidence} from './html-evidence.mjs';
 
 export async function archivePage(url,base,fetchPage){
  const visited=new Set();
@@ -16,14 +18,14 @@ export async function archivePage(url,base,fetchPage){
 }
 
 export async function archiveEvidence(links,base,fetchPage){
- const candidates=links.filter(l=>/^(?:all|all posts|archives?|posts|全部文章|所有文章|文章归档|归档)$/iu.test(l.title.trim())||/\/(?:archives?|posts|all)\/?$/iu.test(new URL(l.url).pathname));
+ const candidates=links.filter(l=>/^(?:all|all posts|archives?|posts|by date|projects|全部文章|所有文章|文章归档|归档|按日期)$/iu.test(l.title.trim())||/\/(?:archives?|posts|all|projects)(?:\/|\.html)?$/iu.test(new URL(l.url).pathname));
  const result=[];
  for(const item of candidates.slice(0,3)){
   const response=await archivePage(item.url,base,fetchPage);
   if(result.some(p=>p.url===response.url))continue;
   const dom=new JSDOM(response.body,{url:response.url});
   try{result.push({url:response.url,sha256:response.sha256,title:dom.window.document.title,
-   html_excerpt:response.body.slice(0,22000),links:[...dom.window.document.querySelectorAll('a[href]')].map(a=>({url:a.href,title:a.textContent.trim()})).filter(l=>new URL(l.url).origin===new URL(base).origin)});}finally{dom.window.close();}
+   html_excerpt:htmlEvidence(response.body),books:bookResources(response.body,response.url),links:[...dom.window.document.querySelectorAll('a[href]')].map(a=>({url:a.href,title:a.textContent.trim()})).filter(l=>new URL(l.url).origin===new URL(base).origin)});}finally{dom.window.close();}
  }
  return result;
 }

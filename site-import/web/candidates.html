@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>可导入清单 · 渐进阅读</title><link rel="stylesheet" href="/subscriptions/style.css"><link rel="stylesheet" href="/imports/style.css"><script type="module" src="/import-candidates/app.mjs"></script></head>
+<body><main>
+<header><div><p class="eyebrow">渐进阅读 / 可导入清单</p><h1>留待选择的书籍。</h1><p class="intro">整站发现的书籍和数字书籍保存在这里。这里只登记书名和链接，尚未抓取或导入书籍正文。</p></div><nav aria-label="页面导航"><a href="/imports">导入管理</a><a href="/subscriptions">订阅管理</a></nav></header>
+<section class="section" aria-labelledby="candidate-title"><div class="section-head"><div><h2 id="candidate-title">可导入清单</h2><p class="hint">打开原链接查看资源；决定导入后，再在导入管理中选择具体内容和范围。</p></div><button id="candidate-refresh" class="secondary" type="button">刷新清单</button></div>
+<label>显示<select id="candidate-filter"><option value="pending">待选择</option><option value="dismissed">已忽略</option><option value="all">全部</option></select></label>
+<label>搜索书目<input id="candidate-search" type="search" placeholder="书名、作者或来源" autocomplete="off"></label>
+<p id="candidate-message" role="status" aria-live="polite">正在读取清单…</p><div id="candidate-items"></div><div class="actions"><button id="candidate-previous" class="secondary" type="button">上一页</button><span id="candidate-page" class="hint"></span><button id="candidate-next" class="secondary" type="button">下一页</button></div></section>
+</main></body></html>

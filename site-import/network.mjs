@@ -3,6 +3,7 @@ import { unzipSync, gunzipSync } from 'node:zlib';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import { canonicalUrl, digest } from '../subscription-workflow/config.mjs';
 import {articleTaxonomy,taxonomyFromJson} from './taxonomy.mjs';
+import {pageBookResource} from './book-resources.mjs';
 
 export function scopedUrl(value,base) {
   const url=new URL(value,base),origin=new URL(base);
@@ -60,6 +61,7 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText}={}) {
   let response;
   try{response=await fetchPage(source,{base:url});}catch(error){if(error.status===404||error.status===410)return {excluded:true,url,reason:'来源已下线',response_status:error.status};throw error;}
   let title='',markdown='',metadata={};
+  if(recipe?.type!=='json'){const resource=pageBookResource(response.body,response.url);if(resource)return {excluded:true,url,reason:resource.reason,resource};}
   if(recipe?.type==='json'){
     const json=JSON.parse(response.body);
     if(recipe.private_path&&field(json,recipe.private_path)===true)return {excluded:true,url,reason:'来源标记为私密，未解码正文',response_sha256:response.sha256};

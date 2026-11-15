@@ -70,6 +70,7 @@ export async function listRuns(root) {
 export function siteCounts(collection) {
   const rows=collection?.results || [];
   return {discovered:collection?.inventory?.articles?.length || collection?.discovery?.discovered || 0,
+    ...(collection?.inventory?.deferred_resources?.length?{deferred:collection.inventory.deferred_resources.length}:{}),
     imported:rows.filter(r=>['imported','imported_with_warnings','saved_locked'].includes(r.status)).length,
     reused:rows.filter(r=>r.status==='idempotent_replay').length,
     warnings:rows.filter(r=>r.receipt?.quality_status==='warning').length,

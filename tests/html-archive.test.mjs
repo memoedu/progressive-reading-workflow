@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {archiveEvidence,enumerateHtmlArchive} from '../site-import/html-archive.mjs';
+import {htmlEvidence} from '../site-import/html-evidence.mjs';
 const base='https://separate.example';
+test('large inline themes do not hide article DOM evidence',()=>{
+ const evidence=htmlEvidence('<head><style>'+'.theme{color:red}'.repeat(4000)+'</style></head><body><article class="entry"><a href="/entry">Actual article</a></article></body>');
+ assert.match(evidence,/class="entry"/u);assert.match(evidence,/Actual article/u);assert.doesNotMatch(evidence,/color:red/u);
+});
 test('HTML archives follow declared redirects and all next pages without importing navigation or errors',async()=>{
  const responses=new Map([
   ['/all/','<meta http-equiv="refresh" content="0; url=/archives/">'],

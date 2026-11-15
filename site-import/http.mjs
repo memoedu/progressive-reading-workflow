@@ -4,15 +4,17 @@ import { assertLocalRequest } from '../subscription-workflow/http.mjs';
 import { readSources, saveSiteSource, listRuns, readRun, CODE_ROOT } from './store.mjs';
 import { startSiteRun } from './tasks.mjs';
 import {resolveSourceRelation} from '../scripts/source-relations.mjs';
+import {readCandidates,setCandidateStatus} from './candidates.mjs';
 
-const assets=new Map([['/imports',['index.html','text/html']],['/imports/',['index.html','text/html']],['/imports/app.mjs',['app.mjs','text/javascript']],['/imports/style.css',['style.css','text/css']]]);
+const assets=new Map([['/imports',['index.html','text/html']],['/imports/',['index.html','text/html']],['/imports/app.mjs',['app.mjs','text/javascript']],['/imports/style.css',['style.css','text/css']],['/import-candidates',['candidates.html','text/html']],['/import-candidates/',['candidates.html','text/html']],['/import-candidates/app.mjs',['candidates.mjs','text/javascript']]]);
 const send=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));};
 function brief(run){if(!run)return null;const {collection,results,...rest}=run;return {...rest,result_count:results?.length||0,index:collection?.verification?.index||null,excluded_count:collection?.inventory?.excluded_count||0,error:collection?.error||null};}
 export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJobs=()=>[]}={}) {
   const url=new URL(req.url,'http://127.0.0.1');
-  if(!assets.has(url.pathname)&&!url.pathname.startsWith('/api/site-imports')&&!url.pathname.startsWith('/api/import-center')&&url.pathname!=='/api/source-relations')return false;
+  if(!assets.has(url.pathname)&&!url.pathname.startsWith('/api/site-imports')&&!url.pathname.startsWith('/api/import-center')&&!url.pathname.startsWith('/api/import-candidates')&&url.pathname!=='/api/source-relations')return false;
   try{
     assertLocalRequest(req);
+    if(req.method==='GET'&&url.pathname==='/api/import-candidates'){send(res,200,await readCandidates(root));return true;}
     if(req.method==='GET'&&url.pathname==='/api/source-relations'){send(res,200,await resolveSourceRelation(root,url.searchParams.get('url')));return true;}
     if(assets.has(url.pathname)&&req.method==='GET'){
       const [file,type]=assets.get(url.pathname),content=await fs.readFile(path.join(CODE_ROOT,'site-import','web',file));
@@ -32,7 +34,8 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
     if(!/^application\/json(?:;|$)/iu.test(req.headers['content-type']||''))throw new Error('需要 JSON 请求');
     let text='';for await(const chunk of req){text+=chunk;if(Buffer.byteLength(text)>100000)throw new Error('请求过大');}
     const input=JSON.parse(text||'{}');
-    if(url.pathname==='/api/site-imports/source')send(res,200,await saveSiteSource(root,input.source,input.revision));
+    if(url.pathname==='/api/import-candidates/status')send(res,200,await setCandidateStatus(root,input));
+    else if(url.pathname==='/api/site-imports/source')send(res,200,await saveSiteSource(root,input.source,input.revision));
     else if(url.pathname==='/api/site-imports/start')send(res,202,brief(await startSiteRun(root,input,broker,runRequest)));
     else send(res,404,{error:'接口不存在'});
   }catch(error){send(res,400,{error:error.message});}
