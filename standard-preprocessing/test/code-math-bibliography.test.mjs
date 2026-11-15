@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {processMaterial} from '../lib/core.mjs';
 import {protectTranslationBlockBatch,restoreTranslationMarkdown,translationProtectedSyntax,stripUnexpectedTranslationInlineSyntax,validateGenericTranslatedChunk,isBibliographicReferenceBlock,translationLiteralBlockKeys} from '../lib/producer.mjs';
 
 test('code-wrapped inline and display math remain opaque throughout translation and validation',()=>{
@@ -14,6 +15,16 @@ test('code-wrapped inline and display math remain opaque throughout translation 
  assert.equal(stripUnexpectedTranslationInlineSyntax(translated,source,{includeMath:true}),translated);
  assert.notDeepEqual(translationProtectedSyntax(translated.replace('x + 2','x + 9'),{includeMath:true}),translationProtectedSyntax(source,{includeMath:true}));
  assert.throws(()=>restoreTranslationMarkdown(candidate.replace(tokens[0],''),protectedValue.values));
+});
+
+test('publication accepts translated prose around opaque math code and rejects changed formula bytes',async()=>{
+ const source='Compare `$r$` with `$$s = r + 3$$`, then `$t$` and `$$u = t / 5$$`. The literals must remain unchanged.';
+ const translated='比较 `$r$` 与 `$$s = r + 3$$`，接着比较 `$t$` 和 `$$u = t / 5$$`。各字面量必须保持不变。';
+ for(const changed of [false,true]){
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://independent.invalid/code-math',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}}, {producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(b=>({source_block_key:b.source_block_key,markdown:changed?translated.replace('r + 3','r + 8'):translated})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,changed?'completed_with_warnings':'completed');
+  if(changed)assert.match(result.errors[0].message,/protected_inline_syntax_changed/u);
+ }
 });
 
 test('named journal citations remain literal while accompanying explanatory prose still requires translation',()=>{

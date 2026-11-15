@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { loadTranslationPolicy } from "./translation-policy.mjs";
 import { TRANSLATION_UNIT_VERSION } from "./translation-units.mjs";
 import { isEditorialDetailFailure, isShortEnglishLabel } from "./producer.mjs";
-import { ExternalProducer, extractProtectedHttpUrls, findEnglishNaturalLanguageResidues, insightContractRepairIndexes, INLINE_CODE_PATTERN, isBibliographicReferenceBlock, MARKDOWN_LINK_DESTINATION_PATTERN, translationLiteralBlockKeys, translationNaturalLanguage } from "./producer.mjs";
+import { ExternalProducer, extractProtectedHttpUrls, findEnglishNaturalLanguageResidues, insightContractRepairIndexes, INLINE_CODE_PATTERN, isBibliographicReferenceBlock, MARKDOWN_LINK_DESTINATION_PATTERN, translationLiteralBlockKeys, translationNaturalLanguage, translationProtectedSyntax } from "./producer.mjs";
 import {
   buildMathLectureCoverage,
   collectPreservedMathLectureTerms,
@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.8";
+export const PROCESSOR_VERSION = "1.12.9";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -549,12 +549,11 @@ function protectedInlineSyntax(markdown) {
 }
 
 function translationProtectedInlineSyntax(markdown, { includeMath = false } = {}) {
-  const syntax = protectedInlineSyntax(markdown);
+  // Use the same code-first literal boundaries in generation and publication.
+  const syntax = translationProtectedSyntax(markdown,{includeMath});
   return {
     ...syntax,
-    rawMath: (String(markdown).match(/<(math|svg)\b[^>]*>[\s\S]*?<\/\1>/giu) || []).sort(),
-    displayMath: includeMath ? [...syntax.displayMath].sort() : [],
-    inlineMath: includeMath ? [...syntax.inlineMath].sort() : []
+    rawMath: (String(markdown).match(/<(math|svg)\b[^>]*>[\s\S]*?<\/\1>/giu) || []).sort()
   };
 }
 
