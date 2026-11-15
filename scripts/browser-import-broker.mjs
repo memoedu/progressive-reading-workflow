@@ -316,10 +316,14 @@ export class BrowserImportBroker {
     return this.withLock(async()=>{
       let recovered=0;
       for(const task of this.state.tasks){
-        // Only frozen source captures / repository discovery are model-free.
-        // Ordinary model jobs keep their original lease and retry semantics.
-        if(task.status!=='claimed'||task.processingMode!=='original_text'||!/^local-background-url-fetcher-/u.test(task.workerId||'')
-          || !(task.articleSource?.run_id || task.siteImport?.settings?.repository || (task.siteImport && task.result?.collection?.inventory?.complete))
+        // A site discovery already in its capture phase only reads public pages.
+        // Planning/model work keeps its original lease and retry semantics.
+        const sourceCapture=task.siteImport&&task.result?.collection?.phase==='discovering'
+          &&task.result?.collection?.discovery?.phase==='discovering';
+        const frozenOriginal=task.processingMode==='original_text'
+          &&(task.articleSource?.run_id || task.siteImport?.settings?.repository || (task.siteImport && task.result?.collection?.inventory?.complete));
+        if(task.status!=='claimed'||!/^local-background-url-fetcher-/u.test(task.workerId||'')
+          || !(sourceCapture||frozenOriginal)
           || !(Date.parse(task.claimedAt)<before))continue;
         task.interruptedClaims=[...(task.interruptedClaims||[]),{previous_owner_pid:previousOwnerPid,claimed_at:task.claimedAt,recovered_at:nowIso(this.now)}].slice(-25);
         task.status='queued';task.workerId=null;task.claimedAt=null;task.leaseToken=null;task.claimRequestId=null;

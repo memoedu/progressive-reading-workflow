@@ -169,6 +169,8 @@ export async function deleteSource(workflowRoot, id, { home, expectedRevision } 
 }
 
 export function platform(source) { return source.kind==='github_repository'?'rss':source.kind.split('_')[0]; }
+export const sourceProcessingOptions=source=>({input_form:'written',spoken_to_written:false,structure_body:false,
+  include_reading_guide:source.generate_guide===true,translation_mode:source.translation_mode||'terminology'});
 
 export async function initialize(workflowRoot = codeRoot, { home, rssHome = process.env.RSS_IMPORT_HOME || dataPath('RSSImport'), videoHome = process.env.PROGRESSIVE_READING_VIDEO_HOME || dataPath('ProgressiveReading', 'VideoWatch') } = {}) {
   const p = paths(workflowRoot, home);
@@ -200,7 +202,7 @@ export async function unifiedRssConfig(file) {
   if (!config || path.resolve(file) !== path.resolve(config.rss_home, 'RSS 自动导入.md')) return null;
   const subscriptions = config.subscriptions.filter(source => source.enabled && source.kind === 'rss')
     .map(source => ({ url: source.url, name: source.name, route: source.mode, destination: source.destination, subscription_id: source.id,
-      history_mode: source.history_mode, earliest_date: source.earliest_date }));
+      history_mode: source.history_mode, earliest_date: source.earliest_date,processing_options:sourceProcessingOptions(source) }));
   return { ...config.rss_defaults, enabled: config.enabled, poll_minutes: 1440, current_feed_only: true,
     max_in_flight: 2, subscriptions, feeds: subscriptions.filter(source => source.route !== 'reports').map(source => source.url),
     report_feeds: subscriptions.filter(source => source.route === 'reports').map(source => source.url) };

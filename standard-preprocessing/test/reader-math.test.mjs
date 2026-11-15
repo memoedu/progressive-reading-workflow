@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeReaderMath} from '../lib/reader-math.mjs';
+import {renderReadingMarkdown} from '../lib/core.mjs';
 
 test('publication normalizes only alternate formula wrappers and is idempotent',()=>{
   const text=String.raw`条件 \(r^2=x^2+y^2\)，以及 \[E=mc^2\]。`;
@@ -8,6 +9,12 @@ test('publication normalizes only alternate formula wrappers and is idempotent',
   assert.equal(result.markdown,'条件 $r^2=x^2+y^2$，以及 $$E=mc^2$$。');
   assert.equal(result.report.inline_converted,1);assert.equal(result.report.display_converted,1);
   assert.equal(normalizeReaderMath(result.markdown).markdown,result.markdown);
+});
+test('numeric references and time labels remain literal in reader and original-source views',()=>{
+ const source=String.raw`Read \[2\] and schedule \[15m\], \[30s\], \[AI\]. Formula \[x^2\] is different.`;
+ const reading=normalizeReaderMath(source).markdown;assert.ok(reading.includes(String.raw`\[2\]`));assert.ok(reading.includes(String.raw`\[15m\]`));assert.ok(reading.includes(String.raw`\[AI\]`));assert.ok(reading.includes('$$x^2$$'));
+ const rendered=renderReadingMarkdown({materialId:'fixture',metadata:{source_url:'https://independent.example'},sourceType:'fixture',hashes:{input:'fixture'},semantic:{judgments:null,insights:[]},bodyBlocks:[{source_block_key:'one',source_block_keys:['one'],block_id:'pr-fixture',type:'paragraph',markdown:'中文译文。'}],originalBlocks:[{markdown:source}],translationState:'generated_translation',title:'Source',includeReadingGuide:false});
+ assert.equal(rendered.split('\n## 原文\n')[1].trim(),source);
 });
 
 test('nested Mermaid, literal code, destinations and existing math remain exact',()=>{

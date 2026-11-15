@@ -4,12 +4,16 @@ import { readJson, writeJson, withLock, digest } from '../subscription-workflow/
 import { findSourcePublications, sourceReuseResult } from '../scripts/reading-source-library.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { processCollectionTask } from '../scripts/collection-import.mjs';
-import { discoverSite } from './discovery.mjs';
+import { discoverSite,inventoryCurrent } from './discovery.mjs';
 import { readSources, readRun, saveRun, listRuns, runPath, runId, siteCounts, now } from './store.mjs';
 import {organizeSiteFiles} from './organization.mjs';
 import {writeSiteIndexes} from './indexes.mjs';
 import {bindRepositoryRelations} from '../scripts/source-relations.mjs';
 import {writeRepositoryIndexes} from './repository-indexes.mjs';
+import {ensureSiteRss} from './rss.mjs';
+
+export const siteProcessingOptions=settings=>({input_form:'written',content_profile:'natural_language',spoken_to_written:false,structure_body:false,
+  include_reading_guide:settings.generate_guide===true,translation_mode:settings.translation_mode});
 
 const SUCCESS=new Set(['imported','imported_with_warnings','idempotent_replay']);
 export async function startSiteRun(root,{source_id,client_request_id,retry_run_id},broker,runRequest) {
@@ -31,7 +35,7 @@ export async function startSiteRun(root,{source_id,client_request_id,retry_run_i
       ...(previous?{retry_of:previous.id}:{}),counts:{discovered:0,imported:0,reused:0,failed:0,warnings:0},results:[]};
     await saveRun(root,run);
     const request=await broker.createRequest([settings.url],{source:'site_import_page',clientRequestId:client_request_id,entryRoute:'ai',destinationFolder:settings.destination,
-      userInstruction:settings.instruction,processingMode:settings.processing_mode,processingOptions:{input_form:'written',content_profile:'natural_language',include_reading_guide:settings.generate_guide,translation_mode:settings.translation_mode},
+      userInstruction:settings.instruction,processingMode:settings.processing_mode,processingOptions:siteProcessingOptions(settings),
       siteImport:{run_id:id,settings,...(previous?{retry_run_id:previous.id}:{})}});
     run.request_id=request.request_id;await saveRun(root,run);void runRequest(request.request_id).catch(()=>{});return run;
   });
@@ -88,7 +92,7 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   const {run_id:id,settings,retry_run_id:retry}=task.site_import;
   const run=await readRun(root,id);if(!run)throw new Error('整站任务记录不存在');
   const previous=retry?await readRun(root,retry):null;
-  if(previous?.collection?.inventory?.complete && !task.collection){
+  if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection){
     const inventory=structuredClone(previous.collection.inventory);
     const retained=previous.collection.results.filter(row=>SUCCESS.has(row.status));
     task.collection={rule_id:'site-all-articles',phase:'importing',inventory,batches:[],results:retained};
@@ -106,5 +110,8 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
       initial.results=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url))).map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
       return inventory;
     },
-    verify:collection=>verifySiteCollection(root,settings,collection,id,{broker,onProgress:async stage=>{run.stage=stage;run.updated_at=now();await saveRun(root,run);}})});
+    verify:async collection=>{
+      if(settings.subscribe_rss&&!run.rss?.subscription_id){run.stage='验证并登记 RSS 订阅';await saveRun(root,run);run.rss=await ensureSiteRss(root,settings,{fetchPage});await saveRun(root,run);}
+      return verifySiteCollection(root,settings,collection,id,{broker,onProgress:async stage=>{run.stage=stage;run.updated_at=now();await saveRun(root,run);}});
+    }});
 }

@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { loadTranslationPolicy } from "./translation-policy.mjs";
 import { TRANSLATION_UNIT_VERSION } from "./translation-units.mjs";
 import { isEditorialDetailFailure, isShortEnglishLabel } from "./producer.mjs";
-import { ExternalProducer, extractProtectedHttpUrls, findEnglishNaturalLanguageResidues, insightContractRepairIndexes, INLINE_CODE_PATTERN, isBibliographicReferenceBlock, MARKDOWN_LINK_DESTINATION_PATTERN, translationLiteralBlockKeys, translationNaturalLanguage } from "./producer.mjs";
+import { ExternalProducer, extractProtectedHttpUrls, findEnglishNaturalLanguageResidues, insightContractRepairIndexes, INLINE_CODE_PATTERN, isBibliographicReferenceBlock, MARKDOWN_LINK_DESTINATION_PATTERN, translationLiteralBlockKeys, translationNaturalLanguage, translationProtectedSyntax } from "./producer.mjs";
 import {
   buildMathLectureCoverage,
   collectPreservedMathLectureTerms,
@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.6";
+export const PROCESSOR_VERSION = "1.12.9";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -44,7 +44,7 @@ const VALUE_LABELS = { very_low: "极低", low: "低", medium: "中", high: "高
 const DENSITY_LABELS = { very_low: "极低", low: "低", medium: "中", high: "高", very_high: "极高" };
 export function sourceHasAuthorAttribution(markdown) {
   return /作者(?:认为|指出|强调|判断|提出|主张|表示|解释|总结|建议)/u.test(markdown)
-    || /\b(?:authors?|researchers?|writers?)\s+(?:(?:also|further|explicitly|specifically)\s+)?(?:argue|note|point\s+out|emphasize|suggest|explain|conclude|state|claim|observe)(?:s|d|ed)?\b/iu.test(translationNaturalLanguage(markdown));
+    || /\b(?:authors?|researchers?|writers?)\s+(?:(?:also|further|explicitly|specifically)\s+)?(?:argue|note|point\s+out|emphasize|suggest|explain|conclude|state|claim|observe|think|thought|believe|propose|maintain|assert|contend|recommend|say|said)(?:s|d|ed)?\b/iu.test(translationNaturalLanguage(markdown));
 }
 export function hasIntroducedTranslationTime(source, translated) {
   const pattern = /(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)/gu;
@@ -549,12 +549,11 @@ function protectedInlineSyntax(markdown) {
 }
 
 function translationProtectedInlineSyntax(markdown, { includeMath = false } = {}) {
-  const syntax = protectedInlineSyntax(markdown);
+  // Use the same code-first literal boundaries in generation and publication.
+  const syntax = translationProtectedSyntax(markdown,{includeMath});
   return {
     ...syntax,
-    rawMath: (String(markdown).match(/<(math|svg)\b[^>]*>[\s\S]*?<\/\1>/giu) || []).sort(),
-    displayMath: includeMath ? [...syntax.displayMath].sort() : [],
-    inlineMath: includeMath ? [...syntax.inlineMath].sort() : []
+    rawMath: (String(markdown).match(/<(math|svg)\b[^>]*>[\s\S]*?<\/\1>/giu) || []).sort()
   };
 }
 
@@ -1090,12 +1089,12 @@ export function renderReadingMarkdown({ materialId, metadata, sourceType, hashes
       lines.push(itemLines.join("\n"), "");
     } else lines.push(block.markdown, "", `^${block.block_id}`, "");
   }
-  if (translationState === "generated_translation" && originalBlocks.length) {
-    lines.push("---", "", "## 原文", "");
-    for (const block of originalBlocks) lines.push(block.markdown, "");
-  }
   const rendered = `${trimOuterBlankLines(lines.join("\n"))}\n`;
-  return normalizeReaderMath(pruneUnreferencedReadingAnchors(rendered, bodyBlocks.map((block) => block.block_id)).markdown).markdown;
+  let reading = normalizeReaderMath(pruneUnreferencedReadingAnchors(rendered, bodyBlocks.map((block) => block.block_id)).markdown).markdown;
+  // Reader compatibility applies to the translated reading view. The original
+  // appendix is immutable source evidence, including escaped punctuation.
+  if(translationState==='generated_translation'&&originalBlocks.length)reading+='\n---\n\n## 原文\n\n'+originalBlocks.map(block=>block.source_markdown||block.markdown).join('\n\n')+'\n';
+  return reading;
 }
 
 function renderQuarantineMarkdown({ materialId, metadata, sourceType, hashes, blocks }) {

@@ -12,3 +12,12 @@ test('original English research attribution is retained without authorizing fabr
     if (!hasAttribution) assert.match(result.errors[0].message,/source_voice_shifted_to_third_person/u);
   }
 });
+
+test('belief and proposal attributions remain third person while the narrator stays first person',async()=>{
+ for(const [source,translated] of [['I disagree with a condition the author thinks is essential. I prefer a simpler model.','我不同意作者认为不可缺少的条件。我更倾向于一个简单的模型。'],['A writer proposed a different explanation. I checked it independently.','一位作者提出了另一种解释。我进行了独立核验。'],['The author believes the effect is temporary. I remain uncertain.','作者认为这种效应是暂时的。我仍然不确定。']]){
+  assert.equal(sourceHasAuthorAttribution(source),true);
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://independent.invalid/attribution',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}}, {producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(b=>({source_block_key:b.source_block_key,markdown:translated})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,'completed');
+ }
+ for(const source of ['I think the effect is temporary.','I proposed a simpler model as a writer.','The author’s experiment failed. I repeated it.'])assert.equal(sourceHasAuthorAttribution(source),false);
+});

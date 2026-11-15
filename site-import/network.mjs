@@ -3,6 +3,9 @@ import { unzipSync, gunzipSync } from 'node:zlib';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import { canonicalUrl, digest } from '../subscription-workflow/config.mjs';
 import {articleTaxonomy,taxonomyFromJson} from './taxonomy.mjs';
+import {pageBookResource} from './book-resources.mjs';
+import {pageKind} from './page-kind.mjs';
+export const CAPTURE_VERSION='site-body/v2';
 
 export function scopedUrl(value,base) {
   const url=new URL(value,base),origin=new URL(base);
@@ -60,6 +63,10 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText}={}) {
   let response;
   try{response=await fetchPage(source,{base:url});}catch(error){if(error.status===404||error.status===410)return {excluded:true,url,reason:'来源已下线',response_status:error.status};throw error;}
   let title='',markdown='',metadata={};
+  if(recipe?.type!=='json'){
+    const resource=pageBookResource(response.body,response.url);if(resource)return {excluded:true,url,reason:resource.reason,resource};
+    const kind=pageKind(response.body,response.url);if(kind.kind!=='article')return {excluded:true,url,...kind};
+  }
   if(recipe?.type==='json'){
     const json=JSON.parse(response.body);
     if(recipe.private_path&&field(json,recipe.private_path)===true)return {excluded:true,url,reason:'来源标记为私密，未解码正文',response_sha256:response.sha256};
@@ -86,5 +93,5 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText}={}) {
   }
   if(!markdown.trim()||!title)throw new Error('来源缺少完整正文或文章标题');
   if(!metadata.taxonomy){const dom=new JSDOM(response.body,{url});try{metadata.taxonomy=articleTaxonomy({categories:[...dom.window.document.querySelectorAll('a[rel~=category],meta[property="article:section"]')].map(n=>n.content||n.textContent.trim()),tags:[...dom.window.document.querySelectorAll('a[rel~=tag],meta[property="article:tag"]')].map(n=>n.content||n.textContent.trim())});}finally{dom.window.close();}}
-  return {url,title,markdown,source_response:{url:response.url,sha256:response.sha256,bytes:response.bytes,content_type:response.content_type},metadata};
+  return {capture_version:CAPTURE_VERSION,url,title,markdown,source_response:{url:response.url,sha256:response.sha256,bytes:response.bytes,content_type:response.content_type},metadata};
 }
