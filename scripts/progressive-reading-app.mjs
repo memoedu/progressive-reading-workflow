@@ -1030,7 +1030,9 @@ async function browserPreprocessProducer() {
   const { SyntheticProducer } = await import("../standard-preprocessing/test-support/synthetic-producer.mjs");
   if(mode==='synthetic-delayed'){
     const producer=new SyntheticProducer();
-    for(const method of ['classifyWorkflow','generate','refineFullText']){const original=producer[method].bind(producer);producer[method]=async(...args)=>{await fs.mkdir(path.join(workflowRoot,'.local-ir'),{recursive:true});await writeFileAtomic(path.join(workflowRoot,'.local-ir','synthetic-producer-active.json'),JSON.stringify({method,at:Date.now()}));await new Promise(resolve=>setTimeout(resolve,750));return original(...args);};}
+    // Append-only test events avoid replacing a Windows file while the test
+    // is reading its synchronization marker. Publication still uses atomic writes.
+    for(const method of ['classifyWorkflow','generate','refineFullText']){const original=producer[method].bind(producer);producer[method]=async(...args)=>{await fs.mkdir(path.join(workflowRoot,'.local-ir'),{recursive:true});await fs.appendFile(path.join(workflowRoot,'.local-ir','synthetic-producer-active.ndjson'),JSON.stringify({method,at:Date.now()})+'\n');await new Promise(resolve=>setTimeout(resolve,750));return original(...args);};}
     return producer;
   }
   if (mode === "synthetic") return new SyntheticProducer();

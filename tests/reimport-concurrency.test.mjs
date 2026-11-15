@@ -15,10 +15,12 @@ for(const change of ['body','annotations'])test('reimport preserves a concurrent
   const post=body=>fetch(fixture.baseUrl+'/api/highlights/import-local',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,processing_options:options})});
   const first=await post({draft});assert.equal(first.status,200);const result=await first.json(),artifact=result.artifacts.find(a=>a.kind==='markdown'),sidecar=result.artifacts.find(a=>a.kind==='browser_ir_metadata');
   const before=await fs.readFile(artifact.path,'utf8'),stateBefore=await fs.readFile(sidecar.path,'utf8');
-  const marker=path.join(fixture.workflowRoot,'.local-ir','synthetic-producer-active.json'),previousMarker=JSON.parse(await fs.readFile(marker,'utf8')).at;
+  const marker=path.join(fixture.workflowRoot,'.local-ir','synthetic-producer-active.ndjson');
+  const readMarker=async()=>JSON.parse((await fs.readFile(marker,'utf8')).trim().split('\n').at(-1));
+  const previousMarker=(await readMarker()).at;
   const revised=draft.pageText+'\n\n第二版新增内容，用于确保重新执行预处理。';
   const pending=post({draft:{...draft,pageText:revised,revision:1,importJob:{forceReimport:true}}});
-  await until(async()=>{const value=await fs.readFile(marker,'utf8').then(JSON.parse).catch(()=>null);return value?.at>previousMarker;});
+  await until(async()=>{const value=await readMarker().catch(()=>null);return value?.at>previousMarker;});
   const edited=change==='body'?before+'\n用户正在保存的正文。\n':JSON.stringify({...JSON.parse(stateBefore),articleMusing:{text:'用户新写的想法。'}});
   await fs.writeFile(change==='body'?artifact.path:sidecar.path,edited);
   const response=await pending,value=await response.json();assert.notEqual(response.status,200);assert.match(value.error,/existing_article_changed_during_processing_preserved/u);
