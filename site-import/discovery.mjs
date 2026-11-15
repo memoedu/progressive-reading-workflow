@@ -13,9 +13,10 @@ import {bookResources,mergeBookResources} from './book-resources.mjs';
 import {registerCandidates} from './candidates.mjs';
 import {htmlEvidence} from './html-evidence.mjs';
 import {bookCatalogs} from './book-catalogs.mjs';
-import {mergeTaxonomies,classifyExclusiveTags} from './taxonomy.mjs';
+import {articleTaxonomy,mergeTaxonomies,classifyExclusiveTags} from './taxonomy.mjs';
+import {taxonomyIndexes} from './taxonomy-indexes.mjs';
 
-const PLANNER_VERSION='site-discovery/v6';
+const PLANNER_VERSION='site-discovery/v7';
 export const inventoryCurrent=(inventory,settings)=>Boolean(inventory?.complete&&inventory.taxonomy_version==='source-taxonomy/v1'&&(settings.repository||inventory.discovery_version===PLANNER_VERSION));
 export function matchesPath(url,patterns) {
   if(!patterns?.length)return true;
@@ -131,12 +132,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     evidence={url:base,title,html_excerpt:htmlEvidence(page.body),links:links.slice(0,300),feeds,sitemaps,urls:[...new Set(urls)],scripts,archives,books:[...bookResources(page.body,base),...catalogs.books],book_catalogs:catalogs.evidence};
     await writeJson(evidenceFile,evidence);
   }
-  const planFile=path.join(directory,'plan-v6-with-taxonomy.json');
+  const planFile=path.join(directory,'plan-v7-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
     const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:evidence.urls.slice(0,2000),sitemap_url_count:evidence.urls.length,settings};
-    planned=await planner(input);await writeJson(path.join(directory,'plan-v6-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
+    planned=await planner(input);await writeJson(path.join(directory,'plan-v7-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
   const plan=validatePlan(planned.plan,evidence);
   const includes=settings.include_paths.length?settings.include_paths:plan.include_paths;
@@ -178,6 +179,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   }
   const candidates=[...new Map((listedUrls || (evidence.urls.length?evidence.urls:evidence.links.map(item=>item.url))).filter(url=>matchesPath(url,includes)&&!(excludes.length&&matchesPath(url,excludes))).map(url=>[urlImportDedupeKey(url),url])).values()];
   const candidateKeys=new Set(candidates.map(urlImportDedupeKey));
+  const parents=new Map();
   if(!candidates.length)throw new Error('没有发现符合范围的文章；请编辑来源范围后重新运行');
   if(!evidence.sitemaps.length&&!listedUrls)throw new Error('站点未提供可完整枚举的目录，当前未开始批量导入。请指定具有文章目录的链接或收窄路径范围。');
   const deferred=[...(evidence.books||[]),...evidence.archives.flatMap(page=>page.books||[])];
@@ -191,11 +193,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
         const book=books.get(urlImportDedupeKey(url));
         if(book){excluded.push({url,reason:book.reason,kind:'book'});completed++;continue;}
         let captured=await readJson(file);
-        if(!captured || (!captured.excluded&&(!captured.metadata?.taxonomy||captured.capture_version!==CAPTURE_VERSION))){captured=privateUrls.has(url)?{excluded:true,url,reason:'来源目录标记为私密，未读取正文'}:await captureArticle(url,plan.article_source,{fetchPage});await writeJson(file,captured);}
+        if(!captured || captured.kind==='collection'&&!captured.title || (!captured.excluded&&(!captured.metadata?.taxonomy||captured.capture_version!==CAPTURE_VERSION))){captured=privateUrls.has(url)?{excluded:true,url,reason:'来源目录标记为私密，未读取正文'}:await captureArticle(url,plan.article_source,{fetchPage});await writeJson(file,captured);}
         if(captured.excluded){
           excluded.push(captured);if(captured.resource)deferred.push(captured.resource);
-          for(const child of captured.subpages||[]){
+          for(const [order,child] of (captured.subpages||[]).entries()){
             if(settings.include_paths.length&&!matchesPath(child,settings.include_paths)||excludes.length&&matchesPath(child,excludes))continue;
+            const contexts=parents.get(child)||[];if(!contexts.some(parent=>parent.url===url))contexts.push({url,name:captured.title,order});parents.set(child,contexts);
             const key=urlImportDedupeKey(child);if(candidateKeys.has(key))continue;
             if(candidates.length>=20000)throw Error('分篇目录超过完整核验上限，未将部分目录视为完整');candidateKeys.add(key);candidates.push(child);
           }
@@ -206,9 +209,17 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     }
   }));
   articles.sort((a,b)=>candidates.indexOf(a.url)-candidates.indexOf(b.url));
+  let taxonomy_indexes=[];
+  if(articles.some(article=>!article.taxonomy.groups.length))await onProgress({phase:'discovering',stage:'核对原站标签与分类目录',discovered:candidates.length,total:candidates.length,checked:completed,failed:failures.length});
+  const indexed=articles.some(article=>!article.taxonomy.groups.length)?await taxonomyIndexes(evidence.links,[...articles.map(article=>article.url),...excluded.filter(item=>item.subpages?.length).map(item=>item.url)],evidence.url,fetchPage):{memberships:{},pages:[]};taxonomy_indexes=indexed.pages;
+  for(const article of articles){
+    const member=indexed.memberships[urlImportDedupeKey(article.url)],contexts=parents.get(article.url)||[];
+    article.taxonomy=mergeTaxonomies(article.taxonomy,member?.taxonomy,articleTaxonomy({collections:contexts.map(parent=>({name:parent.name,order:parent.order}))}),...contexts.map(parent=>indexed.memberships[urlImportDedupeKey(parent.url)]?.taxonomy));
+    article.taxonomy_evidence.push(...(member?.evidence||[]),...contexts.flatMap(parent=>(indexed.memberships[urlImportDedupeKey(parent.url)]?.evidence||[]).map(item=>({...item,inherited_from:parent.url}))));
+  }
   const deferred_resources=mergeBookResources(deferred);
   await registerCandidates(root,deferred_resources,{source_id:settings.id,run_id:runId});
-  const inventory={discovery_version:PLANNER_VERSION,taxonomy_version:'source-taxonomy/v1',tag_classification:null,complete:failures.length===0,articles,excluded,excluded_count:excluded.length,deferred_resources,failures,candidate_count:candidates.length,declared_total:declared,sitemaps:evidence.sitemaps,planner:planned.producer,plan,settings_sha256:digest(JSON.stringify(settings)),article_source:{run_id:runId}};
+  const inventory={discovery_version:PLANNER_VERSION,taxonomy_version:'source-taxonomy/v1',tag_classification:null,taxonomy_indexes,complete:failures.length===0,articles,excluded,excluded_count:excluded.length,deferred_resources,failures,candidate_count:candidates.length,declared_total:declared,sitemaps:evidence.sitemaps,planner:planned.producer,plan,settings_sha256:digest(JSON.stringify(settings)),article_source:{run_id:runId}};
   const expected=listedUrls||excluded.some(item=>item.subpages?.length) ? candidates.length : declared;
   if(expected!==null && articles.length+excluded.length!==expected){inventory.complete=false;inventory.count_error=`范围内应有 ${expected} 篇，已核实 ${articles.length} 篇，排除 ${excluded.length} 项。`;}
   if(plan.listing?.type==='html'){

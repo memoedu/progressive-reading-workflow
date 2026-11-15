@@ -6,6 +6,8 @@ import {articleTaxonomy,classifyExclusiveTags,taxonomyFolder} from '../site-impo
 import {discoverSite,inventoryCurrent} from '../site-import/discovery.mjs';
 import {normalizeSiteSource,runId} from '../site-import/store.mjs';
 import {digest} from '../subscription-workflow/config.mjs';
+import {taxonomyIndexes} from '../site-import/taxonomy-indexes.mjs';
+import {urlImportDedupeKey} from '../scripts/url-import-input.mjs';
 const base='https://independent-tags.example';
 test('archive-only mutually exclusive labels become category folders with source evidence',async()=>{
  const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/exclusive-tags-test-');
@@ -21,4 +23,13 @@ test('overlapping labels stay tags and explicit source hierarchy takes priority'
  const overlapping=[{taxonomy:articleTaxonomy({tags:['Topic','Focus']})},{taxonomy:articleTaxonomy({tags:['Topic']})}];assert.equal(classifyExclusiveTags(overlapping).exclusive,false);assert.equal(overlapping[1].taxonomy.primary.kind,'标签');
  const grouped=[{taxonomy:articleTaxonomy({categories:[['Original','Path']],tags:['Topic']})}];assert.equal(classifyExclusiveTags(grouped).exclusive,false);assert.deepEqual(grouped[0].taxonomy.primary.path,['Original','Path']);
  const partial=[{taxonomy:articleTaxonomy({tags:['One']})},{taxonomy:articleTaxonomy()}];assert.equal(classifyExclusiveTags(partial).exclusive,true);assert.equal(partial[1].taxonomy.primary.kind,'未分类');
+});
+test('public tag-index membership is inverted without treating global navigation as membership',async()=>{
+ const pages=new Map([
+  ['/tags/first/','<nav><a href="/second/">Navigation</a></nav><ul><li><a href="/first/">First</a></li><li><a href="/second/">Second</a></li></ul>'],
+  ['/tags/second/','<ul><li><a href="/second/">Second</a></li></ul>']
+ ]);
+ const result=await taxonomyIndexes([{url:base+'/tags/first/',title:'First tag'},{url:base+'/tags/second/',title:'Second tag'}],[base+'/first/',base+'/second/'],base,async url=>{if(url.endsWith('/first/'))await new Promise(r=>setTimeout(r,20));const body=pages.get(new URL(url).pathname);return {url,body,sha256:digest(body)};});
+ assert.equal(result.memberships[urlImportDedupeKey(base+'/first/')].taxonomy.groups.length,1);assert.deepEqual(result.memberships[urlImportDedupeKey(base+'/second/')].taxonomy.groups.map(group=>group.name),['First tag','Second tag']);assert.equal(result.pages.length,2);
+ const articles=Object.values(result.memberships).map(value=>({taxonomy:value.taxonomy}));assert.equal(classifyExclusiveTags(articles).exclusive,false);
 });

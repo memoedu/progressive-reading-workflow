@@ -23,5 +23,5 @@ test('discovery follows all evidenced parts, avoids index publication and record
  ]);
  const fetchPage=async url=>{const body=pages.get(new URL(url).pathname);assert.notEqual(body,undefined,url);return {url,body,sha256:digest(body)};};
  const inventory=await discoverSite(root,normalizeSiteSource({url:base}),runId('complete-parts'),{fetchPage,planner:async()=>({plan:{include_paths:['/*'],exclude_paths:[]},producer:{provider:'fixture'}})});
- assert.equal(inventory.complete,true);assert.equal(inventory.articles.length,2);assert.equal(inventory.excluded.length,2);assert.equal(inventory.candidate_count,4);assert.equal(inventory.articles.some(a=>a.url===base+'/interview/'),false);
+ assert.equal(inventory.complete,true);assert.equal(inventory.articles.length,2);assert.equal(inventory.excluded.length,2);assert.equal(inventory.candidate_count,4);assert.equal(inventory.articles.some(a=>a.url===base+'/interview/'),false);assert.equal(inventory.articles[0].taxonomy.primary.kind,'合集');assert.equal(inventory.articles[0].taxonomy.primary.name,'Interview');
 });

@@ -12,7 +12,7 @@ export function pageKind(html,url){
   const anchors=[...doc.querySelectorAll('a[href]')].filter(anchor=>{try{const link=new URL(anchor.href);return link.origin===new URL(url).origin&&link.pathname.startsWith(parent)&&link.href.split('#')[0]!==url.split('#')[0]&&!link.hash&&!/\.(?:pdf|png|jpe?g|gif|svg|zip|mp[34]|json)$/iu.test(link.pathname);}catch{return false;}});
   const chapters=anchors.filter(anchor=>/^(?:part|chapter|section)\s*\d+\b|^第.{1,8}[章篇部分节]/iu.test(anchor.textContent.replace(/\s+/gu,' ').trim()));
   const linked=anchors.reduce((sum,anchor)=>sum+anchor.textContent.replace(/\s+/gu,' ').trim().length,0);
-  if(chapters.length>=2&&linked>text.length*.6)return {kind:'collection',reason:'分篇正文目录，继续核对分篇内容，目录本身不作为正文入库',subpages:[...new Set(anchors.map(anchor=>scopedUrl(anchor.href,url)))]};
+  if(chapters.length>=2&&linked>text.length*.6)return {kind:'collection',title:doc.title||doc.querySelector('h1')?.textContent?.trim()||new URL(url).pathname,reason:'分篇正文目录，继续核对分篇内容，目录本身不作为正文入库',subpages:[...new Set(anchors.map(anchor=>scopedUrl(anchor.href,url)))]};
   return {kind:'article'};
  }finally{dom.window.close();}
 }
