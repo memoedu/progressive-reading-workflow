@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.7";
+export const PROCESSOR_VERSION = "1.12.8";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -44,7 +44,7 @@ const VALUE_LABELS = { very_low: "极低", low: "低", medium: "中", high: "高
 const DENSITY_LABELS = { very_low: "极低", low: "低", medium: "中", high: "高", very_high: "极高" };
 export function sourceHasAuthorAttribution(markdown) {
   return /作者(?:认为|指出|强调|判断|提出|主张|表示|解释|总结|建议)/u.test(markdown)
-    || /\b(?:authors?|researchers?|writers?)\s+(?:(?:also|further|explicitly|specifically)\s+)?(?:argue|note|point\s+out|emphasize|suggest|explain|conclude|state|claim|observe)(?:s|d|ed)?\b/iu.test(translationNaturalLanguage(markdown));
+    || /\b(?:authors?|researchers?|writers?)\s+(?:(?:also|further|explicitly|specifically)\s+)?(?:argue|note|point\s+out|emphasize|suggest|explain|conclude|state|claim|observe|think|thought|believe|propose|maintain|assert|contend|recommend|say|said)(?:s|d|ed)?\b/iu.test(translationNaturalLanguage(markdown));
 }
 export function hasIntroducedTranslationTime(source, translated) {
   const pattern = /(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)/gu;
