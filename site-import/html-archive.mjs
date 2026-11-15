@@ -2,6 +2,7 @@ import {JSDOM} from 'jsdom';
 import {scopedUrl} from './network.mjs';
 import {bookResources} from './book-resources.mjs';
 import {htmlEvidence} from './html-evidence.mjs';
+import {linkedTaxonomy,mergeTaxonomies} from './taxonomy.mjs';
 
 export async function archivePage(url,base,fetchPage){
  const visited=new Set();
@@ -32,7 +33,7 @@ export async function archiveEvidence(links,base,fetchPage){
 
 export async function enumerateHtmlArchive(listing,base,fetchPage){
  if(typeof listing.item_selector!=='string'||!listing.item_selector.trim())throw Error('HTML 文章归档缺少可验证的链接选择器');
- let url=scopedUrl(listing.url,base);const pages=[],urls=[],visited=new Set();
+ let url=scopedUrl(listing.url,base);const pages=[],urls=[],visited=new Set(),taxonomies={},taxonomy_evidence={};
  while(url){
   if(visited.has(url)||visited.size>=1000)throw Error('文章归档分页重复或未结束，未将部分目录视为全集');
   visited.add(url);const response=await archivePage(url,base,fetchPage);const dom=new JSDOM(response.body,{url:response.url});
@@ -41,6 +42,10 @@ export async function enumerateHtmlArchive(listing,base,fetchPage){
    if(!nodes.length)throw Error('文章归档选择器未匹配任何文章');
    if(nodes.some(n=>n.localName!=='a'||!n.getAttribute('href')))throw Error('文章归档选择器必须匹配文章链接');
    const batch=nodes.map(n=>scopedUrl(n.getAttribute('href'),response.url));
+   for(const [index,node] of nodes.entries()){
+    const container=node.closest('article,li,tr,[role=listitem]');if(!container)continue;
+    const key=batch[index],linked=linkedTaxonomy(container,response.url,{articleUrl:key});taxonomies[key]=mergeTaxonomies(taxonomies[key],linked.taxonomy);taxonomy_evidence[key]=[...(taxonomy_evidence[key]||[]),...linked.evidence];
+   }
    if(batch.some(u=>urls.includes(u))&&batch.every(u=>urls.includes(u)))throw Error('文章归档分页重复');
    urls.push(...batch);pages.push({url:response.url,sha256:response.sha256,count:batch.length});
    const next=[...dom.window.document.querySelectorAll(listing.next_selector||'a[rel~=next]')].map(a=>scopedUrl(a.getAttribute('href'),response.url));
@@ -48,5 +53,5 @@ export async function enumerateHtmlArchive(listing,base,fetchPage){
    url=next[0]||null;
   }finally{dom.window.close();}
  }
- return {urls:[...new Set(urls)],pages};
+ return {urls:[...new Set(urls)],pages,taxonomies,taxonomy_evidence};
 }

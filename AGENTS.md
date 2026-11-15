@@ -23,6 +23,7 @@ repository. Do not change its visibility as part of routine maintenance.
 - Preserve existing local configuration, storage markers and legacy readers.
   Portable path overrides must not silently move an existing installation.
 - Use the existing shared import, preprocessing and publication interfaces.
+- Source taxonomy can exist only beside archive entries. Verify all memberships before treating exclusive flat tags as categories; preserve overlapping tags and reuse existing bodies when repairing folders. See `docs/WEB_IMPORT_PAGE.md`.
 - Use isolated synthetic fixtures for tests. Do not import into the real reading
   library, change scheduled tasks or write to RemNote as a side effect of tests.
 - Run `npm test` for changes to shared logic. Browser/import changes also need

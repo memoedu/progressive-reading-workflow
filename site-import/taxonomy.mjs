@@ -3,6 +3,33 @@ import sanitizeFilename from 'sanitize-filename';
 import {digest} from '../subscription-workflow/config.mjs';
 
 export const TAXONOMY_VERSION='source-taxonomy/v1';
+export function mergeTaxonomies(...taxonomies){
+  const groups=[...new Map(taxonomies.flatMap(value=>value?.groups||[]).map(group=>[group.kind+'/'+group.path.join('/'),group])).values()];
+  const rank={'合集':0,'分类':1,'标签':2};groups.sort((a,b)=>rank[a.kind]-rank[b.kind]);
+  return {version:TAXONOMY_VERSION,groups,primary:groups[0]||{kind:'未分类',name:'未分类',path:[]}};
+}
+export function classifyExclusiveTags(articles){
+  const explicitHierarchy=articles.some(article=>article.taxonomy.groups.some(group=>['合集','分类'].includes(group.kind)));
+  const tagged=articles.filter(article=>article.taxonomy.groups.some(group=>group.kind==='标签'));
+  const exclusive=!explicitHierarchy&&tagged.length>0&&articles.every(article=>article.taxonomy.groups.filter(group=>group.kind==='标签').length<=1);
+  if(exclusive)for(const article of articles){
+    const groups=article.taxonomy.groups.map(group=>group.kind==='标签'?{...group,kind:'分类',source_kind:'标签'}:group);
+    article.taxonomy={...article.taxonomy,groups,primary:groups[0]||article.taxonomy.primary};
+  }
+  return {version:'site-tag-classification/v1',exclusive,tagged_articles:tagged.length,articles:articles.length,reason:explicitHierarchy?'已有原站合集或分类':exclusive?'完整核验范围中每篇至多一个原站标签，作为分类':tagged.length?'标签存在多重归属，保留标签关系':'未发现原站标签'};
+}
+
+export function linkedTaxonomy(container,base,{articleUrl}={}){
+  const tags=[],categories=[],evidence=[];
+  for(const anchor of container.querySelectorAll('a[href]')){
+    let url;try{url=new URL(anchor.getAttribute('href'),base);if(url.origin!==new URL(base).origin||url.href===articleUrl)continue;}catch{continue;}
+    const match=/(?:^|\/)(tags?|categor(?:y|ies))\/[^/]+/iu.exec(url.pathname),rel=anchor.rel.split(/\s+/u);
+    const kind=rel.includes('category')||match&&/^categor/iu.test(match[1])?'分类':rel.includes('tag')||match?'标签':null;
+    const name=anchor.textContent.replace(/\s+/gu,' ').trim();if(!kind||!name||name.length>160)continue;
+    (kind==='分类'?categories:tags).push(name);evidence.push({kind,name,url:url.href});
+  }
+  return {taxonomy:articleTaxonomy({categories,tags}),evidence};
+}
 export function categorySegment(value){const raw=String(value).trim(),clean=sanitizeFilename(raw).trim().slice(0,100);return clean&&clean===raw?clean:(clean||'未命名')+'-'+digest(raw).slice(0,6);}
 const names=value=>(Array.isArray(value)?value:value==null?[]:[value]).flatMap(item=>typeof item==='string'?[item]:item?.name?[item.name]:[]).filter(Boolean);
 export function articleTaxonomy({collections=[],categories=[],tags=[]}={}){

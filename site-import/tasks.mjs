@@ -4,7 +4,7 @@ import { readJson, writeJson, withLock, digest } from '../subscription-workflow/
 import { findSourcePublications, sourceReuseResult } from '../scripts/reading-source-library.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { processCollectionTask } from '../scripts/collection-import.mjs';
-import { discoverSite } from './discovery.mjs';
+import { discoverSite,inventoryCurrent } from './discovery.mjs';
 import { readSources, readRun, saveRun, listRuns, runPath, runId, siteCounts, now } from './store.mjs';
 import {organizeSiteFiles} from './organization.mjs';
 import {writeSiteIndexes} from './indexes.mjs';
@@ -92,7 +92,7 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   const {run_id:id,settings,retry_run_id:retry}=task.site_import;
   const run=await readRun(root,id);if(!run)throw new Error('整站任务记录不存在');
   const previous=retry?await readRun(root,retry):null;
-  if(previous?.collection?.inventory?.complete && !task.collection){
+  if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection){
     const inventory=structuredClone(previous.collection.inventory);
     const retained=previous.collection.results.filter(row=>SUCCESS.has(row.status));
     task.collection={rule_id:'site-all-articles',phase:'importing',inventory,batches:[],results:retained};
