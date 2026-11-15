@@ -6,7 +6,7 @@ import { callCodexText } from '../standard-preprocessing/lib/codex-exec.mjs';
 import { readJson, writeJson, digest } from '../subscription-workflow/config.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { runPath } from './store.mjs';
-import { fetchSiteText, scopedUrl, captureArticle, field, templateUrl } from './network.mjs';
+import { fetchSiteText, scopedUrl, captureArticle, field, templateUrl,CAPTURE_VERSION } from './network.mjs';
 import {discoverRepository} from './repository.mjs';
 import {archiveEvidence,enumerateHtmlArchive} from './html-archive.mjs';
 import {bookResources,mergeBookResources} from './book-resources.mjs';
@@ -14,7 +14,7 @@ import {registerCandidates} from './candidates.mjs';
 import {htmlEvidence} from './html-evidence.mjs';
 import {bookCatalogs} from './book-catalogs.mjs';
 
-const PLANNER_VERSION='site-discovery/v4';
+const PLANNER_VERSION='site-discovery/v5';
 export function matchesPath(url,patterns) {
   if(!patterns?.length)return true;
   const value=new URL(url).pathname+new URL(url).search;
@@ -129,12 +129,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     evidence={url:base,title,html_excerpt:htmlEvidence(page.body),links:links.slice(0,300),feeds,sitemaps,urls:[...new Set(urls)],scripts,archives,books:[...bookResources(page.body,base),...catalogs.books],book_catalogs:catalogs.evidence};
     await writeJson(evidenceFile,evidence);
   }
-  const planFile=path.join(directory,'plan-v4-with-taxonomy.json');
+  const planFile=path.join(directory,'plan-v5-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
     const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:evidence.urls.slice(0,2000),sitemap_url_count:evidence.urls.length,settings};
-    planned=await planner(input);await writeJson(path.join(directory,'plan-v4-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
+    planned=await planner(input);await writeJson(path.join(directory,'plan-v5-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
   const plan=validatePlan(planned.plan,evidence);
   const includes=settings.include_paths.length?settings.include_paths:plan.include_paths;
@@ -175,6 +175,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     await writeJson(path.join(directory,'listing-evidence.json'),{url:response.url,sha256:response.sha256,data,declared_total:declared,listed_urls:listedUrls});
   }
   const candidates=[...new Map((listedUrls || (evidence.urls.length?evidence.urls:evidence.links.map(item=>item.url))).filter(url=>matchesPath(url,includes)&&!(excludes.length&&matchesPath(url,excludes))).map(url=>[urlImportDedupeKey(url),url])).values()];
+  const candidateKeys=new Set(candidates.map(urlImportDedupeKey));
   if(!candidates.length)throw new Error('没有发现符合范围的文章；请编辑来源范围后重新运行');
   if(!evidence.sitemaps.length&&!listedUrls)throw new Error('站点未提供可完整枚举的目录，当前未开始批量导入。请指定具有文章目录的链接或收窄路径范围。');
   const deferred=[...(evidence.books||[]),...evidence.archives.flatMap(page=>page.books||[])];
@@ -188,8 +189,15 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
         const book=books.get(urlImportDedupeKey(url));
         if(book){excluded.push({url,reason:book.reason,kind:'book'});completed++;continue;}
         let captured=await readJson(file);
-        if(!captured || (!captured.excluded&&!captured.metadata?.taxonomy)){captured=privateUrls.has(url)?{excluded:true,url,reason:'来源目录标记为私密，未读取正文'}:await captureArticle(url,plan.article_source,{fetchPage});await writeJson(file,captured);}
-        if(captured.excluded){excluded.push(captured);if(captured.resource)deferred.push(captured.resource);}else articles.push({url,title:captured.title,taxonomy:captured.metadata.taxonomy,published_at:captured.metadata?.published_at || null,source_sha256:captured.source_response.sha256,markdown_sha256:digest(captured.markdown)});
+        if(!captured || (!captured.excluded&&(!captured.metadata?.taxonomy||captured.capture_version!==CAPTURE_VERSION))){captured=privateUrls.has(url)?{excluded:true,url,reason:'来源目录标记为私密，未读取正文'}:await captureArticle(url,plan.article_source,{fetchPage});await writeJson(file,captured);}
+        if(captured.excluded){
+          excluded.push(captured);if(captured.resource)deferred.push(captured.resource);
+          for(const child of captured.subpages||[]){
+            if(settings.include_paths.length&&!matchesPath(child,settings.include_paths)||excludes.length&&matchesPath(child,excludes))continue;
+            const key=urlImportDedupeKey(child);if(candidateKeys.has(key))continue;
+            if(candidates.length>=20000)throw Error('分篇目录超过完整核验上限，未将部分目录视为完整');candidateKeys.add(key);candidates.push(child);
+          }
+        }else articles.push({url,title:captured.title,taxonomy:captured.metadata.taxonomy,published_at:captured.metadata?.published_at || null,source_sha256:captured.source_response.sha256,markdown_sha256:digest(captured.markdown)});
       }catch(error){failures.push({url,error:error.message});}
       completed++;
       if(completed%5===0||completed===candidates.length)await onProgress({phase:'discovering',stage:'逐篇核对文章来源',discovered:candidates.length,total:candidates.length,checked:completed,failed:failures.length});
@@ -199,7 +207,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   const deferred_resources=mergeBookResources(deferred);
   await registerCandidates(root,deferred_resources,{source_id:settings.id,run_id:runId});
   const inventory={discovery_version:PLANNER_VERSION,taxonomy_version:'source-taxonomy/v1',complete:failures.length===0,articles,excluded,excluded_count:excluded.length,deferred_resources,failures,candidate_count:candidates.length,declared_total:declared,sitemaps:evidence.sitemaps,planner:planned.producer,plan,settings_sha256:digest(JSON.stringify(settings)),article_source:{run_id:runId}};
-  const expected=listedUrls ? candidates.length : declared;
+  const expected=listedUrls||excluded.some(item=>item.subpages?.length) ? candidates.length : declared;
   if(expected!==null && articles.length+excluded.length!==expected){inventory.complete=false;inventory.count_error=`范围内应有 ${expected} 篇，已核实 ${articles.length} 篇，排除 ${excluded.length} 项。`;}
   if(plan.listing?.type==='html'){
     const check=await enumerateHtmlArchive(plan.listing,evidence.url,fetchPage);
