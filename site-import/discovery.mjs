@@ -9,7 +9,7 @@ import { runPath } from './store.mjs';
 import { fetchSiteText, scopedUrl, captureArticle, field, templateUrl } from './network.mjs';
 import {discoverRepository} from './repository.mjs';
 import {archiveEvidence,enumerateHtmlArchive} from './html-archive.mjs';
-import {bookResources} from './book-resources.mjs';
+import {bookResources,mergeBookResources} from './book-resources.mjs';
 import {registerCandidates} from './candidates.mjs';
 import {htmlEvidence} from './html-evidence.mjs';
 import {bookCatalogs} from './book-catalogs.mjs';
@@ -93,7 +93,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     await writeJson(manifestFile,inventory);return inventory;
   }
   await fs.mkdir(path.join(directory,'sources'),{recursive:true});
-  const evidenceFile=path.join(directory,'site-evidence-v5.json');
+  const evidenceFile=path.join(directory,'site-evidence-v6.json');
   let evidence=await readJson(evidenceFile);
   if(!evidence){
     await onProgress({phase:'planning',stage:'读取网站与站点地图',discovered:0});
@@ -196,7 +196,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     }
   }));
   articles.sort((a,b)=>candidates.indexOf(a.url)-candidates.indexOf(b.url));
-  const deferred_resources=[...new Map(deferred.map(item=>[urlImportDedupeKey(item.url),item])).values()];
+  const deferred_resources=mergeBookResources(deferred);
   await registerCandidates(root,deferred_resources,{source_id:settings.id,run_id:runId});
   const inventory={discovery_version:PLANNER_VERSION,taxonomy_version:'source-taxonomy/v1',complete:failures.length===0,articles,excluded,excluded_count:excluded.length,deferred_resources,failures,candidate_count:candidates.length,declared_total:declared,sitemaps:evidence.sitemaps,planner:planned.producer,plan,settings_sha256:digest(JSON.stringify(settings)),article_source:{run_id:runId}};
   const expected=listedUrls ? candidates.length : declared;

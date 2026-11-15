@@ -1,6 +1,7 @@
 import {JSDOM} from 'jsdom';
 import {scopedUrl} from './network.mjs';
 import {canonicalUrl} from '../subscription-workflow/config.mjs';
+import {descriptionText} from './book-resources.mjs';
 
 // Read only literal public JSON catalogs used by an explicitly linked library.
 // Never execute site JavaScript or follow a book/PDF link to obtain a body.
@@ -26,7 +27,7 @@ export async function bookCatalogs(links,base,fetchPage){
    for(const row of rows){
     const title=String(row.title||row.name||'').trim();if(!title)throw Error('书目目录缺少书名，未将部分目录视为完整');
     const target=canonicalUrl(direct?row.url:template.prefix+encodeURIComponent(row[template.field])+template.suffix);
-    books.push({kind:'book',url:target,title:title.slice(0,500),author:String(row.author||'').slice(0,300),reason:'网站书库中的书目，仅登记链接，等待选择导入',evidence:{source_url:page.url,heading:link.title,catalog_url:url,catalog_sha256:response.sha256}});registered++;
+    books.push({kind:'book',url:target,title:title.slice(0,500),author:String(row.author||'').slice(0,300),description:descriptionText(row.description||row.summary),recommendation:descriptionText(row.review||row.recommendation),reason:'网站书库中的书目，仅登记链接，等待选择导入',evidence:{source_url:page.url,heading:link.title,catalog_url:url,catalog_sha256:response.sha256}});registered++;
    }
    evidence.push({source_url:page.url,catalog_url:url,sha256:response.sha256,declared:rows.length,registered});
   }
