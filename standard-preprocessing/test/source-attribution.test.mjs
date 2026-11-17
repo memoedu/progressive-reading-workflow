@@ -21,3 +21,18 @@ test('belief and proposal attributions remain third person while the narrator st
  }
  for(const source of ['I think the effect is temporary.','I proposed a simpler model as a writer.','The author’s experiment failed. I repeated it.'])assert.equal(sourceHasAuthorAttribution(source),false);
 });
+
+test('research pointers retain attributed speech without accepting a fabricated narrator attribution',async()=>{
+ const sources=[
+  'The authors point to a change in the measurements. I checked the underlying data.',
+  'A researcher points out a limitation of the method. I tested another approach.',
+  'The writer pointed to an earlier experiment. I remain uncertain about its interpretation.',
+  'The authors further pointed out a confounding factor. I disagree with their conclusion.'
+ ];
+ for(const source of sources){
+  assert.equal(sourceHasAuthorAttribution(source),true);
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://example.invalid/research-pointer',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}},{producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(block=>({source_block_key:block.source_block_key,markdown:'作者指出了相关证据。我对此进行了独立核验。'})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,'completed');
+ }
+ for(const source of ['I point to the experimental data.','I pointed out a limitation as a writer.','The author’s diagram points to the result. I explain it differently.'])assert.equal(sourceHasAuthorAttribution(source),false);
+});
