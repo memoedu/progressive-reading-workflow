@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.15";
+export const PROCESSOR_VERSION = "1.12.16";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -46,8 +46,18 @@ const AUTHOR_ATTRIBUTION_PATTERN=new RegExp(
   String.raw`\b(?:authors?|researchers?|writers?)(?:\s+of\s+(?:(?:the|this|that|a|an)\s+)?(?:papers?|stud(?:y|ies)|books?|articles?|reports?|reviews?))?\s+`
   +String.raw`(?:(?:also|further|explicitly|specifically)\s+)?(?:(?:do|does|did|have|has|had)\s+(?:not\s+)?)?(?:(?:also|further|explicitly|specifically|long|previously|already)\s+)?`
   +String.raw`(?:point(?:s|ed)?\s+(?:out|to)|(?:make(?:s)?|made)\s+(?:(?:a|an|the)\s+)?(?:(?:good|valid|important|key|interesting|excellent|useful|fair|following|compelling)\s+)?points?|(?:argue|note|emphasize|suggest|explain|conclude|state|claim|observe|think|thought|believe|consider|propose|maintain|assert|contend|recommend|say|said)(?:s|d|ed)?)\b`,'iu');
+function hasChineseAuthorAttribution(markdown){
+  const text=String(markdown||'');
+  for(const match of text.matchAll(/作者(?:认为|指出|强调|判断|提出|主张|表示|解释|总结|建议)/gu)){
+    // A directional recipient ("向该作者提出问题") is not the speaker of
+    // the following verb. Keep checking later actual attributions in the block.
+    if(/向(?:该|此|这位|那位|这名|那名)?\s*$/u.test(text.slice(0,match.index)))continue;
+    return true;
+  }
+  return false;
+}
 export function sourceHasAuthorAttribution(markdown) {
-  return /作者(?:认为|指出|强调|判断|提出|主张|表示|解释|总结|建议)/u.test(markdown)
+  return hasChineseAuthorAttribution(markdown)
     || AUTHOR_ATTRIBUTION_PATTERN.test(translationNaturalLanguage(markdown));
 }
 export function hasIntroducedTranslationTime(source, translated) {
@@ -641,8 +651,7 @@ function validateProducerOutput(output, blocks, safetyCap, cleaningPolicy, proce
         : /(?:^|[\[(（\s])\d{1,2}:\d{2}(?::\d{2})?(?:[\])）\s]|$)/mu.test(candidate.markdown))) {
       failures.push(`visible_timestamp_introduced:${source.source_block_key}`);
     }
-    const thirdPersonPattern = /作者(?:认为|指出|强调|判断|提出|主张|表示|解释|总结|建议)/u;
-    if (cleaningPolicy.preserve_source_voice && thirdPersonPattern.test(candidate.markdown) && !sourceHasAuthorAttribution(source.markdown)) {
+    if (cleaningPolicy.preserve_source_voice && hasChineseAuthorAttribution(candidate.markdown) && !sourceHasAuthorAttribution(source.markdown)) {
       failures.push(`source_voice_shifted_to_third_person:${source.source_block_key}`);
     }
     if (cleaningPolicy.normalize_semantic_containers) {
@@ -725,8 +734,7 @@ function validateProducerOutput(output, blocks, safetyCap, cleaningPolicy, proce
       if (cleaningPolicy.forbid_visible_timestamps && /(?:^|[\[(（\s])\d{1,2}:\d{2}(?::\d{2})?(?:[\])）\s]|$)/mu.test(section.markdown)) {
         failures.push(`visible_timestamp_introduced_in_lossless_section:${index}`);
       }
-      const thirdPersonPattern = /作者(?:认为|指出|强调|判断|提出|主张|表示|解释|总结|建议)/u;
-      if (cleaningPolicy.preserve_source_voice && thirdPersonPattern.test(section.markdown) && !sourceHasAuthorAttribution(sourceText)) {
+      if (cleaningPolicy.preserve_source_voice && hasChineseAuthorAttribution(section.markdown) && !sourceHasAuthorAttribution(sourceText)) {
         failures.push(`source_voice_shifted_to_third_person_in_lossless_section:${index}`);
       }
     }

@@ -68,3 +68,18 @@ test('perfect-aspect source reporting remains attributed without changing the na
  }
  for(const source of ['I have noted a limitation as an author.','The author’s experiment has revealed a pattern. I explained it.','The authors have a large dataset. I considered an alternative.'])assert.equal(sourceHasAuthorAttribution(source),false);
 });
+
+test('requests directed to an author retain the narrator while later invented attribution still fails',async()=>{
+ for(const [source,translated,accepted] of [
+  ['I asked the author to clarify the procedure. I repeated the measurements.','我向作者提出了澄清程序的要求。我重复了测量。',true],
+  ['Le pedí al autor una aclaración y repetí la prueba.','我向该作者提出了澄清问题的要求，并重复了试验。',true],
+  ['I asked the author a question. I remain unconvinced.','我向作者提出了问题。作者认为我应该改变方法。',false],
+  ['I explained the procedure and repeated the measurement.','作者解释了程序并重复了测量。',false]
+ ]){
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://independent.invalid/author-recipient',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}},{producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(block=>({source_block_key:block.source_block_key,markdown:translated})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,accepted?'completed':'completed_with_warnings');
+  if(!accepted)assert.match(result.errors[0].message,/source_voice_shifted_to_third_person/u);
+ }
+ assert.equal(sourceHasAuthorAttribution('我向作者提出了一个问题。'),false);
+ assert.equal(sourceHasAuthorAttribution('我向这位作者提出了问题。作者认为需要更多数据。'),true);
+});
