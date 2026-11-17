@@ -365,7 +365,7 @@
       "required": ["version", "prompt_version", "skipped", "calls", "attempts", "call_ledger"],
       "properties": {
         "version": { "const": "workflow-router/v1" },
-        "prompt_version": { "enum": ["workflow-router-v1.0-concise", "workflow-router-v1.1-form-boundary", "workflow-router-v1.2-formal-content-boundary", "workflow-router-v1.3-demand-driven"] },
+        "prompt_version": { "enum": ["workflow-router-v1.0-concise", "workflow-router-v1.1-form-boundary", "workflow-router-v1.2-formal-content-boundary", "workflow-router-v1.3-demand-driven", "workflow-router-v1.4-chinese-target"] },
         "skipped": { "type": "boolean" },
         "reason": { "type": "string", "minLength": 1 },
         "provider": { "type": "string", "minLength": 1 },
