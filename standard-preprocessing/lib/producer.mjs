@@ -849,6 +849,8 @@ export function findEnglishNaturalLanguageResidues(markdown) {
     });
 }
 
+const APA_INITIAL_AUTHOR=String.raw`\p{Lu}[\p{L}\p{M}'’–-]+(?:\s+\p{Lu}[\p{L}\p{M}'’–-]+){0,2},\s*(?:\p{Lu}\.\s*){1,5}`;
+const APA_INITIAL_AUTHORS=new RegExp('^'+APA_INITIAL_AUTHOR+'(?:(?:,\\s*(?:&\\s*)?|\\s+&\\s+)'+APA_INITIAL_AUTHOR+')*$','u');
 export function isBibliographicReferenceBlock(markdown) {
   const citationLines = String(markdown).trim().split(/\r?\n/u).filter(line => line.trim());
   if (citationLines.length > 1 && citationLines.every(line => /^\s*(?:[-*+]\s+|\d+[.)]\s+)/u.test(line))) {
@@ -871,6 +873,11 @@ export function isBibliographicReferenceBlock(markdown) {
     .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/u, "")
     .trim();
   if (!text || /[\p{Script=Han}]/u.test(text)) return false;
+  // APA journal records put initials after surnames. Require the complete
+  // author-year header and journal volume/pages, so a cited prose sentence
+  // cannot become an untranslated reference merely by naming an author.
+  const apa=/^(.+?)\s*\((?:18|19|20)\d{2}[a-z]?\)\.\s+(.+)$/u.exec(text.replace(/[*_]/gu,''));
+  if(apa&&APA_INITIAL_AUTHORS.test(apa[1].trim())&&/^.+\.\s+[^.!?\n]+,\s*\d+\s*(?:\(\d+\))?\s*,\s*(?:\d+|[eE]\d+)(?:[-–]\d+)?\.?(?:\s+(?:https?:\/\/|doi:)\S+)?$/u.test(apa[2]))return true;
   // Full given names are common in exported book citations (not only initials).
   if (/^[A-Z][A-Za-z'’-]+,\s+[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)*\.\s+(?:19|20)\d{2}[a-z]?\./u.test(text)) return true;
   const initialLedNames = text.match(/\b(?:[A-Z]\.\s*)+(?:[A-Z][A-Za-z'’-]+(?:\s+|(?=[,.;:]))){1,3}/gu) || [];
