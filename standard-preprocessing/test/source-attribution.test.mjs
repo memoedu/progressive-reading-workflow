@@ -59,3 +59,12 @@ test('qualified author noun phrases and reporting idioms keep narrator and cited
  }
  for(const source of ['I make an important point as an author.','The author of the book collected observations. I explained the result.','The author’s study points out a pattern. I interpreted it.','The authors make a prototype. I think it works.','As the author of the review, I point out the caveat.'])assert.equal(sourceHasAuthorAttribution(source),false);
 });
+
+test('perfect-aspect source reporting remains attributed without changing the narrator',async()=>{
+ for(const source of ['Many authors have noted a methodological limitation. I tested the result.','The researcher has previously argued for a larger sample. I disagree.','The writers had not considered that alternative. I repeated the calculation.']){
+  assert.equal(sourceHasAuthorAttribution(source),true);
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://independent.invalid/perfect-reporting',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}},{producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(block=>({source_block_key:block.source_block_key,markdown:'作者曾指出一个相关问题。我进行了独立检验。'})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,'completed');
+ }
+ for(const source of ['I have noted a limitation as an author.','The author’s experiment has revealed a pattern. I explained it.','The authors have a large dataset. I considered an alternative.'])assert.equal(sourceHasAuthorAttribution(source),false);
+});
