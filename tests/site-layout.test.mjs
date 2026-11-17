@@ -9,6 +9,22 @@ import {saveRun,runId,runPath} from '../site-import/store.mjs';
 import {writeJson,readJson,digest} from '../subscription-workflow/config.mjs';
 import {findSourcePublication,sourceReuseResult} from '../scripts/reading-source-library.mjs';
 import {readingMovePayload,readingStateEqual,moveReaderFile} from '../site-import/reader-moves.mjs';
+import {verifySiteCollection} from '../site-import/tasks.mjs';
+
+test('successful articles are categorized even when a sibling failed, without creating an empty category',async()=>{
+ const previous=process.env.NODE_ENV;process.env.NODE_ENV='test';
+ try{
+  const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/layout-partial-'),settings={id:'partial',destination:'整站/Independent',generate_index:true},id=runId('partial-layout');
+  const first='https://partial-layout.test/first',second='https://partial-layout.test/second',base=path.join(root,'阅读区',settings.destination),file=path.join(base,'first.md'),text='---\nsource_url: '+first+'\n---\nOriginal published body';
+  await fs.mkdir(path.join(base,'分类/old-empty'),{recursive:true});await fs.writeFile(file,text);
+  const collection={inventory:{articles:[{url:first,title:'First',taxonomy:articleTaxonomy({categories:['Economics']})},{url:second,title:'Second',taxonomy:articleTaxonomy({categories:['Unpublished topic']})}]},results:[{requested_url:first,status:'imported',artifacts:[{kind:'markdown',path:file,sha256:digest(text)}]},{requested_url:second,status:'failed'}]};
+  const report=await verifySiteCollection(root,settings,collection,id);
+  assert.equal(report.verified,1);assert.equal(report.expected,2);assert.equal(report.index,null);
+  assert.equal(await fs.readFile(path.join(base,'分类/Economics/first.md'),'utf8'),text);
+  await assert.rejects(fs.access(path.join(base,'分类/old-empty')),e=>e.code==='ENOENT');
+  await assert.rejects(fs.access(path.join(base,'分类/Unpublished topic')),e=>e.code==='ENOENT');
+ }finally{if(previous===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previous;}
+});
 
 test('batch reader move uses the vault API and the existing reader state handler',async()=>{
   const file={path:'old.md'},calls=[];

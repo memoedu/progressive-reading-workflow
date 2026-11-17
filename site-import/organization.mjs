@@ -9,6 +9,7 @@ import {listRuns,runPath} from './store.mjs';
 import {taxonomyFolder,taxonomyGroups} from './taxonomy.mjs';
 import {moveInReadingHost} from './reader-moves.mjs';
 import {knownIndexes} from './indexes.mjs';
+import {pruneEmptySiteDirectories} from './empty-directories.mjs';
 
 const inside=(base,file)=>{const relative=path.relative(base,file);return relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);};
 const locationKey=file=>process.platform==='win32'?path.resolve(file).toLowerCase():path.resolve(file);
@@ -36,8 +37,14 @@ export function remapReceipts(value,mapping,root,hashes,relocate=receiptRelocato
 }
 
 export async function organizeSiteFiles(root,settings,collection,id,{broker,onProgress=async()=>{}}={}){
-  const config=await loadConfig(root);if(!config)return organizeUnlocked(root,settings,collection,id,{broker,onProgress});
-  return withLock(path.join(paths(root).home,'worker.lock'),async()=>{const release=await acquireLock(config.rss_home);try{return await organizeUnlocked(root,settings,collection,id,{broker,onProgress});}finally{await release();}});
+  const organize=async()=>{
+    const result=await organizeUnlocked(root,settings,collection,id,{broker,onProgress});
+    const removed=await pruneEmptySiteDirectories(path.join(root,'阅读区',settings.destination));
+    if(removed.length){result.removed_empty_directories=[...new Set([...(result.removed_empty_directories||[]),...removed])];await writeJson(path.join(runPath(root,id),'organization.json'),result);}
+    return result;
+  };
+  const config=await loadConfig(root);if(!config)return organize();
+  return withLock(path.join(paths(root).home,'worker.lock'),async()=>{const release=await acquireLock(config.rss_home);try{return await organize();}finally{await release();}});
 }
 async function organizeUnlocked(root,settings,collection,id,{broker,onProgress=async()=>{}}={}){
   const directory=runPath(root,id),journal=path.join(directory,'organization.json');let saved=await readJson(journal);

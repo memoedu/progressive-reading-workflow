@@ -15,9 +15,10 @@ import {htmlEvidence} from './html-evidence.mjs';
 import {bookCatalogs} from './book-catalogs.mjs';
 import {articleTaxonomy,mergeTaxonomies,classifyExclusiveTags} from './taxonomy.mjs';
 import {taxonomyIndexes} from './taxonomy-indexes.mjs';
+import {classifySiteTopics,TOPIC_VERSION} from './topic-classification.mjs';
 
-const PLANNER_VERSION='site-discovery/v9';
-export const inventoryCurrent=(inventory,settings)=>Boolean(inventory?.complete&&inventory.taxonomy_version==='source-taxonomy/v1'&&(settings.repository||inventory.discovery_version===PLANNER_VERSION));
+const PLANNER_VERSION='site-discovery/v10';
+export const inventoryCurrent=(inventory,settings)=>Boolean(inventory?.complete&&inventory.taxonomy_version==='source-taxonomy/v1'&&(!settings.infer_topics||inventory.topic_classification?.version===TOPIC_VERSION)&&(settings.repository||inventory.discovery_version===PLANNER_VERSION));
 export function matchesPath(url,patterns) {
   if(!patterns?.length)return true;
   const value=new URL(url).pathname+new URL(url).search;
@@ -87,7 +88,7 @@ function validatePlan(plan,evidence) {
   return plan;
 }
 
-export async function discoverSite(root,settings,runId,{onProgress=async()=>{},planner=codexSitePlan,fetchPage=fetchSiteText}={}) {
+export async function discoverSite(root,settings,runId,{onProgress=async()=>{},planner=codexSitePlan,fetchPage=fetchSiteText,topicProducer}={}) {
   const directory=runPath(root,runId),manifestFile=path.join(directory,'inventory.json');
   const saved=await readJson(manifestFile);
   if(inventoryCurrent(saved,settings))return saved;
@@ -133,12 +134,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     evidence={url:base,title,html_excerpt:htmlEvidence(page.body),links:links.slice(0,300),feeds,sitemaps,urls:[...new Set(urls)],scripts,archives,books:[...bookResources(page.body,base),...catalogs.books],book_catalogs:catalogs.evidence};
     await writeJson(evidenceFile,evidence);
   }
-  const planFile=path.join(directory,'plan-v9-with-taxonomy.json');
+  const planFile=path.join(directory,'plan-v10-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
     const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:evidence.urls.slice(0,2000),sitemap_url_count:evidence.urls.length,settings};
-    planned=await planner(input);await writeJson(path.join(directory,'plan-v9-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
+    planned=await planner(input);await writeJson(path.join(directory,'plan-v10-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
   const plan=validatePlan(planned.plan,evidence);
   // An article can also be linked from navigation. The observed HTML title
@@ -215,7 +216,8 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   articles.sort((a,b)=>candidates.indexOf(a.url)-candidates.indexOf(b.url));
   let taxonomy_indexes=[];
   if(articles.some(article=>!article.taxonomy.groups.length))await onProgress({phase:'discovering',stage:'核对原站标签与分类目录',discovered:candidates.length,total:candidates.length,checked:completed,failed:failures.length});
-  const indexed=articles.some(article=>!article.taxonomy.groups.length)?await taxonomyIndexes(evidence.links,[...articles.map(article=>article.url),...excluded.filter(item=>item.subpages?.length).map(item=>item.url)],evidence.url,fetchPage):{memberships:{},pages:[]};taxonomy_indexes=indexed.pages;
+  const taxonomyLinks=[...evidence.links,...evidence.archives.flatMap(page=>page.links||[]),...Object.values(taxonomyEvidence).flat().map(item=>({url:item.url,title:item.name}))];
+  const indexed=articles.some(article=>!article.taxonomy.groups.length)?await taxonomyIndexes(taxonomyLinks,[...articles.map(article=>article.url),...excluded.filter(item=>item.subpages?.length).map(item=>item.url)],evidence.url,fetchPage):{memberships:{},pages:[]};taxonomy_indexes=indexed.pages;
   for(const article of articles){
     const member=indexed.memberships[urlImportDedupeKey(article.url)],contexts=parents.get(article.url)||[];
     article.taxonomy=mergeTaxonomies(article.taxonomy,member?.taxonomy,articleTaxonomy({collections:contexts.map(parent=>({name:parent.name,order:parent.order}))}),...contexts.map(parent=>indexed.memberships[urlImportDedupeKey(parent.url)]?.taxonomy));
@@ -231,6 +233,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     if(JSON.stringify(check.urls)!==JSON.stringify(listedUrls)){inventory.complete=false;inventory.count_error='采集期间文章归档发生变化，请重试核对。';}
   }else if(plan.listing?.url){const check=await fetchPage(new URL(plan.listing.url,evidence.url).href,{base:evidence.url});if(Number(field(JSON.parse(check.body),plan.listing.total_path))!==declared){inventory.complete=false;inventory.count_error='采集期间站点文章总数发生变化，请重试核对。';}}
   if(inventory.complete)inventory.tag_classification=classifyExclusiveTags(articles);
+  if(inventory.complete&&settings.infer_topics)inventory.topic_classification=await classifySiteTopics(root,settings,inventory,{producer:topicProducer,onProgress:async detail=>onProgress({phase:'discovering',stage:'按文章主题补全缺失分类',discovered:candidates.length,total:candidates.length,checked:completed,...detail})});
   await writeJson(manifestFile,inventory);
   if(!inventory.complete){const error=new Error(inventory.count_error || `有 ${failures.length} 篇来源未核清，已保留成功采集缓存，尚未开始正文导入。`);error.inventory=inventory;throw error;}
   return inventory;

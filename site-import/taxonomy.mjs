@@ -52,7 +52,7 @@ export function taxonomyFromJson(json,mapping={},read,identity){
 }
 export function taxonomyFolder(destination,taxonomy){if(taxonomy?.repository_directory)return path.posix.join(destination,...taxonomy.repository_directory.map(categorySegment));const group=taxonomy?.primary || {kind:'未分类',path:[]};return path.posix.join(destination,group.kind,...group.path.map(categorySegment));}
 export function taxonomyGroups(articles){
-  const groups=new Map();for(const article of articles){const taxonomy=article.taxonomy || articleTaxonomy();for(const group of taxonomy.groups.length?taxonomy.groups:[taxonomy.primary]){const folder=path.posix.join(group.kind,...group.path.map(categorySegment)),key=folder.toLocaleLowerCase();if(!groups.has(key))groups.set(key,{...group,folder,articles:[]});groups.get(key).articles.push({...article,source_order:group.order});}}
+  const groups=new Map(),members=new Map();for(const article of articles){const taxonomy=article.taxonomy || articleTaxonomy();for(const group of taxonomy.groups.length?taxonomy.groups:[taxonomy.primary]){const folder=path.posix.join(group.kind,...group.path.map(categorySegment)),key=folder.toLocaleLowerCase();if(!groups.has(key)){groups.set(key,{...group,folder,articles:[]});members.set(key,new Set());}const identity=article.url||article;if(members.get(key).has(identity))continue;members.get(key).add(identity);groups.get(key).articles.push({...article,source_order:group.order});}}
   const rank={'合集':0,'分类':1,'标签':2,'未分类':3};
   return [...groups.values()].map(group=>({...group,articles:group.articles.sort((a,b)=>group.kind==='合集'?(a.source_order??1e9)-(b.source_order??1e9):0)})).sort((a,b)=>rank[a.kind]-rank[b.kind]||a.folder.localeCompare(b.folder,'zh-CN'));
 }
