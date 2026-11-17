@@ -45,3 +45,17 @@ test('considered positions remain attributed to the cited author rather than the
  }
  for(const source of ['I considered another explanation.','As a writer, I consider the result tentative.','The author’s considered opinion was discussed. I tested it again.'])assert.equal(sourceHasAuthorAttribution(source),false);
 });
+
+test('qualified author noun phrases and reporting idioms keep narrator and cited author separate',async()=>{
+ for(const [source,translated] of [
+  ['The author of the study explains a limitation. I repeated the test.','研究作者指出了一项限制。我重复了这项测试。'],
+  ['The writer made a valid point about measurement. I checked the data.','作者对测量提出了一个合理的观点。我核查了数据。'],
+  ['The authors of the book make an important point. I disagree with their inference.','书籍作者指出了一个重要观点。我不同意他们的推论。'],
+  ['The authors of the article do not claim certainty. I remain unconvinced.','文章作者表示，并不声称确定无疑。我仍未被说服。']
+ ]){
+  assert.equal(sourceHasAuthorAttribution(source),true);
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://example.invalid/qualified-attribution',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}},{producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(block=>({source_block_key:block.source_block_key,markdown:translated})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,'completed');
+ }
+ for(const source of ['I make an important point as an author.','The author of the book collected observations. I explained the result.','The author’s study points out a pattern. I interpreted it.','The authors make a prototype. I think it works.','As the author of the review, I point out the caveat.'])assert.equal(sourceHasAuthorAttribution(source),false);
+});
