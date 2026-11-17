@@ -20,3 +20,11 @@ test('APA journal author lists preserve Unicode names and citation records while
  const block={source_block_key:'prose',type:'paragraph',markdown:prose},protection=protectTranslationBlockBatch([block]);
  assert.ok(validateGenericTranslatedChunk({translations:[{source_block_key:block.source_block_key,markdown:protection.get(block.source_block_key).protectedMarkdown}]},[block],protection,translationLiteralBlockKeys([block]),{requireChinese:true}).failures.some(failure=>failure.startsWith('translation_target_language_missing:')));
 });
+
+test('Spanish bibliography headings retain reference context and stop at the next peer section',()=>{
+ for(const title of ['Bibliografía','Bibliografia','Referencias','Referencias bibliográficas']){
+  const blocks=[{type:'heading',source_block_key:'heading',markdown:'## '+title},{type:'paragraph',source_block_key:'reference',markdown:'A. Rivera. _Introduction to signal analysis_. Technical Press.'},{type:'heading',source_block_key:'discussion',markdown:'## Discusión'},{type:'paragraph',source_block_key:'prose',markdown:'El método necesita una explicación más detallada.'}];
+  assert.deepEqual([...translationLiteralBlockKeys(blocks)],['reference']);
+ }
+ assert.deepEqual([...translationLiteralBlockKeys([{type:'heading',source_block_key:'heading',markdown:'## Por qué las referencias importan'},{type:'paragraph',source_block_key:'prose',markdown:'El argumento necesita una explicación.'}])],[]);
+});
