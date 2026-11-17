@@ -32,7 +32,8 @@ test('completed checked moves reconcile live receipts and later links without mo
   const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/layout-receipt-resume-'),source={id:'receipt-resume',destination:'整站/Independent'},old=runId('completed-move'),id=runId('receipt-reconcile'),url='https://receipt-resume.test/article';
   const from=path.join(root,'阅读区',source.destination,'article.md'),to=path.join(root,'阅读区',source.destination,'分类/Topic/article.md'),note=path.join(root,'阅读区/note.md'),text='---\nsource_url: '+url+'\n---\nPreserved original body';
   await fs.mkdir(path.dirname(to),{recursive:true});await fs.writeFile(to,text);await fs.writeFile(note,'[Article](整站/Independent/article.md)');
-  await saveRun(root,{id:old,source_id:source.id,created_at:'2026-01-01',results:[]});await writeJson(path.join(runPath(root,old),'organization.json'),{status:'completed',moves:[{source:from,target:to}],mapping:[[from,to]],hashes:[[to,digest(text)]]});
+  const recordedTarget=process.platform==='win32'?to.replace('Topic','topic'):to;
+  await saveRun(root,{id:old,source_id:source.id,created_at:'2026-01-01',results:[]});await writeJson(path.join(runPath(root,old),'organization.json'),{status:'completed',moves:[{source:from,target:recordedTarget}],mapping:[[from,recordedTarget]],hashes:[[recordedTarget,digest(text)]]});
   const collection={inventory:{articles:[{url,title:'Article',taxonomy:articleTaxonomy({categories:['Topic']})}]},results:[sourceReuseResult(url,await findSourcePublication(root,url))]},relocations=[];
   const result=await organizeSiteFiles(root,source,collection,id,{broker:{relocateSourceArtifacts:async(mapping,hashes)=>relocations.push({mapping,hashes})}});
   assert.equal(result.moved,0);assert.equal(relocations.length,1);assert.deepEqual(relocations[0].mapping,[[from,to]]);

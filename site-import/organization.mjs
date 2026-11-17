@@ -87,8 +87,9 @@ async function organizeUnlocked(root,settings,collection,id,{broker,onProgress=a
   const mapping=new Map(moves.map(m=>[m.source,m.target]));for(const d of duplicates)mapping.set(d.source,mapping.get(d.winner)||d.winner);
   // A previous reader batch may have moved files before its client lost the
   // response. Reuse verified actual locations and finish reference repair.
-  const actualPaths=new Set([...current.values()].map(row=>row.artifacts.find(a=>a.kind==='markdown').path));
-  for(const previous of history){const old=await readJson(path.join(runPath(root,previous.id),'organization.json'));if(old?.status==='completed'){for(const [from,to] of old.mapping||[])if(actualPaths.has(to)&&!await exists(from)&&await exists(to))mapping.set(from,mapping.get(to)||to);break;}if(old?.status!=='running')continue;for(const move of old.moves||[])if(actualPaths.has(move.target)&&!await exists(move.source)&&await exists(move.target))mapping.set(move.source,mapping.get(move.target)||move.target);}
+  const actualPaths=new Map([...current.values()].map(row=>{const file=row.artifacts.find(a=>a.kind==='markdown').path;return [locationKey(file),file];}));
+  const retainRecoveredMapping=async(from,to)=>{const actual=actualPaths.get(locationKey(to));if(actual&&!await exists(from)&&await exists(actual))mapping.set(from,mapping.get(actual)||actual);};
+  for(const previous of history){const old=await readJson(path.join(runPath(root,previous.id),'organization.json'));if(old?.status==='completed'){for(const [from,to] of old.mapping||[])await retainRecoveredMapping(from,to);break;}if(old?.status!=='running')continue;for(const move of old.moves||[])await retainRecoveredMapping(move.source,move.target);}
   for(const move of moves){const text=await fs.readFile(move.source,'utf8');if(digest(text)!==move.sha256)throw new Error('文章已发生变更，未移动：'+move.source);move.expected=relocatedMarkdown(text,move.source,move.target,mapping,root);await fs.writeFile(path.join(recovery,digest(move.source)+'.md'),text);}
   saved={status:'running',moves:moves.map(({expected,...m})=>m),duplicates,mapping:[...mapping],recovery,ownedIndexes};await writeJson(journal,saved);
   await onProgress('同步阅读状态和引用链接');
