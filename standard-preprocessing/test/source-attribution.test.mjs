@@ -36,3 +36,12 @@ test('research pointers retain attributed speech without accepting a fabricated 
  }
  for(const source of ['I point to the experimental data.','I pointed out a limitation as a writer.','The author’s diagram points to the result. I explain it differently.'])assert.equal(sourceHasAuthorAttribution(source),false);
 });
+
+test('considered positions remain attributed to the cited author rather than the narrator',async()=>{
+ for(const source of ['The author considered the evidence sufficient. I disagree.','A researcher considers the sample too small. I repeated the measurement.','The writers also consider the alternative explanation. I remain uncertain.']){
+  assert.equal(sourceHasAuthorAttribution(source),true);
+  const result=await processMaterial({schema_version:'progressive-reading.preprocess.request/v1',contract_version:'1.0.0',source_type:'fixture',source_metadata:{source_url:'https://example.invalid/considered-position',source_is_original:true},material:{markdown:source},user_instruction:'',processing_options:{cleaning_mode:'source_translation',translation_target_language:'zh-CN',include_reading_guide:false}},{producer:{async generate(payload){return {provider:'fixture',model:'fixture',output:{cleaned_blocks:payload.blocks.map(block=>({source_block_key:block.source_block_key,markdown:'作者认为这些证据需要进一步讨论。我对此进行了独立核验。'})),judgments:null,insights:[],translation:{is_bilingual:false,alignments:[]}}};}}});
+  assert.equal(result.status,'completed');
+ }
+ for(const source of ['I considered another explanation.','As a writer, I consider the result tentative.','The author’s considered opinion was discussed. I tested it again.'])assert.equal(sourceHasAuthorAttribution(source),false);
+});
