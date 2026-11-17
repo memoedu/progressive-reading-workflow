@@ -97,14 +97,14 @@ export async function mapConcurrentOrdered(items, concurrency, worker) {
 }
 
 export const WORKFLOW_ROUTER_VERSION = "workflow-router/v1";
-export const WORKFLOW_ROUTER_PROMPT_VERSION = "workflow-router-v1.3-demand-driven";
+export const WORKFLOW_ROUTER_PROMPT_VERSION = "workflow-router-v1.4-chinese-target";
 
 export const WORKFLOW_ROUTER_SYSTEM_PROMPT = [
   "你是 Markdown 工作流路由器，只分类，不翻译、不改写、不总结正文。",
   "只返回 JSON：所需分类字段、confidence、reason。只补 required_labels；证据不足的字段返回 null，不能猜测。",
   "input_form 为 spoken_transcript 或 written；content_profile 为 natural_language、math_lecture 或 literature；source_language 为 zh、en、bilingual 或 other。",
   "spoken_transcript 仅用于带说话人、时间码、字幕或问答碎片、ASR 噪声的原始转录；已段落化或正式发布的文章即使使用第一人称、口语词或网络用语，也必须归为 written。",
-  "bilingual 仅指正文已同时包含可阅读的原文与译文版本；夹杂英文术语、公式、引语或代码不算双语。bilingual 不需要再翻译。",
+  "bilingual 仅指正文已同时包含可阅读的原文与中文译文版本；英西、英法等没有中文译文的多语内容仍须翻译，归为 en 或 other。夹杂英文术语、公式、引语或代码不算双语。bilingual 不需要再翻译。",
   "math_lecture 仅用于以公式推导、定理证明、形式化算法/数据结构定义、伪代码或复杂度分析为主体的数理讲义；一般编程教程、语言语法、API 或代码示例、练习说明和普通技术文章仍是 natural_language。",
   "literature 用于小说、诗歌、戏剧、文学性散文；论说、评论和技术文章属于 natural_language，不能只因标题含 essay 就判为文学。",
   "fixed_labels 中非空字段是可信渠道标记，无需返回，不得重新判断或更改。confidence 为 0 到 1；reason 用一句简短中文说明依据。"
@@ -140,13 +140,13 @@ export function resolveWorkflowRouteContradictions(output, markdown, fixedLabels
   if (
     fixedLabels.source_language
     || output?.source_language !== "bilingual"
-    || !bilingualReasonContradiction(output?.reason)
+    || (!bilingualReasonContradiction(output?.reason) && /[\u3400-\u9fff]/u.test(String(markdown || "")))
   ) return output;
   const sourceLanguage = dominantWrittenLanguage(markdown);
   return {
     ...output,
     source_language: sourceLanguage,
-    reason: `${String(output.reason || "").trim()}；按正文主导文字纠正为 ${sourceLanguage}。`
+    reason: `${String(output.reason || "").trim()}；未满足原文与中文译文条件，按正文主导文字纠正为 ${sourceLanguage}。`
   };
 }
 
@@ -849,6 +849,8 @@ export function findEnglishNaturalLanguageResidues(markdown) {
     });
 }
 
+const APA_INITIAL_AUTHOR=String.raw`\p{Lu}[\p{L}\p{M}'’–-]+(?:\s+\p{Lu}[\p{L}\p{M}'’–-]+){0,2},\s*(?:\p{Lu}\.\s*){1,5}`;
+const APA_INITIAL_AUTHORS=new RegExp('^'+APA_INITIAL_AUTHOR+'(?:(?:,\\s*(?:&\\s*)?|\\s+&\\s+)'+APA_INITIAL_AUTHOR+')*$','u');
 export function isBibliographicReferenceBlock(markdown) {
   const citationLines = String(markdown).trim().split(/\r?\n/u).filter(line => line.trim());
   if (citationLines.length > 1 && citationLines.every(line => /^\s*(?:[-*+]\s+|\d+[.)]\s+)/u.test(line))) {
@@ -871,6 +873,11 @@ export function isBibliographicReferenceBlock(markdown) {
     .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/u, "")
     .trim();
   if (!text || /[\p{Script=Han}]/u.test(text)) return false;
+  // APA journal records put initials after surnames. Require the complete
+  // author-year header and journal volume/pages, so a cited prose sentence
+  // cannot become an untranslated reference merely by naming an author.
+  const apa=/^(.+?)\s*\((?:18|19|20)\d{2}[a-z]?\)\.\s+(.+)$/u.exec(text.replace(/[*_]/gu,''));
+  if(apa&&APA_INITIAL_AUTHORS.test(apa[1].trim())&&/^.+\.\s+[^.!?\n]+,\s*\d+\s*(?:\(\d+\))?\s*,\s*(?:\d+|[eE]\d+)(?:[-–]\d+)?\.?(?:\s+(?:https?:\/\/|doi:)\S+)?$/u.test(apa[2]))return true;
   // Full given names are common in exported book citations (not only initials).
   if (/^[A-Z][A-Za-z'’-]+,\s+[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)*\.\s+(?:19|20)\d{2}[a-z]?\./u.test(text)) return true;
   const initialLedNames = text.match(/\b(?:[A-Z]\.\s*)+(?:[A-Z][A-Za-z'’-]+(?:\s+|(?=[,.;:]))){1,3}/gu) || [];
@@ -901,7 +908,7 @@ export function bibliographicReferenceBlockKeys(blocks) {
       const headingLevel = heading[1].length;
       const headingText = heading[2].replace(/^[-*+]\s+/u, "").trim();
       const sectionLabel = headingText.replace(/^(?:(?:chapter|section|appendix)\s+(?:[A-Z]|\d+(?:\.\d+)*)[:.)–—-]?\s+|(?:\d+(?:\.\d+)*[.)]?|[A-Z][.)])\s+)/iu,'').replace(/[*_`]/gu,'').trim();
-      const startsBibliography = /^(?:bibliograph(?:y|ies)|references?|reference\s+books?|(?:main\s+)?textbooks?|recommended\s+readings?|further\s+readings?|reading\s+list|参考文献|参考书(?:目)?|教材|推荐阅读|延伸阅读|书目)(?:\s*[:：])?$/iu.test(sectionLabel);
+      const startsBibliography = /^(?:bibliograph(?:y|ies)|references?|reference\s+books?|(?:main\s+)?textbooks?|recommended\s+readings?|further\s+readings?|reading\s+list|bibliograf[ií]as?|referencias?(?:\s+bibliogr[aá]ficas)?|参考文献|参考书(?:目)?|教材|推荐阅读|延伸阅读|书目)(?:\s*[:：])?$/iu.test(sectionLabel);
       if (startsBibliography) activeHeadingLevel = activeHeadingLevel === null ? headingLevel : Math.min(activeHeadingLevel, headingLevel);
       else if (activeHeadingLevel !== null && headingLevel <= activeHeadingLevel) activeHeadingLevel = null;
       continue;

@@ -23,6 +23,7 @@
     </div>
     <details><summary>路径范围（可选）</summary><p class="hint">每行一项，支持 * 通配符；留空时由后台识别文章范围。</p><div class="form-grid"><label>只包含这些路径<textarea id="site-include" rows="3" placeholder="/blog/*"></textarea></label><label>排除这些路径<textarea id="site-exclude" rows="3" placeholder="/blog/search*"></textarea></label></div></details>
     <label class="check"><input id="site-index" type="checkbox" checked>生成可打开文章的阅读目录</label>
+    <label class="check" data-site-infer hidden><input id="site-infer-topics" type="checkbox" aria-describedby="site-infer-hint" disabled>按内容补全缺失分类</label><p id="site-infer-hint" class="hint" data-site-infer hidden>原站没有分类时，结合标题和正文归并主题或内容类型。</p>
     <label class="check"><input id="site-rss" type="checkbox">同时加入 RSS 订阅</label><p class="hint">沿用同一阅读目录和处理方式，由现有订阅流程接收更新；已有正文直接复用。</p>
     <p id="site-form-error" class="error helper" role="alert"></p><div class="actions"><button id="site-save" type="submit">保存设置</button><span class="hint">保存后可点击“开始导入”。</span></div></form>
   </section>

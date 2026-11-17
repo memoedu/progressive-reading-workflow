@@ -45,6 +45,9 @@ export async function capturedArticle(root,articleSource,url) {
   const file=path.join(runPath(root,articleSource.run_id),'sources',digest(url)+'.json');
   const captured=await readJson(file);
   if(!captured||captured.url!==url||!captured.markdown?.trim()||captured.excluded)throw new Error('整站正文缓存缺失或来源不符');
+  const inventory=await readJson(path.join(runPath(root,articleSource.run_id),'inventory.json'));
+  const article=inventory?.articles?.find(article=>article.url===url);
+  if(article){if(article.markdown_sha256!==digest(captured.markdown))throw Error('整站分类引用的正文哈希不符');return {...captured,metadata:{...captured.metadata,taxonomy:article.taxonomy}};}
   return captured;
 }
 
@@ -57,7 +60,7 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
   const live=await findSourcePublications(root,expected.map(article=>article.url));
   collection.results=collection.results.map(row=>{const current=live.get(urlImportDedupeKey(row.requested_url)),artifact=row.artifacts?.find(a=>a.kind==='markdown');return current&&(artifact?.path!==current.path||artifact.sha256!==current.sha256)?sourceReuseResult(row.requested_url,current):row;});
   await onProgress('来源核对完成，整理原站目录');
-  const organization=expected.every(article=>collection.results.some(row=>row.requested_url===article.url&&SUCCESS.has(row.status)))?await organizeSiteFiles(root,settings,collection,runId,{broker,onProgress}):{};
+  const organization=expected.some(article=>collection.results.some(row=>row.requested_url===article.url&&SUCCESS.has(row.status)))?await organizeSiteFiles(root,settings,collection,runId,{broker,onProgress}):{};
   await onProgress('回读正式正文与目录链接');
   const rows=new Map(collection.results.map(row=>[row.requested_url,row]));
   const records=[];

@@ -9,6 +9,7 @@ import {listRuns,runPath} from './store.mjs';
 import {taxonomyFolder,taxonomyGroups} from './taxonomy.mjs';
 import {moveInReadingHost} from './reader-moves.mjs';
 import {knownIndexes} from './indexes.mjs';
+import {pruneEmptySiteDirectories} from './empty-directories.mjs';
 
 const inside=(base,file)=>{const relative=path.relative(base,file);return relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);};
 const locationKey=file=>process.platform==='win32'?path.resolve(file).toLowerCase():path.resolve(file);
@@ -36,8 +37,14 @@ export function remapReceipts(value,mapping,root,hashes,relocate=receiptRelocato
 }
 
 export async function organizeSiteFiles(root,settings,collection,id,{broker,onProgress=async()=>{}}={}){
-  const config=await loadConfig(root);if(!config)return organizeUnlocked(root,settings,collection,id,{broker,onProgress});
-  return withLock(path.join(paths(root).home,'worker.lock'),async()=>{const release=await acquireLock(config.rss_home);try{return await organizeUnlocked(root,settings,collection,id,{broker,onProgress});}finally{await release();}});
+  const organize=async()=>{
+    const result=await organizeUnlocked(root,settings,collection,id,{broker,onProgress});
+    const removed=await pruneEmptySiteDirectories(path.join(root,'阅读区',settings.destination));
+    if(removed.length){result.removed_empty_directories=[...new Set([...(result.removed_empty_directories||[]),...removed])];await writeJson(path.join(runPath(root,id),'organization.json'),result);}
+    return result;
+  };
+  const config=await loadConfig(root);if(!config)return organize();
+  return withLock(path.join(paths(root).home,'worker.lock'),async()=>{const release=await acquireLock(config.rss_home);try{return await organize();}finally{await release();}});
 }
 async function organizeUnlocked(root,settings,collection,id,{broker,onProgress=async()=>{}}={}){
   const directory=runPath(root,id),journal=path.join(directory,'organization.json');let saved=await readJson(journal);
@@ -80,8 +87,9 @@ async function organizeUnlocked(root,settings,collection,id,{broker,onProgress=a
   const mapping=new Map(moves.map(m=>[m.source,m.target]));for(const d of duplicates)mapping.set(d.source,mapping.get(d.winner)||d.winner);
   // A previous reader batch may have moved files before its client lost the
   // response. Reuse verified actual locations and finish reference repair.
-  const actualPaths=new Set([...current.values()].map(row=>row.artifacts.find(a=>a.kind==='markdown').path));
-  for(const previous of history){const old=await readJson(path.join(runPath(root,previous.id),'organization.json'));if(old?.status==='completed')break;if(old?.status!=='running')continue;for(const move of old.moves||[])if(actualPaths.has(move.target)&&!await exists(move.source)&&await exists(move.target))mapping.set(move.source,mapping.get(move.target)||move.target);}
+  const actualPaths=new Map([...current.values()].map(row=>{const file=row.artifacts.find(a=>a.kind==='markdown').path;return [locationKey(file),file];}));
+  const retainRecoveredMapping=async(from,to)=>{const actual=actualPaths.get(locationKey(to));if(actual&&!await exists(from)&&await exists(actual))mapping.set(from,mapping.get(actual)||actual);};
+  for(const previous of history){const old=await readJson(path.join(runPath(root,previous.id),'organization.json'));if(old?.status==='completed'){for(const [from,to] of old.mapping||[])await retainRecoveredMapping(from,to);break;}if(old?.status!=='running')continue;for(const move of old.moves||[])await retainRecoveredMapping(move.source,move.target);}
   for(const move of moves){const text=await fs.readFile(move.source,'utf8');if(digest(text)!==move.sha256)throw new Error('文章已发生变更，未移动：'+move.source);move.expected=relocatedMarkdown(text,move.source,move.target,mapping,root);await fs.writeFile(path.join(recovery,digest(move.source)+'.md'),text);}
   saved={status:'running',moves:moves.map(({expected,...m})=>m),duplicates,mapping:[...mapping],recovery,ownedIndexes};await writeJson(journal,saved);
   await onProgress('同步阅读状态和引用链接');
@@ -106,7 +114,7 @@ async function executeOrganization(root,collection,journal,saved,broker){
   const hashes=new Map();for(const target of new Set(mapping.values()))hashes.set(target,digest(await fs.readFile(target)));
   // Repair article/report links and persisted receipts; source text and model
   // caches are immutable inputs, so only active reading/runtime state is touched.
-  if(moves.length||duplicates.length)for(const zone of ['阅读区','待归档原文','已归档原文','摘要区'])for(const file of await walk(path.join(root,zone))){if(!file.endsWith('.md'))continue;const before=await fs.readFile(file,'utf8'),after=relocatedMarkdown(before,file,file,mapping,root);if(after!==before){await fs.writeFile(path.join(recovery,digest(file)+'.reference.md'),before);await replaceChecked(file,before,after);hashes.set(file,digest(after));}}
+  if(mapping.size||duplicates.length)for(const zone of ['阅读区','待归档原文','已归档原文','摘要区'])for(const file of await walk(path.join(root,zone))){if(!file.endsWith('.md'))continue;const before=await fs.readFile(file,'utf8'),after=relocatedMarkdown(before,file,file,mapping,root);if(after!==before){await fs.writeFile(path.join(recovery,digest(file)+'.reference.md'),before);await replaceChecked(file,before,after);hashes.set(file,digest(after));}}
   const config=await loadConfig(root),metadata=new Set([path.join(root,'imports/rss-reading/review-ledger.v1.json')]);
   for(const file of await walk(path.join(root,'.local-ir/browser-document-state')))if(file.endsWith('.json'))metadata.add(file);
   if(config){metadata.add(path.join(config.rss_home,'state.json'));metadata.add(path.join(paths(root).home,'activity.json'));}

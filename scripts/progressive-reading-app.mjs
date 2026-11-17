@@ -1042,7 +1042,9 @@ async function browserPreprocessProducer() {
 }
 
 async function standardizeBrowserDraft(draft, parsedUrl, converted, onProgress) {
-  const outputDir = path.join(browserPreprocessRoot, shortHash(parsedUrl.href));
+  const outputDir = draft.importJob?.forceReimport === true
+    ? path.join(browserPreprocessRoot, 'revisions', shortHash(parsedUrl.href), randomUUID())
+    : path.join(browserPreprocessRoot, shortHash(parsedUrl.href));
   const cacheDir = path.join(browserPreprocessRoot, ".cache");
   const youtubeTranscript = draft.sourceMetadata?.source_type === 'youtube_video_transcript';
   const preprocess = youtubeTranscript ? preprocessNetworkMarkdown : preprocessBrowserCapture;
@@ -1253,10 +1255,12 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   await fs.mkdir(browserStateRoot, { recursive: true });
   const target = await browserDraftTarget(root, parsed.href, converted.title || draft.title);
   const metadataTarget = path.join(browserStateRoot, `${path.basename(target)}.browser-ir.json`);
-  let reimportSnapshot = null;
-  if (standardize && draft.sourceType !== "url_import" && await pathExists(target)) {
+  let reimportSnapshot = null, previousPublication = null;
+  const guardedReimport = draft.importJob?.forceReimport === true && Boolean(draft.importJob?.expectedPublication);
+  if (standardize && (draft.sourceType !== "url_import" || guardedReimport) && await pathExists(target)) {
     const metadataBytes = await fs.readFile(metadataTarget).catch(() => null);
     const previous = metadataBytes ? JSON.parse(metadataBytes.toString('utf8')) : null;
+    previousPublication = previous;
     const contents = await fs.readFile(target);
     if (!previous?.content?.markdownSha256 || createHash("sha256").update(contents).digest("hex") !== previous.content.markdownSha256) {
       throw new Error("existing_article_changed_preserved:本地文章已有后续修改，已保留文章与批注，未覆盖。");
@@ -1265,7 +1269,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     const expected=draft.importJob?.expectedPublication;
     if(expected&&(expected.markdown_sha256!==reimportSnapshot.body||expected.metadata_sha256!==reimportSnapshot.metadata||expected.document_id!==previous.document.id||expected.revision!==previous.document.revision))throw new Error('existing_article_changed_before_reimport_preserved:排队后正文或批注已变化，已保留现有内容。');
   }
-  if (draft.sourceType === "url_import"
+  if (draft.sourceType === "url_import" && !reimportSnapshot
     && (await pathExists(target) || await pathExists(metadataTarget))) {
     throw new Error("existing_article_preserved_review_required");
   }
@@ -1319,10 +1323,22 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     conversionMethod: preprocessing?.conversionMethod || converted.method,
     committedAt: nowIso()
   });
+  if (guardedReimport && previousPublication) {
+    // Refresh owned content while retaining the reader's identity and state.
+    const content = metadata.content, browser = metadata.browser;
+    Object.assign(metadata, previousPublication);
+    metadata.content = content;
+    metadata.browser = { ...previousPublication.browser, ...browser };
+    metadata.document = { ...previousPublication.document, path: documentPath };
+  }
   metadata.annotations = LocalIrDocumentCore.anchorAnnotationsToMarkdown(metadata.annotations, markdown, documentPath);
   if(reimportSnapshot){
     const body=await fs.readFile(target),state=await fs.readFile(metadataTarget);
     if(createHash('sha256').update(body).digest('hex')!==reimportSnapshot.body||createHash('sha256').update(state).digest('hex')!==reimportSnapshot.metadata)throw new Error('existing_article_changed_during_processing_preserved:处理期间正文或批注发生变化，已保留现有内容。');
+    if (guardedReimport) {
+      await fs.writeFile(path.join(preprocessing.outputDir, 'previous-publication.md'), body, { flag: 'wx' });
+      await fs.writeFile(path.join(preprocessing.outputDir, 'previous-publication.state.json'), state, { flag: 'wx' });
+    }
   }
   await writeFileAtomic(target, markdown);
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
@@ -1340,6 +1356,11 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       destination: resolvedDestination,
       committed_at: nowIso(),
       conversion_fidelity: converted.fidelity || null,
+      ...(guardedReimport && reimportSnapshot ? { supersedes_publication: {
+        markdown_sha256: reimportSnapshot.body, metadata_sha256: reimportSnapshot.metadata,
+        document_id: previousPublication.document.id, revision: previousPublication.document.revision,
+        recovery_dir: preprocessing.outputDir
+      } } : {}),
       ...(preprocessing ? {
         processing_mode: "standard_preprocess",
         preprocess_status: preprocessing.status,
@@ -1441,7 +1462,8 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
           || (draft.importJob?.forceReimport === undefined && Boolean(draft.submittedAt && draft.receipt) && draft.locked === false);
         // The current-page edit/reimport keeps its existing same-folder document.
         // Other entry routes and all URL-only imports reuse the actual library path.
-        if (draft.sourceType === 'url_import' || (options.standardize !== false && (!explicitReimport
+        const guardedReimport = draft.importJob?.forceReimport === true && Boolean(draft.importJob?.expectedPublication);
+        if ((draft.sourceType === 'url_import' && !guardedReimport) || (options.standardize !== false && (!explicitReimport
           || path.dirname(existing.path) !== path.resolve(desiredRoot)))) return sourceReuseResult(rawUrl, existing);
       }
     }

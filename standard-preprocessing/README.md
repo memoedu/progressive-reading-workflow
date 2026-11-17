@@ -94,7 +94,7 @@ const run = await runPreprocessingRequest(request, {
 ## v1 核心保证
 
 - `standard` 工作流按[处理方案](docs/processing-plan.md)执行：显式选择 > 类型默认；模型只补必要缺项。分类信息不足时返回 `needs_classification`，不反复猜测。
-- 正文处理、翻译与最终导读分别缓存。翻译后附原文；已双语材料默认保留且不重复翻译。`receipt.workflow_route` 保存每项决定及实际执行顺序。
+- 正文处理、翻译与最终导读分别缓存。翻译后附原文；已有原文与中文译文的双语材料默认保留且不重复翻译。英西、英法等不含中文译文的多语内容仍需中文翻译。`receipt.workflow_route` 保存每项决定及实际执行顺序。
 - 本地负责规范化、Schema、保护符、覆盖、哈希、锚点和渲染；仅启用且需要内容理解的步骤调用模型。
 - `standardMarkdownOptions`、`spokenMarkdownOptions`、`sourceTranslationOptions`、`mathLectureTranslationOptions` 和 `mathLectureStandardizationOptions` 保留为兼容的单阶段入口；来源工程的新接入应使用 `standardWorkflowOptions`，不要自行复制分类、翻译或结构化规则。
 - `math_lecture` 翻译先对当前材料做领域术语盘点，再翻译一般叙述。术语盘点覆盖定义项、命名算法、数据结构、数学/CS 概念、人名、缩写和原文标签；候选必须逐字存在于当前输入，拿不准译法时保留英文，不使用单一 Canary 的固定词表或句式替换。

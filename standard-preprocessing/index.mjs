@@ -22,6 +22,7 @@ import {
 import {
   diagnoseProducerConfig,
   ExternalProducer,
+  resolveWorkflowRouteContradictions,
   WORKFLOW_ROUTER_PROMPT_VERSION,
   WORKFLOW_ROUTER_VERSION
 } from "./lib/producer.mjs";
@@ -269,7 +270,7 @@ export async function classifyPreprocessWorkflow(request, { producer = null, mar
       );
     }
   }
-  const output = classified?.output || fixed.values;
+  const output = resolveWorkflowRouteContradictions(classified?.output || fixed.values, markdown, fixed.values);
   const insufficient = classified?.needs_classification || (classified && Number(output.confidence) < 0.6);
   const unresolved = missing.filter(key => insufficient || !ROUTE_VALUES[key].includes(output[key]));
   const decision = (key) => fixed.values[key]

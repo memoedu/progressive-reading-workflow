@@ -3,6 +3,9 @@ import sanitizeFilename from 'sanitize-filename';
 import {digest} from '../subscription-workflow/config.mjs';
 
 export const TAXONOMY_VERSION='source-taxonomy/v1';
+// Whitespace-separated terminal bullets/arrows are presentation separators.
+// Preserve punctuation within names (including C++, A · B and C#).
+export const taxonomyLabel=value=>String(value||'').replace(/\s+/gu,' ').trim().replace(/\s+[•·|›»]+$/u,'').trim();
 export function mergeTaxonomies(...taxonomies){
   const groups=[...new Map(taxonomies.flatMap(value=>value?.groups||[]).map(group=>[group.kind+'/'+group.path.join('/'),group])).values()];
   const rank={'合集':0,'分类':1,'标签':2};groups.sort((a,b)=>rank[a.kind]-rank[b.kind]);
@@ -25,7 +28,7 @@ export function linkedTaxonomy(container,base,{articleUrl}={}){
     let url;try{url=new URL(anchor.getAttribute('href'),base);if(url.origin!==new URL(base).origin||url.href===articleUrl)continue;}catch{continue;}
     const match=/(?:^|\/)(tags?|categor(?:y|ies))\/[^/]+/iu.exec(url.pathname),rel=anchor.rel.split(/\s+/u);
     const kind=rel.includes('category')||match&&/^categor/iu.test(match[1])?'分类':rel.includes('tag')||match?'标签':null;
-    const name=anchor.textContent.replace(/\s+/gu,' ').trim();if(!kind||!name||name.length>160)continue;
+    const name=taxonomyLabel(anchor.textContent);if(!kind||!name||name.length>160)continue;
     (kind==='分类'?categories:tags).push(name);evidence.push({kind,name,url:url.href});
   }
   return {taxonomy:articleTaxonomy({categories,tags}),evidence};
@@ -49,7 +52,7 @@ export function taxonomyFromJson(json,mapping={},read,identity){
 }
 export function taxonomyFolder(destination,taxonomy){if(taxonomy?.repository_directory)return path.posix.join(destination,...taxonomy.repository_directory.map(categorySegment));const group=taxonomy?.primary || {kind:'未分类',path:[]};return path.posix.join(destination,group.kind,...group.path.map(categorySegment));}
 export function taxonomyGroups(articles){
-  const groups=new Map();for(const article of articles){const taxonomy=article.taxonomy || articleTaxonomy();for(const group of taxonomy.groups.length?taxonomy.groups:[taxonomy.primary]){const folder=path.posix.join(group.kind,...group.path.map(categorySegment)),key=folder.toLocaleLowerCase();if(!groups.has(key))groups.set(key,{...group,folder,articles:[]});groups.get(key).articles.push({...article,source_order:group.order});}}
+  const groups=new Map(),members=new Map();for(const article of articles){const taxonomy=article.taxonomy || articleTaxonomy();for(const group of taxonomy.groups.length?taxonomy.groups:[taxonomy.primary]){const folder=path.posix.join(group.kind,...group.path.map(categorySegment)),key=folder.toLocaleLowerCase();if(!groups.has(key)){groups.set(key,{...group,folder,articles:[]});members.set(key,new Set());}const identity=article.url||article;if(members.get(key).has(identity))continue;members.get(key).add(identity);groups.get(key).articles.push({...article,source_order:group.order});}}
   const rank={'合集':0,'分类':1,'标签':2,'未分类':3};
   return [...groups.values()].map(group=>({...group,articles:group.articles.sort((a,b)=>group.kind==='合集'?(a.source_order??1e9)-(b.source_order??1e9):0)})).sort((a,b)=>rank[a.kind]-rank[b.kind]||a.folder.localeCompare(b.folder,'zh-CN'));
 }
