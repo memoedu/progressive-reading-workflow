@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.16";
+export const PROCESSOR_VERSION = "1.12.17";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -390,7 +390,26 @@ function splitGfmTableSegments(markdown) {
 
 function isStandaloneCodeLikeBlock(markdown) {
   const value = String(markdown || "").trim();
-  if (!value || value.includes("\n")) return false;
+  if (!value) return false;
+  // HTML cells and copied examples can contain real code without fences.
+  // Inspect Markdown escapes only for recognition; never rewrite source bytes.
+  const lines=value.split('\n').map(line=>line.trim().replace(/\\([_\[\]])/gu,'$1')).filter(Boolean);
+  const identifier=String.raw`[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*`;
+  const qualified=String.raw`[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+`;
+  const importLine=/^(?:import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*|from\s+[\w.]+\s+import\s+[\w*]+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)\s*;?$/u;
+  const callLine=new RegExp('^(?:'+qualified+String.raw`|print|range|len|sum|enumerate|zip)\([^\n]*\)\s*;?$`,'u');
+  const callAssignment=new RegExp('^'+identifier+String.raw`\s*=(?!=)\s*`+qualified+String.raw`\s*\([^\n]*\)\s*;?$`,'u');
+  if(lines.length>1){
+    let signals=0;
+    for(const line of lines){
+      if(importLine.test(line)||callLine.test(line)||callAssignment.test(line)||/^(?:def|async\s+def|function|const|let|var)\s+[A-Za-z_$][\w$]*/u.test(line)){signals++;continue;}
+      if(/^(?:#|\/\/)/u.test(line)||/^[\[\](){}],?;?$/u.test(line))continue;
+      if(new RegExp('^'+identifier+String.raw`\s*=(?!=)\s*(?:[-+]?\d+(?:\.\d+)?|true|false|null|True|False|None|"[^"\n]*"|'[^'\n]*'|\[[^\n]*\]|\{[^\n]*\})\s*;?$`,'u').test(line))continue;
+      return false;
+    }
+    return signals>=2;
+  }
+  if(importLine.test(lines[0])||callAssignment.test(lines[0])||callLine.test(lines[0]))return true;
   if (/^(?:public|private|protected|static|final|abstract|class|interface|enum|record|package|import)\b.*(?:[;{}]|\([^)]*\))$/u.test(value)) return true;
   if (/^(?:def|async\s+def|function|const|let|var)\s+[A-Za-z_$][\w$]*/u.test(value)) return true;
   if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*\([^\n]*\)\s*;?$/u.test(value)) return true;
