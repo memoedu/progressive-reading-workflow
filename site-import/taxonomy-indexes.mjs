@@ -1,5 +1,5 @@
 import {JSDOM} from 'jsdom';
-import {articleTaxonomy,mergeTaxonomies} from './taxonomy.mjs';
+import {articleTaxonomy,mergeTaxonomies,taxonomyLabel} from './taxonomy.mjs';
 import {urlImportDedupeKey} from '../scripts/url-import-input.mjs';
 
 // A tag index is evidence of membership only for its actual listed entries,
@@ -8,7 +8,7 @@ export async function taxonomyIndexes(links,articleUrls,base,fetchPage){
  const known=new Set(articleUrls.map(urlImportDedupeKey)),definitions=new Map(),memberships={},pages=[];
  for(const link of links){
   let url;try{url=new URL(link.url,base);if(url.origin!==new URL(base).origin)continue;}catch{continue;}
-  const match=/(?:^|\/)(tags?|categor(?:y|ies))\/[^/]+/iu.exec(url.pathname),name=link.title.replace(/\s+/gu,' ').trim();
+  const match=/(?:^|\/)(tags?|categor(?:y|ies))\/[^/]+/iu.exec(url.pathname),name=taxonomyLabel(link.title);
   if(match&&name&&name.length<=160)definitions.set(url.href,{url:url.href,name,kind:/^categor/iu.test(match[1])?'分类':'标签'});
  }
  if(definitions.size>200)throw Error('分类目录超过完整核验上限，未将部分目录视为完整');

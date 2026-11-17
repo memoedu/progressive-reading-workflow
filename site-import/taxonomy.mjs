@@ -3,6 +3,9 @@ import sanitizeFilename from 'sanitize-filename';
 import {digest} from '../subscription-workflow/config.mjs';
 
 export const TAXONOMY_VERSION='source-taxonomy/v1';
+// Whitespace-separated terminal bullets/arrows are presentation separators.
+// Preserve punctuation within names (including C++, A · B and C#).
+export const taxonomyLabel=value=>String(value||'').replace(/\s+/gu,' ').trim().replace(/\s+[•·|›»]+$/u,'').trim();
 export function mergeTaxonomies(...taxonomies){
   const groups=[...new Map(taxonomies.flatMap(value=>value?.groups||[]).map(group=>[group.kind+'/'+group.path.join('/'),group])).values()];
   const rank={'合集':0,'分类':1,'标签':2};groups.sort((a,b)=>rank[a.kind]-rank[b.kind]);
@@ -25,7 +28,7 @@ export function linkedTaxonomy(container,base,{articleUrl}={}){
     let url;try{url=new URL(anchor.getAttribute('href'),base);if(url.origin!==new URL(base).origin||url.href===articleUrl)continue;}catch{continue;}
     const match=/(?:^|\/)(tags?|categor(?:y|ies))\/[^/]+/iu.exec(url.pathname),rel=anchor.rel.split(/\s+/u);
     const kind=rel.includes('category')||match&&/^categor/iu.test(match[1])?'分类':rel.includes('tag')||match?'标签':null;
-    const name=anchor.textContent.replace(/\s+/gu,' ').trim();if(!kind||!name||name.length>160)continue;
+    const name=taxonomyLabel(anchor.textContent);if(!kind||!name||name.length>160)continue;
     (kind==='分类'?categories:tags).push(name);evidence.push({kind,name,url:url.href});
   }
   return {taxonomy:articleTaxonomy({categories,tags}),evidence};

@@ -16,7 +16,7 @@ import {bookCatalogs} from './book-catalogs.mjs';
 import {articleTaxonomy,mergeTaxonomies,classifyExclusiveTags} from './taxonomy.mjs';
 import {taxonomyIndexes} from './taxonomy-indexes.mjs';
 
-const PLANNER_VERSION='site-discovery/v7';
+const PLANNER_VERSION='site-discovery/v8';
 export const inventoryCurrent=(inventory,settings)=>Boolean(inventory?.complete&&inventory.taxonomy_version==='source-taxonomy/v1'&&(settings.repository||inventory.discovery_version===PLANNER_VERSION));
 export function matchesPath(url,patterns) {
   if(!patterns?.length)return true;
@@ -79,7 +79,8 @@ function validatePlan(plan,evidence) {
   if(plan.listing?.url){
     if(plan.listing.type==='html'){
       const url=scopedUrl(plan.listing.url,evidence.url);
-      if(!(evidence.archives||[]).some(a=>a.url===url))throw Error('HTML 归档缺少实际页面证据');
+      const observed=[{url:evidence.url,html_excerpt:evidence.html_excerpt},...(evidence.archives||[])];
+      if(!observed.some(page=>page.url===url&&typeof page.html_excerpt==='string'&&page.html_excerpt.trim()))throw Error('HTML 归档缺少实际页面证据');
       if(!plan.listing.item_selector)throw Error('HTML 归档缺少文章链接选择器');
     }else{const endpoint=proveEndpoint(plan.listing.url);if(/delete|remove|modify|publish|logout|create|update/iu.test(endpoint.pathname))throw new Error('站点目录接口不是读取接口');}
   }
@@ -132,12 +133,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     evidence={url:base,title,html_excerpt:htmlEvidence(page.body),links:links.slice(0,300),feeds,sitemaps,urls:[...new Set(urls)],scripts,archives,books:[...bookResources(page.body,base),...catalogs.books],book_catalogs:catalogs.evidence};
     await writeJson(evidenceFile,evidence);
   }
-  const planFile=path.join(directory,'plan-v7-with-taxonomy.json');
+  const planFile=path.join(directory,'plan-v8-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
     const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:evidence.urls.slice(0,2000),sitemap_url_count:evidence.urls.length,settings};
-    planned=await planner(input);await writeJson(path.join(directory,'plan-v7-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
+    planned=await planner(input);await writeJson(path.join(directory,'plan-v8-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
   const plan=validatePlan(planned.plan,evidence);
   const includes=settings.include_paths.length?settings.include_paths:plan.include_paths;

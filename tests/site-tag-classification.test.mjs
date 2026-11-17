@@ -24,6 +24,18 @@ test('overlapping labels stay tags and explicit source hierarchy takes priority'
  const grouped=[{taxonomy:articleTaxonomy({categories:[['Original','Path']],tags:['Topic']})}];assert.equal(classifyExclusiveTags(grouped).exclusive,false);assert.deepEqual(grouped[0].taxonomy.primary.path,['Original','Path']);
  const partial=[{taxonomy:articleTaxonomy({tags:['One']})},{taxonomy:articleTaxonomy()}];assert.equal(classifyExclusiveTags(partial).exclusive,true);assert.equal(partial[1].taxonomy.primary.kind,'未分类');
 });
+
+test('the observed paginated homepage is valid archive evidence and keeps original category labels',async()=>{
+ const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/homepage-archive-test-');
+ const page=(slug,label,next='')=>'<article><h1><a href="/'+slug+'/">'+slug+'</a></h1><a href="/categories/example/">'+label+'</a></article>'+next;
+ const fetchPage=async url=>{const p=new URL(url).pathname,body=p==='/'?page('first','Research •','<a class="next" href="/page/2/">Next</a>'):p==='/page/2/'?page('second','C++ •'):p==='/sitemap.xml'?'<urlset/>':p==='/robots.txt'?'':'<title>Original source</title><article><p>'+('Complete unchanged original source body. '.repeat(25))+'</p></article>';return {url,body,sha256:digest(body)};};
+ const settings=normalizeSiteSource({url:base}),plan={include_paths:['/*'],exclude_paths:[],listing:{type:'html',url:base+'/',item_selector:'article h1 a',next_selector:'a.next'}};
+ const inventory=await discoverSite(root,settings,runId('homepage-archive'),{fetchPage,planner:async()=>({plan,producer:{provider:'fixture'}})});
+ assert.equal(inventory.complete,true);assert.equal(inventory.articles.length,2);assert.equal(inventory.tag_classification.exclusive,false);
+ assert.deepEqual(inventory.articles.map(article=>article.taxonomy.primary.name),['Research','C++']);
+ const badRoot=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/unobserved-archive-test-');
+ await assert.rejects(discoverSite(badRoot,settings,runId('unobserved-archive'),{fetchPage,planner:async()=>({plan:{...plan,listing:{...plan.listing,url:base+'/unobserved/'}},producer:{provider:'fixture'}})}),/缺少实际页面证据/u);
+});
 test('public tag-index membership is inverted without treating global navigation as membership',async()=>{
  const pages=new Map([
   ['/tags/first/','<nav><a href="/second/">Navigation</a></nav><ul><li><a href="/first/">First</a></li><li><a href="/second/">Second</a></li></ul>'],
