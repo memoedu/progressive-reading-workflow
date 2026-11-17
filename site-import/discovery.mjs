@@ -16,7 +16,7 @@ import {bookCatalogs} from './book-catalogs.mjs';
 import {articleTaxonomy,mergeTaxonomies,classifyExclusiveTags} from './taxonomy.mjs';
 import {taxonomyIndexes} from './taxonomy-indexes.mjs';
 
-const PLANNER_VERSION='site-discovery/v8';
+const PLANNER_VERSION='site-discovery/v9';
 export const inventoryCurrent=(inventory,settings)=>Boolean(inventory?.complete&&inventory.taxonomy_version==='source-taxonomy/v1'&&(settings.repository||inventory.discovery_version===PLANNER_VERSION));
 export function matchesPath(url,patterns) {
   if(!patterns?.length)return true;
@@ -133,16 +133,19 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     evidence={url:base,title,html_excerpt:htmlEvidence(page.body),links:links.slice(0,300),feeds,sitemaps,urls:[...new Set(urls)],scripts,archives,books:[...bookResources(page.body,base),...catalogs.books],book_catalogs:catalogs.evidence};
     await writeJson(evidenceFile,evidence);
   }
-  const planFile=path.join(directory,'plan-v8-with-taxonomy.json');
+  const planFile=path.join(directory,'plan-v9-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
     const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:evidence.urls.slice(0,2000),sitemap_url_count:evidence.urls.length,settings};
-    planned=await planner(input);await writeJson(path.join(directory,'plan-v8-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
+    planned=await planner(input);await writeJson(path.join(directory,'plan-v9-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
   const plan=validatePlan(planned.plan,evidence);
-  const includes=settings.include_paths.length?settings.include_paths:plan.include_paths;
-  const excludes=[...(plan.exclude_paths||[]),...settings.exclude_paths];
+  // An article can also be linked from navigation. The observed HTML title
+  // list is stronger evidence than a model's path guess; explicit user scope wins.
+  const htmlListing=plan.listing?.type==='html';
+  const includes=settings.include_paths.length?settings.include_paths:htmlListing?['/*']:plan.include_paths;
+  const excludes=[...(htmlListing?[]:plan.exclude_paths||[]),...settings.exclude_paths];
   let listedUrls=null,declared=null,listingTaxonomies={},taxonomyEvidence={};const privateUrls=new Set();
   if(plan.listing?.type==='html'){
     const archive=await enumerateHtmlArchive(plan.listing,evidence.url,fetchPage);listedUrls=archive.urls;declared=listedUrls.length;listingTaxonomies=archive.taxonomies;taxonomyEvidence=archive.taxonomy_evidence;

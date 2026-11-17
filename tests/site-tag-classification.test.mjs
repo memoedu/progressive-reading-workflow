@@ -29,10 +29,13 @@ test('the observed paginated homepage is valid archive evidence and keeps origin
  const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/homepage-archive-test-');
  const page=(slug,label,next='')=>'<article><h1><a href="/'+slug+'/">'+slug+'</a></h1><a href="/categories/example/">'+label+'</a></article>'+next;
  const fetchPage=async url=>{const p=new URL(url).pathname,body=p==='/'?page('first','Research •','<a class="next" href="/page/2/">Next</a>'):p==='/page/2/'?page('second','C++ •'):p==='/sitemap.xml'?'<urlset/>':p==='/robots.txt'?'':'<title>Original source</title><article><p>'+('Complete unchanged original source body. '.repeat(25))+'</p></article>';return {url,body,sha256:digest(body)};};
- const settings=normalizeSiteSource({url:base}),plan={include_paths:['/*'],exclude_paths:[],listing:{type:'html',url:base+'/',item_selector:'article h1 a',next_selector:'a.next'}};
+ const settings=normalizeSiteSource({url:base}),plan={include_paths:['/first/*'],exclude_paths:['/second/'],listing:{type:'html',url:base+'/',item_selector:'article h1 a',next_selector:'a.next'}};
  const inventory=await discoverSite(root,settings,runId('homepage-archive'),{fetchPage,planner:async()=>({plan,producer:{provider:'fixture'}})});
  assert.equal(inventory.complete,true);assert.equal(inventory.articles.length,2);assert.equal(inventory.tag_classification.exclusive,false);
  assert.deepEqual(inventory.articles.map(article=>article.taxonomy.primary.name),['Research','C++']);
+ const scopedRoot=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/scoped-homepage-archive-test-');
+ const scoped=await discoverSite(scopedRoot,normalizeSiteSource({url:base,exclude_paths:['/second/']}),runId('user-scope'),{fetchPage,planner:async()=>({plan,producer:{provider:'fixture'}})});
+ assert.deepEqual(scoped.articles.map(article=>article.url),[base+'/first/']);
  const badRoot=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/unobserved-archive-test-');
  await assert.rejects(discoverSite(badRoot,settings,runId('unobserved-archive'),{fetchPage,planner:async()=>({plan:{...plan,listing:{...plan.listing,url:base+'/unobserved/'}},producer:{provider:'fixture'}})}),/缺少实际页面证据/u);
 });
