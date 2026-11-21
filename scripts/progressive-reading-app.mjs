@@ -231,11 +231,16 @@ function importFailureHttpStatus(error) {
     : 503;
 }
 
-async function writeFileAtomic(target, contents) {
+async function writeFileAtomic(target, contents, {exclusive = false} = {}) {
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporary, contents, "utf8");
-    await fs.rename(temporary, target);
+    if (exclusive) {
+      await fs.link(temporary, target);
+      await fs.unlink(temporary);
+    } else {
+      await fs.rename(temporary, target);
+    }
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => {});
     throw error;
@@ -1235,7 +1240,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   if (!draft.html && !draft.pageText && !cachedRssMarkdown) throw new Error("empty_page_content");
 
   const converted = cachedRssMarkdown
-    ? { markdown: cachedRssMarkdown, title: draft.title, method: "retained_rss_fulltext" }
+    ? { markdown: cachedRssMarkdown, title: draft.title, method: options.captureMethod || "retained_rss_fulltext" }
     : browserPageToMarkdown({
     html: draft.html,
     pageText: draft.pageText,
@@ -1257,6 +1262,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   const target = await browserDraftTarget(root, parsed.href, converted.title || draft.title);
   const metadataTarget = path.join(browserStateRoot, `${path.basename(target)}.browser-ir.json`);
   let reimportSnapshot = null, previousPublication = null;
+  let orphanState = null;
   const guardedReimport = draft.importJob?.forceReimport === true && Boolean(draft.importJob?.expectedPublication);
   if (standardize && (draft.sourceType !== "url_import" || guardedReimport) && await pathExists(target)) {
     const metadataBytes = await fs.readFile(metadataTarget).catch(() => null);
@@ -1270,9 +1276,22 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     const expected=draft.importJob?.expectedPublication;
     if(expected&&(expected.markdown_sha256!==reimportSnapshot.body||expected.metadata_sha256!==reimportSnapshot.metadata||expected.document_id!==previous.document.id||expected.revision!==previous.document.revision))throw new Error('existing_article_changed_before_reimport_preserved:排队后正文或批注已变化，已保留现有内容。');
   }
-  if (draft.sourceType === "url_import" && !reimportSnapshot
-    && (await pathExists(target) || await pathExists(metadataTarget))) {
-    throw new Error("existing_article_preserved_review_required");
+  if (draft.sourceType === "url_import" && !reimportSnapshot) {
+    if (await pathExists(target)) throw new Error("existing_article_preserved_review_required");
+    const stateBytes = await fs.readFile(metadataTarget).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (stateBytes) {
+      const state = JSON.parse(stateBytes.toString('utf8'));
+      const rawHash = createHash("sha256").update(converted.markdown).digest("hex");
+      if (!options.missingPublicationHash || options.missingPublicationHash !== state.content?.markdownSha256
+        || rawHash !== state.content?.rawMarkdownSha256 || urlImportDedupeKey(state.document?.sourceUrl) !== urlImportDedupeKey(parsed.href)
+        || state.document?.status !== 'inbox' || state.annotations?.length || state.qaCards?.length || state.articleMusing) {
+        throw new Error("existing_article_preserved_review_required");
+      }
+      orphanState = {state, stateBytes};
+    }
   }
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
@@ -1332,6 +1351,11 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     metadata.browser = { ...previousPublication.browser, ...browser };
     metadata.document = { ...previousPublication.document, path: documentPath };
   }
+  if (orphanState) {
+    metadata.document = {...orphanState.state.document, path:documentPath};
+    metadata.browser = {...orphanState.state.browser, ...metadata.browser};
+    if (!(await fs.readFile(metadataTarget)).equals(orphanState.stateBytes)) throw new Error("existing_article_preserved_review_required");
+  }
   metadata.annotations = LocalIrDocumentCore.anchorAnnotationsToMarkdown(metadata.annotations, markdown, documentPath);
   if(reimportSnapshot){
     const body=await fs.readFile(target),state=await fs.readFile(metadataTarget);
@@ -1341,7 +1365,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       await fs.writeFile(path.join(preprocessing.outputDir, 'previous-publication.state.json'), state, { flag: 'wx' });
     }
   }
-  await writeFileAtomic(target, markdown);
+  await writeFileAtomic(target, markdown, {exclusive: Boolean(orphanState)});
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
   return {
     status: completed ? "completed_pending_archive" : "saved_locked",
@@ -1356,6 +1380,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       revision: Number(draft.revision || 0),
       destination: resolvedDestination,
       committed_at: nowIso(),
+      ...(orphanState ? {restored_missing_publication: true} : {}),
       conversion_fidelity: converted.fidelity || null,
       ...(guardedReimport && reimportSnapshot ? { supersedes_publication: {
         markdown_sha256: reimportSnapshot.body, metadata_sha256: reimportSnapshot.metadata,
@@ -1468,6 +1493,20 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
           || path.dirname(existing.path) !== path.resolve(desiredRoot)))) return sourceReuseResult(rawUrl, existing);
       }
     }
+    const draft = rawBody?.draft;
+    if (options.reuseSiteCapture && !draft?.annotations?.length && !draft?.qaCards?.length
+      && !draft?.articleMusing && !draft?.receipt && !draft?.importJob?.forceReimport) {
+      const capture = await findSiteArticleCapture(workflowRoot, rawUrl);
+      if (capture) {
+        const enriched = { ...draft, title: capture.title, sourceMetadata: { ...draft.sourceMetadata, ...capture.metadata,
+          source_url: rawUrl, canonical_url: capture.url, input_form: 'written', capture_agent: 'verified_site_source',
+          source_response: capture.source_response } };
+        const result = await writeBrowserDraftCommitUnlocked({ ...rawBody, draft: enriched }, destination, {
+          ...options, cachedRssMarkdown: capture.markdown, captureMethod: 'verified_site_capture'
+        });
+        return { ...result, receipt: { ...result.receipt, source_reused: 'verified_site_capture' } };
+      }
+    }
     return writeBrowserDraftCommitUnlocked(rawBody, destination, options);
   }));
 }
@@ -1501,7 +1540,9 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
   let result;
   try {
     result = await writeBrowserDraftCommit({ draft: fetched.draft }, "reading", {
-      standardize: processingMode==='standard_preprocess', onProgress, cachedRssMarkdown:fetched.draft.cachedRssMarkdown
+      standardize: processingMode==='standard_preprocess', onProgress, cachedRssMarkdown:fetched.draft.cachedRssMarkdown,
+      captureMethod:fetched.fetchReceipt.source_reused,
+      missingPublicationHash:articleSource?.missing_publications?.[url]
     });
   } catch (error) {
     if (error.code === "needs_classification") {
@@ -1682,7 +1723,10 @@ async function processBackgroundImportWorker(requestId, workerIndex) {
         if (task.capture_mode === "page_snapshot" && !retainedRss) {
           await onProgress({ stage: "capture_conversion" });
           const snapshot = await browserImportBroker.getTaskSnapshot(task.id);
-          const result = await writeBrowserDraftCommit(snapshot, "reading", { standardize: task.processing_mode!=='original_text', onProgress, cachedRssMarkdown:snapshot.draft?.cachedRssMarkdown });
+          const result = await writeBrowserDraftCommit(snapshot, "reading", {
+            standardize: task.processing_mode!=='original_text', onProgress, cachedRssMarkdown:snapshot.draft?.cachedRssMarkdown,
+            reuseSiteCapture: task.source === 'browser_page_snapshot'
+          });
           if(result.receipt?.quality_status==='warning')result.status='imported_with_warnings';
           await browserImportBroker.completeTask(task.id, { ok: true, result, leaseToken: task.lease_token });
           return;

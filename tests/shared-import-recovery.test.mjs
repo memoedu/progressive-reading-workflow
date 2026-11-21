@@ -32,9 +32,11 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
 
   try {
     const directory = runPath(fixture.workflowRoot, 'site-run-0123456789abcdef01234567');
+    const snapshotUrl = fixture.sourceUrl + '/page-with-verified-capture';
     const entries = [
       {source:'browser_extension', url:fixture.sourceUrl + '/js', title:'共享采集合成材料甲'},
-      {source:'obsidian_local_ir', url:fixture.sourceUrl + '/auth', title:'共享采集合成材料乙'}
+      {source:'obsidian_local_ir', url:fixture.sourceUrl + '/auth', title:'共享采集合成材料乙'},
+      {source:'browser_page_snapshot', url:snapshotUrl, title:'共享采集合成材料丙'}
     ];
     const markdown = Array.from({length:6}, ()=>'这是已校验的整站正文。浏览器和 Obsidian 都应导入同一份正文并保留来源。').join('\n\n');
     for (const {url,title} of entries) {
@@ -44,7 +46,7 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
     await writeJson(path.join(directory, 'inventory.json'), {
       complete:true, articles:entries.map(({url})=>({url, markdown_sha256:digest(markdown)}))
     });
-    for (const {source,url} of entries) {
+    for (const {source,url} of entries.slice(0,2)) {
       const created = await post('/api/browser-import/requests', {urls:[url], source, processing_mode:'original_text'});
       const {results:[result]} = await terminal(created.request_id);
       assert.equal(result.status, 'imported');
@@ -54,6 +56,13 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
       const body = await fs.readFile(artifact.path,'utf8');
       assert.match(body,/已校验的整站正文/u);
     }
+    const snapshot = await post('/api/highlights/import-local', {async:true, draft:{
+      id:'synthetic-current-page', url:snapshotUrl, title:'尚未载入', pageText:'页面载入中',
+      sourceMetadata:{language:'zh', input_form:'written', content_profile:'natural_language'}
+    }});
+    const {results:[snapshotResult]} = await terminal(snapshot.request_id);
+    assert.equal(snapshotResult.receipt.source_reused, 'verified_site_capture');
+    assert.match(await fs.readFile(snapshotResult.artifacts.find(item=>item.kind==='markdown').path,'utf8'),/已校验的整站正文/u);
     assert.deepEqual(fixture.hits, []);
 
     const since = encodeURIComponent(new Date(Date.now()-1000).toISOString());

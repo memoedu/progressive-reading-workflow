@@ -91,6 +91,11 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection){
     const inventory=structuredClone(previous.collection.inventory);
     const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
+    const historic=previous.collection.results.filter(row=>SUCCESS.has(row.status)&&!existing.has(urlImportDedupeKey(row.requested_url)));
+    inventory.article_source={...inventory.article_source, missing_publications:Object.fromEntries(historic.flatMap(row=>{
+      const artifact=row.artifacts?.find(item=>item.kind==='markdown');
+      return artifact?.sha256?[[row.requested_url,artifact.sha256]]:[];
+    }))};
     const retained=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url)))
       .map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
     task.collection={rule_id:'site-all-articles',phase:'importing',inventory,batches:[],results:retained};

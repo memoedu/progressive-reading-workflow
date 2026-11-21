@@ -39,11 +39,17 @@ export async function processCollectionTask(task, { broker, discover, runRequest
     for (let offset = 0; offset < urls.length; offset += 50) {
       const index = offset / 50;
       if (collection.batches[index]?.terminal) continue;
-      const request = collection.batches[index]?.request_id ? await broker.getRequest(collection.batches[index].request_id) : await broker.createRequest(urls.slice(offset, offset + 50), {
+      const batchUrls = urls.slice(offset, offset + 50);
+      const request = collection.batches[index]?.request_id ? await broker.getRequest(collection.batches[index].request_id) : await broker.createRequest(batchUrls, {
         source: task.source, clientRequestId: `${task.id}:articles:${index}`,
         userInstruction: task.user_instruction, entryRoute: task.entry_route, destinationFolder: task.destination_folder,
         processingOptions: task.processing_options || {}, processingMode: task.processing_mode || "standard_preprocess",
-        articleSource: collection.inventory.article_source || null
+        articleSource: collection.inventory.article_source ? {
+          ...collection.inventory.article_source,
+          ...(collection.inventory.article_source.missing_publications ? {missing_publications: Object.fromEntries(
+            batchUrls.filter(url => Object.hasOwn(collection.inventory.article_source.missing_publications, url))
+              .map(url => [url, collection.inventory.article_source.missing_publications[url]]))} : {})
+        } : null
       });
       collection.batches[index] = { request_id: request.request_id, terminal: false };
       await progress();
