@@ -87,14 +87,21 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
     assert.equal(incident.task_id, taskId);
     assert.equal(incident.stage, 'source_fetch');
     assert.doesNotMatch(JSON.stringify(incident), /flaky|127\.0\.0\.1/u);
-    fixture.recover();
     const route = '/api/import-center/maintenance-retry';
     const retry = await post(route, {task_id:taskId});
     assert.equal((await post(route, {task_id:taskId})).request_id, retry.request_id);
-    const recovered = await terminal(retry.request_id);
+    const failedRetry = await terminal(retry.request_id);
+    assert.equal(failedRetry.status, 'failed');
+    const retryTaskId = failedRetry.results[0].task_id;
+    assert.equal((await get(feed)).failures.length,1);
+    assert.equal((await get(feed)).failures[0].retry.task_id,retryTaskId);
+    fixture.recover();
+    const repaired = await post(route, {task_id:retryTaskId});
+    const recovered = await terminal(repaired.request_id);
     assert.equal(recovered.imported, 1);
     assert.equal((await terminal(failure.request_id)).status, 'failed');
-    assert.deepEqual((await get(feed)).failures[0].retry, {request_id:retry.request_id,status:'imported',verified:true});
+    assert.deepEqual((await get(feed)).failures[0].retry, {
+      request_id:repaired.request_id,task_id:recovered.results[0].task_id,status:'imported',verified:true});
     const sources = new Set((await get('/api/import-center/history')).requests.map(item=>item.source));
     assert.ok(sources.has('browser_extension') && sources.has('obsidian_local_ir'));
     const recoveredFile = recovered.results[0].artifacts.find(artifact=>artifact.kind==='markdown').path;

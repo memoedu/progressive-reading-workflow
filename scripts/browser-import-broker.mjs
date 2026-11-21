@@ -573,13 +573,17 @@ export class BrowserImportBroker {
           && !unfinished.has(task.requestId) && byId.get(task.requestId)?.maintenanceEligible !== false
           && !byId.get(task.requestId)?.maintenanceRetryOf)
         .map(task => {
-          const retry = retries.get(task.id);
-          const retried = retry && this.state.tasks.find(item => item.requestId === retry.id);
+          let retry = retries.get(task.id);
+          let retried = retry && this.state.tasks.find(item => item.requestId === retry.id);
+          while (retried && retries.has(retried.id)) {
+            retry = retries.get(retried.id);
+            retried = this.state.tasks.find(item => item.requestId === retry.id);
+          }
           const verification = retried?.result?.collection?.verification;
           return {request_id: task.requestId, task_id: task.id, source: task.source, failed_at: task.updatedAt,
             status: task.status, stage: diagnosticCode(task.result?.stage ?? task.result?.collection?.phase),
             code: diagnosticCode(task.error) ?? diagnosticCode(task.result?.errors?.[0]?.code) ?? "import_failed",
-            ...(retried ? {retry: {request_id: retry.id, status: retried.status, verified: Boolean(task.siteImport
+            ...(retried ? {retry: {request_id: retry.id, task_id: retried.id, status: retried.status, verified: Boolean(task.siteImport
               && verification?.verified === verification?.expected && Number.isInteger(verification?.expected))}} : {}),
             ...(retried?.status === "imported" && !task.siteImport
               ? {markdownPath: retried.result?.artifacts?.find(artifact => artifact.kind === "markdown")?.path} : {})};
@@ -596,7 +600,7 @@ export class BrowserImportBroker {
     const task = await this.withLock(() => {
       const original = this.state.tasks.find(item => item.id === taskId);
       const request = original && this.state.requests.find(item => item.id === original.requestId);
-      if (!original || !maintenanceFailure(original) || request?.maintenanceRetryOf || request?.maintenanceEligible === false) {
+      if (!original || !maintenanceFailure(original) || request?.maintenanceEligible === false) {
         throw new Error("import_task_not_eligible_for_maintenance_retry");
       }
       return structuredClone(original);
