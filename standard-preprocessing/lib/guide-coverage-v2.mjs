@@ -85,7 +85,7 @@ const FIDELITY_SYSTEM='你是独立的原文观点保真核对员。'+REVIEW_POL
 export async function generateFaithfulGuide(payload,{generate,review,identity,cacheDir=defaultGuideCoverageCache(),onProgress=()=>{}}){
  const inputHash=hash({version:GUIDE_COVERAGE_VERSION,fidelity:GUIDE_FIDELITY_VERSION,policy:POLICY,identity,payload});
  const chunks=chunkGuideBlocks(payload.blocks),all=payload.blocks.filter(b=>b.role!=='original').map(b=>({...b,source_spans:sourceSpans(b.markdown)}));
- const context=all.map(({source_block_key,markdown})=>({source_block_key,markdown}));const usage=[];let reused=0,repairs=0,disputedFindings=0,dismissedFindings=0;
+ const context=all.map(({source_block_key,markdown})=>({source_block_key,markdown}));const usage=[];let reused=0,repairs=0,disputedFindings=0,dismissedFindings=0,selectionRestored=0;
  async function stage(kind,input,produce,validate=x=>x){
   const file=cacheDir&&path.join(cacheDir,inputHash,kind+'-'+hash(input)+'.json');
   if(file){try{const saved=JSON.parse(await fs.readFile(file,'utf8'));validate(saved);reused++;return saved;}catch(e){if(e.code!=='ENOENT')throw e;}}
@@ -116,15 +116,40 @@ export async function generateFaithfulGuide(payload,{generate,review,identity,ca
  }
  if(!judgments){const r=await produced('global_generation',chunkPayload(all,{points:[]}));judgments=r.output.judgments;insights=r.output.insights;}
  insights=unique(insights);const catalogHash=hash(catalogs);
- async function coverage(current){
-  const missing=[];for(const catalog of catalogs){if(!catalog.points.length)continue;
+ async function auditCoverage(current,{only=null,kind='coverage'}={}){
+  const missing=[],covered=[];for(const catalog of catalogs){
+   const points=only?catalog.points.filter(point=>only.has(point.point_id)):catalog.points;
+   if(!points.length)continue;
    // Short, request-local aliases avoid asking a language model to transcribe
    // long hashes. The immutable canonical ids remain owned by this catalog.
-   const auditCatalog={points:catalog.points.map((p,n)=>({...p,point_id:'p'+(n+1)}))};
+   const auditCatalog={points:points.map((p,n)=>({...p,point_id:'p'+(n+1)}))};
    const input={task:'coverage',frozen_points:auditCatalog.points,point_id_scope:'p1、p2 等为程序分配的本次核验编号，只能逐字引用，不能增删或改写其命题',full_source_context:context,insights:current.map((i,n)=>({...i,index:n+1})),schema:{coverage:[{point_id:'输入中的 p1 等编号',insight_indices:[1],missing_detail:''}]}};
-   const r=await reviewed('coverage',COVERAGE_SYSTEM,input,o=>validateCoverage(o,auditCatalog,current));
-   for(const point of validateCoverage(r.output,auditCatalog,current).missing)missing.push({...catalog.points[Number(point.point_id.slice(1))-1],missing_detail:point.missing_detail});
-  }return missing;
+   const system=kind==='coverage'?COVERAGE_SYSTEM:COVERAGE_SYSTEM+'\n结合洞察标题与描述的完整语义。原文设问应保留为疑问，可以忠实转述，不要求照抄问句。';
+   const r=await reviewed(kind,system,input,o=>validateCoverage(o,auditCatalog,current));
+   for(const row of r.output.coverage){
+    const point=points[Number(row.point_id.slice(1))-1];
+    if(row.insight_indices.length)covered.push(row.insight_indices.map(index=>current[index-1]));
+    else missing.push({...point,missing_detail:row.missing_detail});
+   }
+  }return {missing,covered};
+ }
+ async function restoreSelection(selected,beforeSelection,missing){
+  const retained=new Set(selected);
+  const removed=beforeSelection.filter(insight=>!retained.has(insight));
+  if(!removed.length)return {insights:selected,missing};
+  const only=new Set(missing.map(point=>point.point_id));
+  const candidates=await auditCoverage(removed,{only,kind:'selection_restore'});
+  if(candidates.missing.length)return {insights:selected,missing};
+  const restored=new Set();
+  for(const matches of candidates.covered){
+   if(!matches.some(insight=>restored.has(insight)))restored.add(matches[0]);
+  }
+  const combined=[...selected,...restored];
+  // All restored cards passed fidelity before selection. Verify the disputed
+  // points again in the combined guide; earlier positive coverage still holds.
+  const final=await auditCoverage(combined,{only,kind:'selection_restore_check'});
+  if(!final.missing.length)selectionRestored=restored.size;
+  return {insights:combined,missing:final.missing};
  }
  async function fidelity(current){
   const problems=[];for(let n=0;n<current.length;n+=12){
@@ -189,11 +214,17 @@ export async function generateFaithfulGuide(payload,{generate,review,identity,ca
   }
   // Repair and omission fills can create new duplicates. Selection only removes
   // cards already audited above; the following coverage check guards omissions.
+  const beforeSelection=insights;
   insights=await select(insights);
-  const missing=await coverage(insights);if(missing.length){if(round===2)terminal('guide_coverage_incomplete:'+JSON.stringify(missing));insights=await fill(insights,missing);continue;}
+  let {missing}=await auditCoverage(insights);
+  if(missing.length){
+   if(round<2){insights=await fill(insights,missing);continue;}
+   ({insights,missing}=await restoreSelection(insights,beforeSelection,missing));
+   if(missing.length)terminal('guide_coverage_incomplete:'+JSON.stringify(missing));
+  }
   if(hash(catalogs)!==catalogHash)terminal('guide_catalog_mutated');
   const order=new Map(payload.blocks.map((b,n)=>[b.source_block_key,n]));insights.sort((a,b)=>order.get(a.target_block_key)-order.get(b.target_block_key));
-  return {output:{judgments,insights,translation:{is_bilingual:false,alignments:[]}},usage:{coverage_calls:usage.length,coverage_usage:usage,stages:{guide_coverage:{version:GUIDE_COVERAGE_VERSION,status:'passed',source_chunks:chunks.length,source_points:catalogs.reduce((n,c)=>n+c.points.length,0),missing_points:0,before_selection:before,final_insights:insights.length,reused_stages:reused,catalog_sha256:catalogHash},guide_fidelity:{version:GUIDE_FIDELITY_VERSION,status:'passed',checked_insights:insights.length,unsupported_insights:0,repairs,disputed_findings:disputedFindings,dismissed_after_evidence_review:dismissedFindings,full_source_context:true,immutable_catalog:true}}}};
+  return {output:{judgments,insights,translation:{is_bilingual:false,alignments:[]}},usage:{coverage_calls:usage.length,coverage_usage:usage,stages:{guide_coverage:{version:GUIDE_COVERAGE_VERSION,status:'passed',source_chunks:chunks.length,source_points:catalogs.reduce((n,c)=>n+c.points.length,0),missing_points:0,before_selection:before,final_insights:insights.length,reused_stages:reused,selection_restored:selectionRestored,catalog_sha256:catalogHash},guide_fidelity:{version:GUIDE_FIDELITY_VERSION,status:'passed',checked_insights:insights.length,unsupported_insights:0,repairs,disputed_findings:disputedFindings,dismissed_after_evidence_review:dismissedFindings,full_source_context:true,immutable_catalog:true}}}};
  }
  terminal('guide_validation_incomplete');
 }
