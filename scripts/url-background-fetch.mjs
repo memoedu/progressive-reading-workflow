@@ -352,7 +352,29 @@ async function fetchZhihuCreationProjectFallback(finalUrl, {
   };
 }
 
-export async function fetchUrlWithoutBrowser(requestedUrl, {
+const COOKIE_REFLECTION = "url_fetch_cookie_secret_reflection_detected";
+
+export async function fetchUrlWithoutBrowser(requestedUrl, options = {}) {
+  try {
+    return await fetchUrlAttempt(requestedUrl, options);
+  } catch (error) {
+    if (error.message !== COOKIE_REFLECTION) throw error;
+    // Discard the entire authenticated response. Public pages can still be
+    // imported from a fresh request that sends no credentials at any hop.
+    try {
+      const result = await fetchUrlAttempt(requestedUrl, {
+        ...options, cookieHeaderForUrl: null, cookieByHostname: new Map()
+      });
+      result.fetchReceipt.anonymous_retry_after_cookie_reflection = true;
+      return result;
+    } catch (anonymousError) {
+      if (anonymousError instanceof UrlImportDegradedError) throw anonymousError;
+      throw error;
+    }
+  }
+}
+
+async function fetchUrlAttempt(requestedUrl, {
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxRedirects = DEFAULT_MAX_REDIRECTS,

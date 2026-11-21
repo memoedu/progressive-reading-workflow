@@ -11,6 +11,9 @@ import {writeSiteIndexes} from './indexes.mjs';
 import {bindRepositoryRelations} from '../scripts/source-relations.mjs';
 import {writeRepositoryIndexes} from './repository-indexes.mjs';
 import {ensureSiteRss} from './rss.mjs';
+import {capturedArticle} from './article-capture.mjs';
+
+export {capturedArticle} from './article-capture.mjs';
 
 export const siteProcessingOptions=settings=>({input_form:'written',content_profile:'natural_language',spoken_to_written:false,structure_body:false,
   include_reading_guide:settings.generate_guide===true,translation_mode:settings.translation_mode});
@@ -39,16 +42,6 @@ export async function startSiteRun(root,{source_id,client_request_id,retry_run_i
       siteImport:{run_id:id,settings,...(previous?{retry_run_id:previous.id}:{})}});
     run.request_id=request.request_id;await saveRun(root,run);void runRequest(request.request_id).catch(()=>{});return run;
   });
-}
-
-export async function capturedArticle(root,articleSource,url) {
-  const file=path.join(runPath(root,articleSource.run_id),'sources',digest(url)+'.json');
-  const captured=await readJson(file);
-  if(!captured||captured.url!==url||!captured.markdown?.trim()||captured.excluded)throw new Error('整站正文缓存缺失或来源不符');
-  const inventory=await readJson(path.join(runPath(root,articleSource.run_id),'inventory.json'));
-  const article=inventory?.articles?.find(article=>article.url===url);
-  if(article){if(article.markdown_sha256!==digest(captured.markdown))throw Error('整站分类引用的正文哈希不符');return {...captured,metadata:{...captured.metadata,taxonomy:article.taxonomy}};}
-  return captured;
 }
 
 export async function verifySiteCollection(root,settings,collection,runId,{broker,onProgress=async()=>{}}={}) {
@@ -97,7 +90,9 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   const previous=retry?await readRun(root,retry):null;
   if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection){
     const inventory=structuredClone(previous.collection.inventory);
-    const retained=previous.collection.results.filter(row=>SUCCESS.has(row.status));
+    const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
+    const retained=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url)))
+      .map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
     task.collection={rule_id:'site-all-articles',phase:'importing',inventory,batches:[],results:retained};
   }
   const initial=task.collection || {rule_id:'site-all-articles',phase:'planning',inventory:null,batches:[],results:[]};

@@ -13,6 +13,19 @@ const MAX_REQUESTS = 200;
 export const BACKGROUND_FETCH_TRANSPORT = "background_fetch";
 const DEGRADED_STATUSES = new Set(["requires_browser_auth", "requires_js_render"]);
 const INPUT_REQUIRED = "needs_classification";
+export const INTERACTIVE_IMPORT_SOURCES = Object.freeze([
+  "obsidian_local_ir", "browser_extension", "browser_extension_entry",
+  "browser_context_link", "browser_page_snapshot", "web_import_page", "web_import_center"
+]);
+const MAINTENANCE_SOURCES = new Set([...INTERACTIVE_IMPORT_SOURCES, "site_import_page"]);
+const failureStatuses = new Set(["failed", ...DEGRADED_STATUSES]);
+const maintenanceRetryId = taskId => "maintenance-retry:" + taskId;
+const diagnosticCode = value => /^[a-z][a-z0-9_]{0,79}$/u.test(value ?? "") ? value : undefined;
+
+function maintenanceFailure(task) {
+  return MAINTENANCE_SOURCES.has(task.source) && failureStatuses.has(task.status)
+    && (task.source !== "site_import_page" || Boolean(task.siteImport));
+}
 
 async function checkedProcessingOptions(value = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_processing_options");
@@ -540,6 +553,48 @@ export class BrowserImportBroker {
 
   async listRequestSummaries({sources=null,limit=25}={}) {
     return this.withLock(()=>this.state.requests.filter(request=>!sources||sources.includes(request.source)).slice(-limit).reverse().map(request=>this.requestSummary(request.id)));
+  }
+
+  async listMaintenanceFailures(since) {
+    return this.withLock(() => {
+      const byId = new Map(this.state.requests.map(request => [request.id, request]));
+      const byClientId = new Map(this.state.requests.map(request => [request.clientRequestId, request]));
+      const unfinished = new Set(this.state.tasks.filter(task => !terminalTask(task)).map(task => task.requestId));
+      return this.state.tasks.filter(task => Date.parse(task.updatedAt) >= since && maintenanceFailure(task)
+          && !unfinished.has(task.requestId) && !byId.get(task.requestId)?.clientRequestId?.startsWith("maintenance-retry:"))
+        .map(task => {
+          const retry = byClientId.get(maintenanceRetryId(task.id));
+          const retried = retry && this.state.tasks.find(item => item.requestId === retry.id);
+          const verification = retried?.result?.collection?.verification;
+          const verified = retried?.status === "imported" && (task.siteImport
+            ? verification?.verified === verification?.expected && Number.isInteger(verification?.expected)
+            : retried.result?.artifacts?.some(artifact => artifact.kind === "markdown" && artifact.path));
+          return {request_id: task.requestId, task_id: task.id, source: task.source, failed_at: task.updatedAt,
+            status: task.status, stage: diagnosticCode(task.result?.stage ?? task.result?.collection?.phase),
+            code: diagnosticCode(task.error) ?? diagnosticCode(task.result?.errors?.[0]?.code) ?? "import_failed",
+            ...(retried ? {retry: {request_id: retry.id, status: retried.status, verified: Boolean(verified)}} : {})};
+        }).sort((a, b) => a.failed_at.localeCompare(b.failed_at) || a.task_id.localeCompare(b.task_id));
+    });
+  }
+
+  async retryMaintenanceTask(taskId, startSite) {
+    if (!/^browser-import-task-[a-f0-9-]{36}$/u.test(taskId)) throw new Error("invalid_import_task_id");
+    const task = await this.withLock(() => {
+      const original = this.state.tasks.find(item => item.id === taskId);
+      const request = original && this.state.requests.find(item => item.id === original.requestId);
+      if (!original || !maintenanceFailure(original) || request?.clientRequestId?.startsWith("maintenance-retry:")) {
+        throw new Error("import_task_not_eligible_for_maintenance_retry");
+      }
+      return structuredClone(original);
+    });
+    const clientRequestId = maintenanceRetryId(taskId);
+    if (task.siteImport) return startSite(task.siteImport, clientRequestId);
+    return this.createRequest([task.requestedUrl], {
+      source: task.source, clientRequestId, userInstruction: task.userInstruction, entryRoute: task.entryRoute,
+      destinationFolder: task.destinationFolder, processingMode: task.processingMode,
+      processingOptions: task.processingOptions,
+      browserSnapshot: task.browserSnapshot ? await this.getTaskSnapshot(taskId) : null
+    });
   }
 
   async relocateSourceArtifacts(entries,hashEntries){

@@ -25,7 +25,8 @@ import { assertLocalRequest, handleSubscriptions } from '../subscription-workflo
 import { startSubscriptionWorker } from '../subscription-workflow/service.mjs';
 import { processCollectionTask } from "./collection-import.mjs";
 import { handleImportCenter } from '../site-import/http.mjs';
-import { processSiteTask, capturedArticle } from '../site-import/tasks.mjs';
+import { processSiteTask } from '../site-import/tasks.mjs';
+import { capturedArticle, findSiteArticleCapture } from '../site-import/article-capture.mjs';
 import { taxonomyFolder } from '../site-import/taxonomy.mjs';
 import { fetchYoutubeSubtitleDraft, youtubeVideoIdentity } from "./youtube-subtitle-import.mjs";
 import { LiveCookieSnapshot, defaultCookieDataRoot, COOKIE_SNAPSHOT_ENDPOINT, COOKIE_STATUS_ENDPOINT, safeError as safeCookieSnapshotError } from "./live-cookie-snapshot.mjs";
@@ -1482,13 +1483,18 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
   } else if (cachedRssDraft) {
     fetched = { requestedUrl:url, finalUrl:url, redirectChain:[],
       draft:cachedRssDraft, fetchReceipt:{ source_reused:"retained_rss_fulltext", browser_tab_created:false } };
-  } else if (articleSource) {
-    const source=await capturedArticle(workflowRoot,articleSource,url);
-    destinationFolder=taxonomyFolder(destinationFolder,source.metadata?.taxonomy);
-    fetched={requestedUrl:url,finalUrl:url,redirectChain:[],draft:{id:'site-'+shortHash(url),url,title:source.title,sourceType:'url_import',pageText:source.markdown,cachedRssMarkdown:source.markdown,
-      sourceMetadata:{...source.metadata,source_url:url,canonical_url:url,input_form:'written',title:source.title,capture_agent:'verified_site_source',source_response:source.source_response,published_at:source.metadata?.published_at||null}},
-      fetchReceipt:{source_reused:'verified_site_capture',source_response:source.source_response,browser_tab_created:false}};
-  } else fetched = await fetchUrlImportDraft(url);
+  } else {
+    const source = articleSource ? await capturedArticle(workflowRoot, articleSource, url)
+      : await findSiteArticleCapture(workflowRoot, url);
+    if (!source) {
+      fetched = await fetchUrlImportDraft(url);
+    } else {
+      if (articleSource) destinationFolder = taxonomyFolder(destinationFolder, source.metadata?.taxonomy);
+      fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[], draft:{id:'site-'+shortHash(source.url),url:source.url,title:source.title,sourceType:'url_import',pageText:source.markdown,cachedRssMarkdown:source.markdown,
+        sourceMetadata:{...source.metadata,source_url:url,canonical_url:source.url,input_form:'written',title:source.title,capture_agent:'verified_site_source',source_response:source.source_response,published_at:source.metadata?.published_at||null}},
+        fetchReceipt:{source_reused:'verified_site_capture',source_response:source.source_response,browser_tab_created:false} };
+    }
+  }
   fetched.draft.userInstruction = String(userInstruction || "");
   fetched.draft.destinationFolder = normalizeRelativeDestinationFolder(destinationFolder);
   fetched.draft.processingOptions = structuredClone(processingOptions);
@@ -1816,20 +1822,26 @@ async function submitSharedUrlImport(urls, {
   userInstruction = "",
   entryRoute = "",
   destinationFolder = "",
+  processingMode = "standard_preprocess",
   processingOptions = {},
+  browserSnapshot = null,
   wait = false
 } = {}) {
   const request = await browserImportBroker.createRequest(urls, {
     source,
     clientRequestId,
     transport: BACKGROUND_FETCH_TRANSPORT,
+    browserSnapshot,
     userInstruction,
+    processingMode,
     processingOptions,
     entryRoute: inferImportEntryRoute(source, entryRoute),
     destinationFolder: normalizeRelativeDestinationFolder(destinationFolder)
   });
   const run = processBackgroundImportRequest(request.request_id);
-  return wait ? run : request;
+  if (wait) return run;
+  void run.catch(error => console.error(error));
+  return request;
 }
 
 async function resumePendingBackgroundImports() {
@@ -1852,6 +1864,7 @@ async function importUrlsThroughStandardWorkflow(rawBody) {
     userInstruction: String(rawBody?.user_instruction || rawBody?.userInstruction || ""),
     entryRoute: String(rawBody?.entry_route || rawBody?.entryRoute || "obsidian"),
     destinationFolder: String(rawBody?.destination_folder || rawBody?.destinationFolder || ""),
+    processingMode: rawBody?.processing_mode ?? "standard_preprocess",
     processingOptions: rawBody?.processing_options || {},
     wait: true
   });
@@ -2859,18 +2872,16 @@ async function handle(req, res) {
           cachedRssMarkdown:cached.markdown, sourceMetadata:{ source_url:url, canonical_url:url,
             published_at:typeof cached.published_at === "string" ? cached.published_at : null, source_is_original:true } } };
       }
-      const request = await browserImportBroker.createRequest(urls, {
+      const request = await submitSharedUrlImport(urls, {
         source: String(body.source || "unknown"),
         clientRequestId: body.client_request_id || null,
-        transport: BACKGROUND_FETCH_TRANSPORT,
         browserSnapshot,
         userInstruction: String(body.user_instruction || body.userInstruction || ""),
-        entryRoute: inferImportEntryRoute(body.source, body.entry_route || body.entryRoute),
-        destinationFolder: normalizeRelativeDestinationFolder(body.destination_folder || body.destinationFolder || ""),
+        entryRoute: body.entry_route || body.entryRoute,
+        destinationFolder: body.destination_folder || body.destinationFolder || "",
         processingMode: body.processing_mode ?? 'standard_preprocess',
         processingOptions: body.processing_options || {}
       });
-      if (request.transport === BACKGROUND_FETCH_TRANSPORT) processBackgroundImportRequest(request.request_id).catch((error) => console.error(error));
       return sendJson(res, 202, request);
     } catch (error) {
       return sendJson(res, 400, { error: error.message });
@@ -2989,12 +3000,11 @@ async function handle(req, res) {
         const parsed = new URL(String(body.draft?.url || ""));
         if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported_url_protocol");
         if (!body.draft?.html && !body.draft?.pageText) throw new Error("empty_page_content");
-        const request = await browserImportBroker.createRequest([parsed.href], {
+        const request = await submitSharedUrlImport([parsed.href], {
           source: "browser_page_snapshot", clientRequestId: body.client_request_id,
           processingOptions: body.processing_options || body.draft.processingOptions || {},
           browserSnapshot: { draft: body.draft, processing_options: body.processing_options || body.draft.processingOptions || {} }
         });
-        processBackgroundImportRequest(request.request_id).catch(error => console.error(error));
         return sendJson(res, 202, request);
       }
       return sendJson(res, 200, await writeBrowserDraftCommit(body, "reading", { standardize: true }));

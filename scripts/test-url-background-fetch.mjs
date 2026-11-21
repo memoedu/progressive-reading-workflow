@@ -50,6 +50,22 @@ assert.deepEqual(calls.map((item) => item.url), [requestedUrl, projectUrl, apiUr
 assert.ok(calls.every((item) => item.cookie === "fixture_session=private-value"));
 assert.doesNotMatch(JSON.stringify(result), /private-value/u);
 
+const reflectionCalls = [];
+const publicResult = await fetchUrlWithoutBrowser("https://example.test/public", {
+  cookieHeaderForUrl: () => "session=fixture_reflected_secret",
+  fetchImpl: async (_url, {headers}) => {
+    reflectionCalls.push(headers.Cookie);
+    return new Response(headers.Cookie || "Public article recovered without credentials.", {
+      headers: {"content-type": "text/plain"}
+    });
+  }
+});
+assert.deepEqual(reflectionCalls, ["session=fixture_reflected_secret", undefined]);
+assert.equal(publicResult.fetchReceipt.anonymous_retry_after_cookie_reflection, true);
+assert.equal(publicResult.fetchReceipt.authenticated_fetch, false);
+assert.equal(publicResult.body, "Public article recovered without credentials.");
+assert.doesNotMatch(JSON.stringify(publicResult), /fixture_reflected_secret/u);
+
 console.log(JSON.stringify({
   status: "passed",
   checks: ["zhihu_project_redirect", "project_api_fallback", "readable_html", "cookie_not_persisted"]
