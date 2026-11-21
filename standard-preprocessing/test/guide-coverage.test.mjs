@@ -158,6 +158,39 @@ test('deletion of a unique claim is repaired against the same frozen source ids'
  const r=await generateCoverageGuide(p,{...f,identity:'dedup',cacheDir:false});assert.equal(r.output.insights.length,2);
  const coverage=f.state.tasks.filter(t=>t.task==='coverage');assert.deepEqual(coverage[0].frozen_points,coverage.at(-1).frozen_points);
 });
+for(const confirmed of [true,false]){
+ test(confirmed?'persistently deleted information is restored only after independent coverage checks':'selection recovery fails closed when the removed card does not verify',async()=>{
+  const f=fixture(),p={...payload,blocks:blocks.slice(0,2)};
+  const target=p.blocks[1].source_block_key;
+  let restoreAudits=0;
+  const review=async request=>{
+   const d=JSON.parse(request.user);
+   if(d.task==='selection'){
+    const keep_indices=d.insights.filter(i=>i.target_block_key!==target).map(i=>i.index);
+    return {output:{keep_indices,remove:d.insights.filter(i=>i.target_block_key===target).map(i=>({index:i.index,covered_by:[keep_indices[0]],reason:'fixture 模拟误删'}))}};
+   }
+   const result=await f.review(request);
+   if(d.task==='coverage'&&request.system.includes('结合洞察标题与描述')){
+    restoreAudits++;
+    assert.equal(d.frozen_points.length,1);
+    assert.equal(d.frozen_points[0].source_block_key,target);
+    assert.equal(d.full_source_context.length,2);
+    if(!confirmed)result.output.coverage[0].insight_indices=[];
+   }
+   return result;
+  };
+  const run=generateCoverageGuide(p,{...f,review,identity:'persistent-selection-loss',cacheDir:false});
+  if(confirmed){
+   const r=await run;
+   assert.deepEqual(r.output.insights.map(i=>i.description),p.blocks.map(b=>b.markdown));
+   assert.equal(r.usage.stages.guide_coverage.selection_restored,1);
+   assert.equal(restoreAudits,2);
+  }else{
+   await assert.rejects(run,/guide_coverage_incomplete/);
+   assert.equal(restoreAudits,1);
+  }
+ });
+}
 test('coverage repairs carry the full paragraphs and whole-article argumentative context',async()=>{
  const f=fixture({omit:true}),p={...payload,blocks:[{...blocks[0],markdown:'常见但错误的推断是：“必须有本能。”'},{...blocks[1],markdown:'实际上，相同行为可以由不同机制实现。'}]};
  const r=await generateCoverageGuide(p,{...f,identity:'context',cacheDir:false});assert.equal(r.output.insights.length,2);assert.ok(f.state.contexts.every(c=>c.length===2));assert.equal(r.usage.stages.guide_coverage.missing_points,0);
