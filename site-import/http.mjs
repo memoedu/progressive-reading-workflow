@@ -5,6 +5,7 @@ import { readSources, saveSiteSource, listRuns, readRun, CODE_ROOT } from './sto
 import { startSiteRun } from './tasks.mjs';
 import {resolveSourceRelation} from '../scripts/source-relations.mjs';
 import {candidatePage,updateCandidate} from './candidates.mjs';
+import {INTERACTIVE_IMPORT_SOURCES} from '../scripts/browser-import-broker.mjs';
 
 const assets=new Map([['/imports',['index.html','text/html']],['/imports/',['index.html','text/html']],['/imports/app.mjs',['app.mjs','text/javascript']],['/imports/style.css',['style.css','text/css']],['/import-candidates',['candidates.html','text/html']],['/import-candidates/',['candidates.html','text/html']],['/import-candidates/app.mjs',['candidates.mjs','text/javascript']]]);
 const send=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));};
@@ -26,7 +27,12 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
       send(res,200,{...config,capabilities:{infer_topics:true,compact_run_detail:true},sources:config.sources.map(source=>({...source,last_run:brief(runs.find(run=>run.source_id===source.id))})),runs:runs.slice(0,30).map(brief)});return true;
     }
     if(req.method==='GET'&&url.pathname==='/api/import-center/history'){
-      send(res,200,{requests:await broker.listRequestSummaries({sources:['web_import_page','web_import_center']}),legacy_jobs:legacyJobs()});return true;
+      send(res,200,{requests:await broker.listRequestSummaries({sources:INTERACTIVE_IMPORT_SOURCES}),legacy_jobs:legacyJobs()});return true;
+    }
+    if(req.method==='GET'&&url.pathname==='/api/import-center/maintenance-failures'){
+      const since=Date.parse(url.searchParams.get('since'));
+      if(!Number.isFinite(since))throw new Error('invalid_maintenance_start_time');
+      send(res,200,{failures:await broker.listMaintenanceFailures(since)});return true;
     }
     const detail=/^\/api\/site-imports\/runs\/(site-run-[a-f0-9]{24})$/u.exec(url.pathname);
     if(req.method==='GET'&&detail){const run=await readRun(root,detail[1]);let value=run;
@@ -39,6 +45,16 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
     if(['/api/import-candidates/status','/api/import-candidates/update'].includes(url.pathname))send(res,200,await updateCandidate(root,input));
     else if(url.pathname==='/api/site-imports/source')send(res,200,await saveSiteSource(root,input.source,input.revision));
     else if(url.pathname==='/api/site-imports/start')send(res,202,brief(await startSiteRun(root,input,broker,runRequest)));
+    else if(url.pathname==='/api/import-center/maintenance-retry'){
+      const request = await broker.retryMaintenanceTask(input.task_id, async (site, clientRequestId) => {
+        const previous = await readRun(root, site.run_id);
+        if (!previous) throw new Error('original_site_run_missing');
+        const next = await startSiteRun(root, {source_id: previous.source_id, retry_run_id: site.run_id, client_request_id: clientRequestId}, broker, runRequest);
+        return broker.getRequest(next.request_id);
+      });
+      void runRequest(request.request_id).catch(() => {});
+      send(res,202,{request_id:request.request_id,status:request.status});
+    }
     else send(res,404,{error:'接口不存在'});
   }catch(error){send(res,400,{error:error.message});}
   return true;

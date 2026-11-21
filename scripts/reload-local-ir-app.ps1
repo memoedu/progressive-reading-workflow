@@ -37,14 +37,14 @@ if ($oldId -and (Get-Process -Id $oldId -ErrorAction SilentlyContinue)) { Stop-P
 Start-ScheduledTask -TaskName $taskName
 for ($attempt = 0; $attempt -lt 60; $attempt++) {
     try {
-        $auth = Invoke-RestMethod "http://127.0.0.1:$port/api/browser-import/cookies/status" -TimeoutSec 2
+        $health = Invoke-RestMethod "http://127.0.0.1:$port/api/highlights/health" -TimeoutSec 2
         $rules = Invoke-RestMethod "http://127.0.0.1:$port/api/browser-import/rules" -TimeoutSec 2
-        $page = Invoke-WebRequest "http://127.0.0.1:$port/import" -TimeoutSec 2
+        $page = Invoke-WebRequest "http://127.0.0.1:$port/imports" -TimeoutSec 2
         $owner = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
         $newProcess = if ($owner.Count -eq 1) { Get-CimInstance Win32_Process -Filter "ProcessId=$($owner[0])" } else { $null }
         $parent = if ($newProcess) { Get-CimInstance Win32_Process -Filter "ProcessId=$($newProcess.ParentProcessId)" } else { $null }
-        if ($newProcess -and $newProcess.ProcessId -ne $oldId -and $newProcess.Name -eq 'node.exe' -and $newProcess.CommandLine.Contains($entry) -and $parent.CommandLine.Contains($runner) -and (Get-ScheduledTask -TaskName $taskName).State -eq 'Running' -and $auth.receiver_enabled -and $auth.mode -ne 'manual_snapshot' -and $auth.schema -eq 'local-ir.chrome-live-sync/v1' -and $rules.schema -eq 'local-ir.import-rules/v1' -and $page.StatusCode -eq 200) {
-            $receipt = @{status='activated'; launcher='windows_scheduled_task'; task=$taskName; old_pid=$oldId; new_pid=$newProcess.ProcessId; auth=$auth; rules_schema=$rules.schema; web_import_http=$page.StatusCode}
+        if ($newProcess -and $newProcess.ProcessId -ne $oldId -and $newProcess.Name -eq 'node.exe' -and $newProcess.CommandLine.Contains($entry) -and $parent.CommandLine.Contains($runner) -and (Get-ScheduledTask -TaskName $taskName).State -eq 'Running' -and $health.status -eq 'ok' -and $health.service -eq 'local-ir-browser-highlight' -and $rules.schema -eq 'local-ir.import-rules/v1' -and $page.StatusCode -eq 200) {
+            $receipt = @{status='activated'; launcher='windows_scheduled_task'; task=$taskName; old_pid=$oldId; new_pid=$newProcess.ProcessId; cookie_snapshot_status=$health.cookieSnapshot.status; rules_schema=$rules.schema; web_import_http=$page.StatusCode}
             $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $logRoot 'activation.json') -Encoding utf8
             $receipt | ConvertTo-Json -Depth 5
             return
