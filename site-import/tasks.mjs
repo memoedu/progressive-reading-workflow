@@ -80,7 +80,14 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
   if(settings.repository&&records.every(row=>row.verified)){
     const captures=await Promise.all(expected.map(article=>capturedArticle(root,collection.inventory.article_source,article.url)));
     verification.source_relations=await bindRepositoryRelations(root,captures,records);
-    verification.repository_indexes=await writeRepositoryIndexes(root,settings,captures,records);
+    try {
+      verification.repository_indexes=await writeRepositoryIndexes(root,settings,captures,records);
+    } catch (error) {
+      const prefix='repository_index_user_edit_preserved:';
+      if(!error.message.startsWith(prefix))throw error;
+      verification.warnings=[{code:'repository_index_user_edit_preserved',
+        message:'现有仓库索引有改动，已保留该索引。',path:error.message.slice(prefix.length)}];
+    }
   }
   await writeJson(path.join(runPath(root,runId),'verification.json'),verification);return verification;
 }

@@ -3,7 +3,8 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function collectionResult(task, collection) {
   const rows = collection.results || [];
-  const warnings = rows.filter(row => row.status === "imported_with_warnings" || row.receipt?.quality_status === "warning").length;
+  const verificationWarnings = collection.verification?.warnings || [];
+  const warnings = rows.filter(row => row.status === "imported_with_warnings" || row.receipt?.quality_status === "warning").length + verificationWarnings.length;
   const failed = rows.filter(row => !SUCCESS.has(row.status)).length;
   const waiting = rows.filter(row => row.status === "needs_classification").length;
   const complete = collection.inventory?.complete && rows.length === collection.inventory.articles.length && failed === 0;
@@ -12,6 +13,7 @@ function collectionResult(task, collection) {
     status: waiting ? "needs_classification" : complete ? warnings ? "imported_with_warnings" : "imported" : "failed",
     collection,
     artifacts: rows.flatMap(row => row.artifacts || []).filter(artifact => artifact.kind === "markdown"),
+    ...(verificationWarnings.length ? {warnings: verificationWarnings} : {}),
     receipt: { processing_mode: "collection_import", rule_id: collection.rule_id,
       quality_status: complete ? warnings ? "warning" : "ready" : "failed", browser_tab_created: false,
       article_count: collection.inventory?.articles.length || 0, imported: rows.length - failed, warnings, failed },

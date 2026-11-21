@@ -73,7 +73,7 @@ export function siteCounts(collection) {
     ...(collection?.inventory?.deferred_resources?.length?{deferred:collection.inventory.deferred_resources.length}:{}),
     imported:rows.filter(r=>['imported','imported_with_warnings','saved_locked'].includes(r.status)).length,
     reused:rows.filter(r=>r.status==='idempotent_replay').length,
-    warnings:rows.filter(r=>r.receipt?.quality_status==='warning').length,
+    warnings:rows.filter(r=>r.receipt?.quality_status==='warning').length + (collection?.verification?.warnings?.length || 0),
     failed:rows.filter(r=>['failed','requires_browser_auth','requires_js_render'].includes(r.status)).length+(collection?.inventory?.failures?.length || (!collection?.inventory ? collection?.discovery?.failed || 0 : 0)),
     waiting:rows.filter(r=>r.status==='needs_classification').length};
 }
