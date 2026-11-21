@@ -58,6 +58,20 @@ test('new entry imports original, reuses annotated archived RSS source, persists
     assert.equal(repeated.counts.imported,0);assert.equal(repeated.counts.reused,2);assert.equal(await fs.readFile(archived,'utf8'),old);
     // The ordinary/RSS publication identity remains available after a site import.
     const {findSourcePublication}=await import('../scripts/reading-source-library.mjs');assert.equal((await findSourcePublication(fixture.workflowRoot,origin+'/posts/new#fragment')).path,output.path);
+    const detached=path.join(fixture.root,'missing-publication-fixture.md');
+    await fs.rename(output.path,detached);
+    const captureCount=hits.filter(url=>url.includes('slug=new')).length;
+    await mounted.start(state.sources[0],run.id);
+    const restored=await until(async()=>{const data=await (await fetch(fixture.baseUrl+'/api/site-imports')).json();return data.runs.length===3&&['completed','failed','completed_with_failures'].includes(data.runs[0].phase)?data.runs[0]:null;});
+    assert.equal(restored.phase,'completed',JSON.stringify(restored));
+    assert.equal(restored.counts.imported,1);
+    assert.equal(restored.counts.reused,1);
+    const restoredRun=await (await fetch(fixture.baseUrl+'/api/site-imports/runs/'+restored.id)).json();
+    assert.equal(restoredRun.results.find(row=>row.requested_url.endsWith('/new')).receipt.restored_missing_publication,true);
+    assert.equal(hits.filter(url=>url.includes('slug=new')).length,captureCount);
+    assert.equal(await fs.readFile(archived,'utf8'),old);
+    assert.equal(await fs.readFile(detached,'utf8'),bytes.toString('utf8'));
+    assert.ok(await findSourcePublication(fixture.workflowRoot,origin+'/posts/new'));
     // A different process (e.g. RSS) can publish after URL preflight but before
     // original-text commit. The shared commit lock must recheck and reuse it.
     const racedUrl=fixture.sourceUrl+'/slow-during-rss';

@@ -27,7 +27,7 @@ URL 输入、来源采集、标准预处理和阅读区写入是四个独立职�
 
 旧 `/api/highlights/import-local-urls` 保留为兼容接口；Obsidian、浏览器 URL 批量提交和社交归档统一提交 `/api/browser-import/requests`。右键“导入当前页到渐进阅读”复用页面按钮的快照流程，调用 `/api/highlights/import-local`。两类输入进入同一个持久 broker：`page_snapshot` 读取已保存快照，`url_fetch` 后台抓取 URL，不重抓页面快照。
 
-单链接会先复用已入库正文，其次查找与当前来源 URL 对齐且正文哈希通过清单校验的整站采集快照。整站采集和单篇链接通过同一个预处理和发布入口保留正文。单篇链接仍按提交入口选择目标目录。使用登录态抓取时，疑似含 Cookie 值的响应会被丢弃，并从原 URL 无凭据重新采集一次。
+单链接会先复用已入库正文，其次查找与当前来源 URL 对齐且正文哈希通过清单校验的整站采集快照。首次提交且没有批注、问答或随想的浏览器当前页快照也可复用该正文。整站采集和单篇链接通过同一个预处理和发布入口保留正文。单篇链接仍按提交入口选择目标目录。使用登录态抓取时，疑似含 Cookie 值的响应会被丢弃，并从原 URL 无凭据重新采集一次。
 
 现有根网页的 `/api/import` 是旧作业入口，不是新增薄前端应复制的执行链。新页面使用自己的来源标识，并复用 Obsidian 的目录路由策略（现有 `entry_route: "obsidian"`），不伪装为浏览器扩展，也不由前端自行创建输出路径。既有浏览器固定目录与 AI 显式目标目录规则保持不变；全局来源 URL 去重仍由后端负责。
 
@@ -49,6 +49,6 @@ HTML 转换在 Readability/Turndown 前提取 KaTeX、MathJax、MathML 注解和
 
 请求状态包含 `queued`、`processing`、`completed`、`completed_with_failures`、`requires_browser_auth`、`requires_js_render` 或 `failed`。必须读取逐条结果，不能把 HTTP 202 或整个请求结束视为全部导入成功。`imported` / `idempotent_replay` 结合正式落盘回执判断成功；消费者还须保留 `imported_with_warnings` 或 `receipt.quality_status: "warning"` 的质量警告，不能把可阅读但带警告的 Markdown 当成失败丢掉，或冒充无警告成功。登录或 JS 降级不得冒充成功。
 
-导入管理的链接历史包含浏览器、Obsidian 与网页提交。维护程序可在本机通过 `GET /api/import-center/maintenance-failures?since=<ISO 时间>` 查询这些入口及整站父任务的终态失败，响应只提供任务标识、阶段、错误代码与重试状态。修复后可用 `POST /api/import-center/maintenance-retry` 提交原 `task_id`。它按原任务编号幂等创建一次新尝试，保留原任务和参数。整站重试依据当前已核实的正文重新确定待导入项。
+导入管理的链接历史包含浏览器、Obsidian 与网页提交。维护程序可在本机通过 `GET /api/import-center/maintenance-failures?since=<ISO 时间>` 查询这些入口及整站父任务的终态失败，响应只提供任务标识、阶段、错误代码与重试状态。修复后可用 `POST /api/import-center/maintenance-retry` 提交原 `task_id`。它按原任务编号幂等创建一次新尝试，保留原任务和参数。整站重试依据当前已核实的正文重新确定待导入项。正文缺失但浏览器侧状态仍存在时，只有来源、历史入库哈希和原始正文哈希都匹配，且尚无阅读加工，才恢复正文并复用文档身份。
 
 连接失败后的请求重试沿用稳定的 `client_request_id`；收到 `request_id` 后只继续查询。后端终态请求不可变，用户明确重新处理失败条目时创建新尝试 ID，只提交失败项，并保留原失败回执。不得因短暂查询失败重复创建整批任务。网页在同一标签页 sessionStorage 保存当前批次与重试记录。队列状态位于 `.local-ir/browser-import-broker/state.json`，不进入阅读区。正式输出必须使用后端核定的本地目录，不使用 Codex worktree。
