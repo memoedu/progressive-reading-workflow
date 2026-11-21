@@ -19,8 +19,9 @@ export const siteProcessingOptions=settings=>({input_form:'written',content_prof
   include_reading_guide:settings.generate_guide===true,translation_mode:settings.translation_mode});
 
 const SUCCESS=new Set(['imported','imported_with_warnings','idempotent_replay']);
-export async function startSiteRun(root,{source_id,client_request_id,retry_run_id},broker,runRequest) {
+export async function startSiteRun(root,{source_id,client_request_id,retry_run_id},broker,runRequest,{maintenanceRetryOf=null}={}) {
   if(typeof client_request_id!=='string'||!/^[A-Za-z0-9_.:-]{1,180}$/u.test(client_request_id))throw new Error('导入请求缺少有效的恢复编号');
+  if(client_request_id.startsWith('maintenance-retry:')&&!maintenanceRetryOf)throw new Error('reserved_maintenance_request_id');
   const id=runId(client_request_id),directory=runPath(root,id);
   return withLock(directory+'.lock',async()=>{
     let run=await readRun(root,id);
@@ -38,7 +39,7 @@ export async function startSiteRun(root,{source_id,client_request_id,retry_run_i
       ...(previous?{retry_of:previous.id}:{}),counts:{discovered:0,imported:0,reused:0,failed:0,warnings:0},results:[]};
     await saveRun(root,run);
     const request=await broker.createRequest([settings.url],{source:'site_import_page',clientRequestId:client_request_id,entryRoute:'ai',destinationFolder:settings.destination,
-      userInstruction:settings.instruction,processingMode:settings.processing_mode,processingOptions:siteProcessingOptions(settings),
+      userInstruction:settings.instruction,processingMode:settings.processing_mode,processingOptions:siteProcessingOptions(settings),maintenanceRetryOf,
       siteImport:{run_id:id,settings,...(previous?{retry_run_id:previous.id}:{})}});
     run.request_id=request.request_id;await saveRun(root,run);void runRequest(request.request_id).catch(()=>{});return run;
   });
