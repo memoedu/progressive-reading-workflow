@@ -185,6 +185,19 @@ function corsHeaders() {
   };
 }
 
+function maintenanceEligibleImport(req) {
+  const origin = req.headers.origin;
+  const trustedApp = origin === 'app://obsidian.md' || /^chrome-extension:\/\/[a-p]{32}$/u.test(origin ?? '');
+  try {
+    assertLocalRequest(trustedApp
+      ? {socket:req.socket, headers:{host:req.headers.host}}
+      : req);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function shortHash(value, length = 10) {
   return createHash("sha256").update(String(value || "")).digest("hex").slice(0, length);
 }
@@ -1869,6 +1882,7 @@ async function submitSharedUrlImport(urls, {
   processingMode = "standard_preprocess",
   processingOptions = {},
   browserSnapshot = null,
+  maintenanceEligible = true,
   wait = false
 } = {}) {
   const request = await browserImportBroker.createRequest(urls, {
@@ -1876,6 +1890,7 @@ async function submitSharedUrlImport(urls, {
     clientRequestId,
     transport: BACKGROUND_FETCH_TRANSPORT,
     browserSnapshot,
+    maintenanceEligible,
     userInstruction,
     processingMode,
     processingOptions,
@@ -1896,7 +1911,7 @@ async function resumePendingBackgroundImports() {
   return requestIds.length;
 }
 
-async function importUrlsThroughStandardWorkflow(rawBody) {
+async function importUrlsThroughStandardWorkflow(rawBody, {maintenanceEligible} = {}) {
   const urls = Array.isArray(rawBody?.urls)
     ? extractUrls(rawBody.urls.join("\n"))
     : extractUrls(rawBody?.text || "");
@@ -1910,6 +1925,7 @@ async function importUrlsThroughStandardWorkflow(rawBody) {
     destinationFolder: String(rawBody?.destination_folder || rawBody?.destinationFolder || ""),
     processingMode: rawBody?.processing_mode ?? "standard_preprocess",
     processingOptions: rawBody?.processing_options || {},
+    maintenanceEligible,
     wait: true
   });
 }
@@ -2920,6 +2936,7 @@ async function handle(req, res) {
         source: String(body.source || "unknown"),
         clientRequestId: body.client_request_id || null,
         browserSnapshot,
+        maintenanceEligible: maintenanceEligibleImport(req),
         userInstruction: String(body.user_instruction || body.userInstruction || ""),
         entryRoute: body.entry_route || body.entryRoute,
         destinationFolder: body.destination_folder || body.destinationFolder || "",
@@ -3046,6 +3063,7 @@ async function handle(req, res) {
         if (!body.draft?.html && !body.draft?.pageText) throw new Error("empty_page_content");
         const request = await submitSharedUrlImport([parsed.href], {
           source: "browser_page_snapshot", clientRequestId: body.client_request_id,
+          maintenanceEligible: maintenanceEligibleImport(req),
           processingOptions: body.processing_options || body.draft.processingOptions || {},
           browserSnapshot: { draft: body.draft, processing_options: body.processing_options || body.draft.processingOptions || {} }
         });
@@ -3059,7 +3077,7 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/highlights/import-local-urls") {
     try {
       const body = JSON.parse(await readRequest(req, { maxBytes: 1024 * 1024 }) || "{}");
-      return sendJson(res, 200, await importUrlsThroughStandardWorkflow(body));
+      return sendJson(res, 200, await importUrlsThroughStandardWorkflow(body, {maintenanceEligible: maintenanceEligibleImport(req)}));
     } catch (error) {
       return sendJson(res, importFailureHttpStatus(error), { error: error.message });
     }

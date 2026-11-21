@@ -219,10 +219,16 @@ export class BrowserImportBroker {
     browserSnapshot = null,
     siteImport = null,
     articleSource = null,
-    subscriptionMaterialId = null
+    subscriptionMaterialId = null,
+    maintenanceEligible = true,
+    maintenanceRetryOf = null
   } = {}) {
     const normalizedMode = normalizeProcessingMode(processingMode);
     if(subscriptionMaterialId!==null&&!/^[A-Za-z0-9_.-]{1,120}$/u.test(subscriptionMaterialId))throw new Error('invalid_subscription_material_id');
+    if (String(clientRequestId ?? "").trim().startsWith("maintenance-retry:")
+      && (!maintenanceRetryOf || clientRequestId !== maintenanceRetryId(maintenanceRetryOf))) {
+      throw new Error("reserved_maintenance_request_id");
+    }
     const normalizedOptions = await checkedProcessingOptions(processingOptions);
     return this.withLock(async () => {
       const normalized = [...new Set((urls || []).map((value) => String(value || "").trim()).filter(Boolean))];
@@ -232,6 +238,7 @@ export class BrowserImportBroker {
       if (normalizedClientRequestId) {
         const existing = this.state.requests.find((item) => item.clientRequestId === normalizedClientRequestId);
         if (existing) {
+          if ((existing.maintenanceEligible !== false) !== maintenanceEligible) throw new Error("browser_import_client_request_origin_conflict");
           if((existing.subscriptionMaterialId||null)!==subscriptionMaterialId)throw new Error('browser_import_client_request_context_conflict');
           if (normalizeProcessingMode(existing.processingMode)!==normalizedMode) throw new Error('browser_import_client_request_mode_conflict');
           if (stableJson(existing.processingOptions || {}) !== stableJson(normalizedOptions)) throw new Error('browser_import_client_request_options_conflict');
@@ -251,6 +258,8 @@ export class BrowserImportBroker {
         processingMode: normalizedMode,
         processingOptions: normalizedOptions,
         ...(subscriptionMaterialId?{subscriptionMaterialId}:{}),
+        ...(!maintenanceEligible?{maintenanceEligible:false}:{}),
+        ...(maintenanceRetryOf?{maintenanceRetryOf}:{}),
         createdAt,
         updatedAt: createdAt
       };
@@ -556,25 +565,30 @@ export class BrowserImportBroker {
   }
 
   async listMaintenanceFailures(since) {
-    return this.withLock(() => {
+    const records = await this.withLock(() => {
       const byId = new Map(this.state.requests.map(request => [request.id, request]));
-      const byClientId = new Map(this.state.requests.map(request => [request.clientRequestId, request]));
+      const retries = new Map(this.state.requests.filter(request => request.maintenanceRetryOf).map(request => [request.maintenanceRetryOf, request]));
       const unfinished = new Set(this.state.tasks.filter(task => !terminalTask(task)).map(task => task.requestId));
       return this.state.tasks.filter(task => Date.parse(task.updatedAt) >= since && maintenanceFailure(task)
-          && !unfinished.has(task.requestId) && !byId.get(task.requestId)?.clientRequestId?.startsWith("maintenance-retry:"))
+          && !unfinished.has(task.requestId) && byId.get(task.requestId)?.maintenanceEligible !== false
+          && !byId.get(task.requestId)?.maintenanceRetryOf)
         .map(task => {
-          const retry = byClientId.get(maintenanceRetryId(task.id));
+          const retry = retries.get(task.id);
           const retried = retry && this.state.tasks.find(item => item.requestId === retry.id);
           const verification = retried?.result?.collection?.verification;
-          const verified = retried?.status === "imported" && (task.siteImport
-            ? verification?.verified === verification?.expected && Number.isInteger(verification?.expected)
-            : retried.result?.artifacts?.some(artifact => artifact.kind === "markdown" && artifact.path));
           return {request_id: task.requestId, task_id: task.id, source: task.source, failed_at: task.updatedAt,
             status: task.status, stage: diagnosticCode(task.result?.stage ?? task.result?.collection?.phase),
             code: diagnosticCode(task.error) ?? diagnosticCode(task.result?.errors?.[0]?.code) ?? "import_failed",
-            ...(retried ? {retry: {request_id: retry.id, status: retried.status, verified: Boolean(verified)}} : {})};
+            ...(retried ? {retry: {request_id: retry.id, status: retried.status, verified: Boolean(task.siteImport
+              && verification?.verified === verification?.expected && Number.isInteger(verification?.expected))}} : {}),
+            ...(retried?.status === "imported" && !task.siteImport
+              ? {markdownPath: retried.result?.artifacts?.find(artifact => artifact.kind === "markdown")?.path} : {})};
         }).sort((a, b) => a.failed_at.localeCompare(b.failed_at) || a.task_id.localeCompare(b.task_id));
     });
+    return Promise.all(records.map(async ({markdownPath, ...record}) => {
+      if (markdownPath) record.retry.verified = Boolean(await fs.stat(markdownPath).then(file => file.isFile(), () => false));
+      return record;
+    }));
   }
 
   async retryMaintenanceTask(taskId, startSite) {
@@ -582,15 +596,15 @@ export class BrowserImportBroker {
     const task = await this.withLock(() => {
       const original = this.state.tasks.find(item => item.id === taskId);
       const request = original && this.state.requests.find(item => item.id === original.requestId);
-      if (!original || !maintenanceFailure(original) || request?.clientRequestId?.startsWith("maintenance-retry:")) {
+      if (!original || !maintenanceFailure(original) || request?.maintenanceRetryOf || request?.maintenanceEligible === false) {
         throw new Error("import_task_not_eligible_for_maintenance_retry");
       }
       return structuredClone(original);
     });
     const clientRequestId = maintenanceRetryId(taskId);
-    if (task.siteImport) return startSite(task.siteImport, clientRequestId);
+    if (task.siteImport) return startSite(task.siteImport, clientRequestId, taskId);
     return this.createRequest([task.requestedUrl], {
-      source: task.source, clientRequestId, userInstruction: task.userInstruction, entryRoute: task.entryRoute,
+      source: task.source, clientRequestId, maintenanceRetryOf: taskId, userInstruction: task.userInstruction, entryRoute: task.entryRoute,
       destinationFolder: task.destinationFolder, processingMode: task.processingMode,
       processingOptions: task.processingOptions,
       browserSnapshot: task.browserSnapshot ? await this.getTaskSnapshot(taskId) : null

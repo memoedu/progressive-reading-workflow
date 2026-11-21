@@ -14,9 +14,9 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
     assert.equal(response.status, 200);
     return response.json();
   };
-  const post = async (route, body, status = 202) => {
+  const post = async (route, body, status = 202, headers = {}) => {
     const response = await fetch(fixture.baseUrl + route, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+      method:'POST', headers:{'Content-Type':'application/json', ...headers}, body:JSON.stringify(body)
     });
     assert.equal(response.status, status);
     return response.json();
@@ -73,7 +73,17 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
     assert.equal(original.status, 'failed');
     const taskId = original.results[0].task_id;
     const feed = '/api/import-center/maintenance-failures?since=' + since;
+    const external = await post('/api/browser-import/requests', {
+      urls:[fixture.sourceUrl + '/flaky'], source:'obsidian_local_ir', processing_mode:'original_text'
+    }, 202, {Origin:'https://example.test'});
+    assert.equal((await terminal(external.request_id)).status, 'failed');
+    const spoof = await post('/api/browser-import/requests', {
+      urls:[fixture.sourceUrl + '/other'], source:'obsidian_local_ir',
+      client_request_id:'maintenance-retry:' + taskId, processing_mode:'original_text'
+    }, 400);
+    assert.equal(spoof.error, 'reserved_maintenance_request_id');
     const {failures:[incident]} = await get(feed);
+    assert.equal((await get(feed)).failures.length,1);
     assert.equal(incident.task_id, taskId);
     assert.equal(incident.stage, 'source_fetch');
     assert.doesNotMatch(JSON.stringify(incident), /flaky|127\.0\.0\.1/u);
@@ -81,11 +91,15 @@ test('browser and Obsidian reuse verified site captures and retain failed attemp
     const route = '/api/import-center/maintenance-retry';
     const retry = await post(route, {task_id:taskId});
     assert.equal((await post(route, {task_id:taskId})).request_id, retry.request_id);
-    assert.equal((await terminal(retry.request_id)).imported, 1);
+    const recovered = await terminal(retry.request_id);
+    assert.equal(recovered.imported, 1);
     assert.equal((await terminal(failure.request_id)).status, 'failed');
     assert.deepEqual((await get(feed)).failures[0].retry, {request_id:retry.request_id,status:'imported',verified:true});
     const sources = new Set((await get('/api/import-center/history')).requests.map(item=>item.source));
     assert.ok(sources.has('browser_extension') && sources.has('obsidian_local_ir'));
+    const recoveredFile = recovered.results[0].artifacts.find(artifact=>artifact.kind==='markdown').path;
+    await fs.rename(recoveredFile, path.join(fixture.root,'missing-after-retry.md'));
+    assert.equal((await get(feed)).failures[0].retry.verified,false);
   } finally {
     await fixture.stop();
   }
