@@ -17,6 +17,7 @@ import { GUIDE_COVERAGE_VERSION } from '../standard-preprocessing/lib/guide-cove
 import { loadProducerConfig as loadUnifiedProducerConfig, requestProducerText } from '../standard-preprocessing/lib/producer.mjs';
 import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./standard-import-quality.mjs";
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
+import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
 import { extractUrls, urlImportDedupeKey } from "./url-import-input.mjs";
 import { findSourcePublication, withSourcePublication, sourceReuseResult,sourceAliasEvidence,sourceIdentityUrl } from './reading-source-library.mjs';
 import { IMPORT_RULES, zhihuColumnIdentity } from "./import-rule-catalog.mjs";
@@ -27,6 +28,7 @@ import { processCollectionTask } from "./collection-import.mjs";
 import { handleImportCenter } from '../site-import/http.mjs';
 import { processSiteTask } from '../site-import/tasks.mjs';
 import { capturedArticle, findSiteArticleCapture } from '../site-import/article-capture.mjs';
+import { CAPTURE_VERSION } from '../site-import/network.mjs';
 import { taxonomyFolder } from '../site-import/taxonomy.mjs';
 import { fetchYoutubeSubtitleDraft, youtubeVideoIdentity } from "./youtube-subtitle-import.mjs";
 import { LiveCookieSnapshot, defaultCookieDataRoot, COOKIE_SNAPSHOT_ENDPOINT, COOKIE_STATUS_ENDPOINT, safeError as safeCookieSnapshotError } from "./live-cookie-snapshot.mjs";
@@ -118,6 +120,7 @@ const importScript = path.join(__dirname, "import-web-md.mjs");
 const rssReadingScript = path.join(workflowRoot, "rss-reading", "cli.mjs");
 const localTranscribeScript = path.join(__dirname, "local-whispercpp-transcribe.py");
 const readingRoot = path.join(workflowRoot, "阅读区");
+const originalMarkdownBackup = createOriginalMarkdownBackup({ workflowRoot, readingRoot });
 const importsRoot = path.join(workflowRoot, "imports");
 const appRunsRoot = path.join(importsRoot, "app-runs");
 const learningRoot = path.resolve(process.env.LEARNING_PROJECT_ROOT || defaultLearningRoot);
@@ -1306,6 +1309,9 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       orphanState = {state, stateBytes};
     }
   }
+  if (draft.sourceType === 'url_import' && options.anonymousOriginalCapture === true) {
+    await originalMarkdownBackup.capture({ file: target, url: parsed.href, markdown: converted.markdown, authenticated: false });
+  }
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
     : null;
@@ -1542,7 +1548,9 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
       fetched = await fetchUrlImportDraft(url);
     } else {
       if (articleSource) destinationFolder = taxonomyFolder(destinationFolder, source.metadata?.taxonomy);
-      fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[], draft:{id:'site-'+shortHash(source.url),url:source.url,title:source.title,sourceType:'url_import',pageText:source.markdown,cachedRssMarkdown:source.markdown,
+      fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[],
+        anonymousSiteCapture: source.capture_version === CAPTURE_VERSION && !source.metadata?.repository,
+        draft:{id:'site-'+shortHash(source.url),url:source.url,title:source.title,sourceType:'url_import',pageText:source.markdown,cachedRssMarkdown:source.markdown,
         sourceMetadata:{...source.metadata,source_url:url,canonical_url:source.url,input_form:'written',title:source.title,capture_agent:'verified_site_source',source_response:source.source_response,published_at:source.metadata?.published_at||null}},
         fetchReceipt:{source_reused:'verified_site_capture',source_response:source.source_response,browser_tab_created:false} };
     }
@@ -1555,6 +1563,8 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
     result = await writeBrowserDraftCommit({ draft: fetched.draft }, "reading", {
       standardize: processingMode==='standard_preprocess', onProgress, cachedRssMarkdown:fetched.draft.cachedRssMarkdown,
       captureMethod:fetched.fetchReceipt.source_reused,
+      anonymousOriginalCapture: !pendingInputPath && !cachedRssDraft && (fetched.anonymousSiteCapture === true ||
+        (fetched.fetchReceipt.authenticated_fetch === false && !fetched.fetchReceipt.source_reused)),
       missingPublicationHash:articleSource?.missing_publications?.[url]
     });
   } catch (error) {
@@ -2790,6 +2800,7 @@ async function handle(req, res) {
       browserCompletedHighlightRoot,
       browserStateRoot,
       browserPreprocessRoot,
+      originalMarkdownBackup: await originalMarkdownBackup.status(),
       importDestinationRouting: {
         configPath: importDestinationRoutesPath,
         schema: importDestinationRoutes.schema,
@@ -3249,6 +3260,7 @@ async function start() {
   const restartCutoff=Date.now();
   await listen(defaultPort);
   await browserImportBroker.initialize();
+  originalMarkdownBackup.start();
   const recovery=await browserImportBroker.recoverExitedSourceWorkers(previousServer?.pid,{before:restartCutoff});
   if(recovery.recovered)console.log(JSON.stringify({event:'source_workers_recovered_after_restart',...recovery}));
   await resumePendingBackgroundImports();
