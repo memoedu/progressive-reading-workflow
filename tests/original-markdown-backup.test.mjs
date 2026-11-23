@@ -1,0 +1,78 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { createHash } from 'node:crypto';
+import { createOriginalMarkdownBackup } from '../scripts/original-markdown-backup.mjs';
+
+const blob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
+
+async function fixture(t, run) {
+  const workflowRoot = await fs.mkdtemp(path.join(process.env.PROGRESSIVE_READING_TEST_TEMP || os.tmpdir(), 'original-markdown-'));
+  t.after(() => fs.rm(workflowRoot, { recursive: true, force: true }));
+  const readingRoot = path.join(workflowRoot, '阅读区');
+  await fs.mkdir(path.join(workflowRoot, '.local-ir'));
+  await fs.writeFile(path.join(workflowRoot, '.local-ir/original-markdown-backup.json'),
+    JSON.stringify({ repository: 'example/private-archive', origins: ['https://example.org'] }));
+  return {
+    backup: createOriginalMarkdownBackup({ workflowRoot, readingRoot, run }),
+    file: path.join(readingRoot, '分组', '原始.md'),
+    url: 'https://example.org/article',
+    markdown: '# 原标题\r\n\r\n原始的 Markdown。 \r\n',
+    authenticated: false
+  };
+}
+
+test('archives exact anonymous Markdown once and preserves an existing different blob', async t => {
+  const remote = new Map();
+  let writes = 0;
+  const { backup, ...source } = await fixture(t, async (program, args, input) => {
+    if (program === 'gitleaks') return { code: 0 };
+    if (args.includes('repos/example/private-archive')) return { code: 0, stdout: 'true\tfalse\tmain' };
+    const endpoint = args.find(arg => arg.includes('/contents/')).split('?')[0];
+    if (!args.includes('PUT')) return remote.has(endpoint) ? { code: 0, stdout: remote.get(endpoint) } : { code: 1, missing: true };
+    const body = JSON.parse(input);
+    assert.equal(body.branch, 'main');
+    assert.equal('sha' in body, false);
+    const raw = Buffer.from(body.content, 'base64');
+    assert.deepEqual(raw, Buffer.from(source.markdown));
+    remote.set(endpoint, blob(raw));
+    writes++;
+    return { code: 0, stdout: blob(raw) };
+  });
+  const first = 'repos/example/private-archive/contents/' + ['分组', '原始.md'].map(encodeURIComponent).join('/');
+  remote.set(first, 'older-blob');
+  await backup.capture(source);
+  await backup.flush();
+  assert.equal(writes, 1);
+  assert.equal(remote.get(first), 'older-blob');
+  assert.equal((await backup.status()).queued, 0);
+  await backup.capture(source);
+  await backup.flush();
+  assert.equal(writes, 1);
+});
+
+test('holds scan findings, retries unavailable GitHub, and ignores login-bound sources', async t => {
+  let online = false;
+  let scanned = 0;
+  const { backup, ...source } = await fixture(t, async program => {
+    if (program === 'gitleaks') {
+      scanned++;
+      return { code: 12 };
+    }
+    return { code: 0, stdout: online ? 'true\tfalse\tmain' : 'false\tfalse\tmain' };
+  });
+  await backup.capture({ ...source, authenticated: true });
+  await backup.capture({ ...source, url: 'https://another.example.org/article' });
+  assert.equal((await backup.status()).queued, 0);
+  await backup.capture(source);
+  await backup.flush();
+  assert.equal((await backup.status()).queued, 1);
+  assert.equal(scanned, 0);
+  online = true;
+  await backup.flush();
+  assert.equal((await backup.status()).held, 1);
+  assert.equal((await backup.status()).queued, 0);
+  assert.equal(scanned, 1);
+});

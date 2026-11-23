@@ -22,6 +22,7 @@ npm run app
 ## 导入与订阅
 
 - 网页链接进入持久后台队列；浏览器捕获的当前页快照也使用同一处理和发布流程。
+- 可将经匿名抓取的网页原始 Markdown 自动备份到指定的私有 GitHub 仓库。见 [原始 Markdown 备份](docs/ORIGINAL_MARKDOWN_BACKUP.md)。
 - 整站来源可编辑范围、处理方式与相对目录；Codex 识别站点后先核全目录和正文，再分批发布。整站、RSS 和单篇导入按来源全局复用，保留现有正文与批注。具体操作见 [导入管理](docs/WEB_IMPORT_PAGE.md)。
 - TXT、EPUB、PDF、DOCX 的提取及章节工具见 [rich-text-import](rich-text-import/README.md)。完整书籍的额外编排工具属于可选集成，不是网页导入的运行依赖。
 - YouTube 使用可用字幕；无字幕时不自动转入 ASR。B 站视频和合集订阅复用字幕与可选图文处理。
