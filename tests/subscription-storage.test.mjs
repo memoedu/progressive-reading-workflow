@@ -73,3 +73,14 @@ test('moving linked documents updates ordinary links and preserves code and anno
   const after=relocatedMarkdown(before,source,target,new Map([[other,next]]),root);
   assert.match(after,/\[Other\]\(<b.md>\)/);assert.match(after,/> Annotation\./);assert.match(after,/```md\n\[Literal\]\(b.md\)\n```/);
 });
+
+test('large inline media and code survive reference repair without losing adjacent links',()=>{
+  const directory=path.resolve('D:/fixture/reading');
+  const file=path.join(directory,'article.md');
+  const mapping=new Map([[path.join(directory,'old.md'),path.join(directory,'new.md')]]);
+  const media='![Original capture](data:image/png;base64,'+'A'.repeat(16*1024*1024)+')';
+  const literal='``code ` [Literal](old.md)``';
+  const title='[Related](<old.md#section>)';
+  const before=`${media} ${literal} ${title}\n`;
+  assert.equal(relocatedMarkdown(before,file,file,mapping,directory),`${media} ${literal} [Related](<new.md#section>)\n`);
+});

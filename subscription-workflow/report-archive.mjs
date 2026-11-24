@@ -159,6 +159,50 @@ export function relocatedPath(value, mapping, workflowRoot) {
   return value;
 }
 
+// Walk destinations without a greedy backtracking expression. Archived images
+// can have data URIs millions of characters long on one Markdown line.
+function replaceMarkdownDestinations(line, replacement) {
+  if (!line.includes("](")) return line;
+  const ticks = [...line.matchAll(/`+/gu)];
+  const next = new Map();
+  const closingTick = new Array(ticks.length);
+  for (let index = ticks.length - 1; index >= 0; index--) {
+    const size = ticks[index][0].length;
+    closingTick[index] = next.get(size);
+    next.set(size, index);
+  }
+  const parts = [];
+  let copied = 0, consumed = 0, tick = 0, codeEnd = 0, angleEnd;
+  for (const match of line.matchAll(/\]\(/gu)) {
+    const index = match.index;
+    if (index < consumed) continue;
+    while (tick < ticks.length && ticks[tick].index < index) {
+      if (ticks[tick].index < consumed) { tick++; continue; }
+      const end = closingTick[tick++];
+      if (end === undefined) continue;
+      codeEnd = ticks[end].index + ticks[end][0].length;
+      tick = end + 1;
+    }
+    if (index < codeEnd) continue;
+    const start = index + 2;
+    let end = start;
+    if (line[start] === "<") {
+      if (angleEnd !== -1 && (angleEnd === undefined || angleEnd <= start)) angleEnd = line.indexOf(">", start + 1);
+      if (angleEnd > start + 1 && line[angleEnd + 1] === ")" && !line.slice(start, angleEnd).includes("\r")) end = angleEnd + 1;
+    }
+    if (end === start) while (end < line.length && !/[\s()]/u.test(line[end])) end++;
+    if (end === start || line[end] !== ")") continue;
+    consumed = end + 1;
+    const original = line.slice(index, consumed);
+    const changed = replacement(original, line.slice(start, end));
+    if (changed !== original) {
+      parts.push(line.slice(copied, index), changed);
+      copied = consumed;
+    }
+  }
+  return parts.length ? parts.join("") + line.slice(copied) : line;
+}
+
 export function relocatedMarkdown(text, source, target, mapping = new Map(), workflowRoot) {
   let fence = null;
   return text.split(/(?<=\n)/u).map(line=>{
@@ -169,13 +213,14 @@ export function relocatedMarkdown(text, source, target, mapping = new Map(), wor
       return line;
     }
     if (fence) return line;
-    return line.replace(/(`+[^\r\n]*?`+)|(\]\()(<[^>\r\n]+>|[^\s()]+)(\))/gu,(match,code,open,destination,close)=>{
-      if (code) return match;
+    return replaceMarkdownDestinations(line,(match,destination)=>{
       const raw = destination.startsWith("<") ? destination.slice(1,-1) : destination;
       const mappedUri=/^(?:file|obsidian):|^[a-z]:[\\/]/iu.test(raw)?relocatedPath(raw,mapping,workflowRoot):raw;
-      if(mappedUri!==raw)return `${open}<${mappedUri}>${close}`;
+      if(mappedUri!==raw)return `](<${mappedUri}>)`;
       if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/iu.test(raw)) return match;
-      const [,pathname,suffix] = /^([^#?]*)([\s\S]*)$/u.exec(raw);
+      const separator = raw.search(/[#?]/u);
+      const pathname = separator < 0 ? raw : raw.slice(0, separator);
+      const suffix = separator < 0 ? "" : raw.slice(separator);
       let decoded;
       try { decoded = decodeURI(pathname); } catch { return match; }
       const absolute = path.resolve(path.dirname(source),decoded);
@@ -183,7 +228,7 @@ export function relocatedMarkdown(text, source, target, mapping = new Map(), wor
       if(source===target&&mapped===absolute)return match;
       const relative = path.relative(path.dirname(target),mapped).replaceAll("\\","/");
       const encoded = encodeURI(relative).replaceAll("#","%23").replaceAll("?","%3F");
-      return `${open}<${encoded+suffix}>${close}`;
+      return `](<${encoded+suffix}>)`;
     });
   }).join("");
 }
