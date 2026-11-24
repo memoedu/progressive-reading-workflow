@@ -9,6 +9,7 @@ import {pageBookResource} from './book-resources.mjs';
 import {pageKind} from './page-kind.mjs';
 export const CAPTURE_VERSION='site-body/v2';
 const ARTICLE_HTML_LIMIT = 32 * 1024 * 1024;
+const isMarkdownType = type => /^(?:text\/(?:x-)?markdown)(?:;|$)/iu.test(type||'');
 
 export function sitePageUrl(value) {
   const pathname = new URL(value).pathname;
@@ -84,7 +85,7 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbac
     }
   }
   let title='',markdown='',metadata={};
-  const nativeMarkdown=/^(?:text\/(?:x-)?markdown)(?:;|$)/iu.test(response.content_type||'');
+  const nativeMarkdown=isMarkdownType(response.content_type);
   if(recipe?.type!=='json'&&!nativeMarkdown){
     if(/^(?:image|video|audio)\/|^application\/(?:pdf|zip|octet-stream)(?:;|$)/iu.test(response.content_type||''))
       return {excluded:true,url,reason:'站点地址指向附件或媒体文件'};
@@ -111,25 +112,38 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbac
     title=/^title:\s*(.+)$/imu.exec(markdown)?.[1]?.replace(/^["']|["']$/gu,'')||/^#\s+(.+)$/mu.exec(markdown)?.[1]||new URL(url).pathname;
     metadata.taxonomy=articleTaxonomy({});
   } else {
-    let html=response.body,selectedBody=false;
-    if(recipe?.body_selector){
-      const dom=new JSDOM(html,{url});
-      try{
-        const body=dom.window.document.querySelector(recipe.body_selector);
-        if(body){html=body.outerHTML;title=dom.window.document.title;selectedBody=true;}
-      }finally{dom.window.close();}
-      if(!selectedBody){
+    let html=response.body,selectedBody=false,declaredSource='',pageTitle='';
+    const dom=new JSDOM(html,{url:response.url});
+    try{
+      const document=dom.window.document;
+      pageTitle=document.title;
+      const body=recipe?.body_selector?document.querySelector(recipe.body_selector):null;
+      if(body){html=body.outerHTML;title=pageTitle;selectedBody=true;}
+      const origin=new URL(response.url).origin;
+      declaredSource=[...document.head.querySelectorAll('link[rel~="alternate"][type][href]')]
+        .find(link=>isMarkdownType(link.type)&&URL.canParse(link.href)&&new URL(link.href).origin===origin&&link.href!==response.url)?.href||'';
+      metadata.taxonomy=articleTaxonomy({categories:[...document.querySelectorAll('a[rel~=category],meta[property="article:section"]')].map(n=>n.content||n.textContent.trim()),tags:[...document.querySelectorAll('a[rel~=tag],meta[property="article:tag"]')].map(n=>n.content||n.textContent.trim())});
+    }finally{dom.window.close();}
+    if(declaredSource){
+      const original=await fetchPage(declaredSource,{base:response.url,maxBytes:ARTICLE_HTML_LIMIT}).catch(()=>null);
+      if(original&&isMarkdownType(original.content_type)&&original.body.trim()){
+        response=original;
+        markdown=original.body;
+        title=pageTitle||new URL(url).pathname;
+      }
+    }
+    if(!markdown){
+      if(recipe?.body_selector&&!selectedBody){
         if(!fallbackHtml)throw new Error('站点指定的正文区域不存在');
         const {authReason,jsReason}=htmlDetails(html,response.url);
         if(authReason)throw new Error('来源需要登录：'+authReason);
         if(jsReason)throw new Error('来源未返回正文，需要浏览器渲染：'+jsReason);
       }
+      const converted=htmlArticleToMarkdown({html,sourceUrl:url,title,extractArticle:!selectedBody});
+      title=title || converted.title;markdown=converted.markdown;
+      if(/^(?:loading[. …]*|正在加载[. …]*)$/iu.test(markdown.trim()) || markdown.replace(/\s/gu,'').length<20)throw new Error('网页未提供可核验正文，需要站点正文接口');
     }
-    const converted=htmlArticleToMarkdown({html,sourceUrl:url,title,extractArticle:!selectedBody});
-    title=title || converted.title;markdown=converted.markdown;
-    if(/^(?:loading[. …]*|正在加载[. …]*)$/iu.test(markdown.trim()) || markdown.replace(/\s/gu,'').length<20)throw new Error('网页未提供可核验正文，需要站点正文接口');
   }
   if(!markdown.trim()||!title)throw new Error('来源缺少完整正文或文章标题');
-  if(!metadata.taxonomy){const dom=new JSDOM(response.body,{url});try{metadata.taxonomy=articleTaxonomy({categories:[...dom.window.document.querySelectorAll('a[rel~=category],meta[property="article:section"]')].map(n=>n.content||n.textContent.trim()),tags:[...dom.window.document.querySelectorAll('a[rel~=tag],meta[property="article:tag"]')].map(n=>n.content||n.textContent.trim())});}finally{dom.window.close();}}
   return {capture_version:CAPTURE_VERSION,url,title,markdown,source_response:{url:response.url,sha256:response.sha256,bytes:response.bytes,content_type:response.content_type},metadata};
 }
