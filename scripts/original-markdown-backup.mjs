@@ -50,8 +50,8 @@ function originalOrigin(value) {
   return null;
 }
 
-function publicPrivateData(item, emailFingerprints) {
-  const text = (item.relative + '\n' + item.markdown).replace(/%[a-f0-9]{2}/giu, encoded => String.fromCharCode(parseInt(encoded.slice(1), 16)));
+export function publicArchiveContainsPrivateData(relative, markdown, emailFingerprints = []) {
+  const text = (relative + '\n' + markdown).replace(/%[a-f0-9]{2}/giu, encoded => String.fromCharCode(parseInt(encoded.slice(1), 16)));
   if (readerData.test(text) || credentialLink.test(text)) return true;
   return [...text.matchAll(emailAddress)].some(([email]) => emailFingerprints.includes(sha256(email.toLowerCase())));
 }
@@ -138,7 +138,7 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
       const bytes = Buffer.from(item.markdown || '', 'utf8');
       if (!config.origins.includes(item.origin) || item.repository !== config.repository || !archivePath.test(item.relative)
           || !bytes.length || bytes.length > maxBytes || sha256(bytes) !== item.sha256 || credentialLink.test(item.markdown)
-          || (config.visibility === 'public' && publicPrivateData(item, config.privateEmailSha256))) {
+          || (config.visibility === 'public' && publicArchiveContainsPrivateData(item.relative, item.markdown, config.privateEmailSha256))) {
         await hold(file, name);
         continue;
       }

@@ -6,6 +6,19 @@
   <header><div><p class="eyebrow">渐进阅读 / 订阅</p><h1>订阅与阅读安排</h1><p class="intro">在这里管理来源和处理方式，在 Markdown 日报、周报中选择想读的内容。</p></div><nav aria-label="页面导航"><a href="/imports">导入管理</a><a href="/import-candidates">可导入清单</a><a href="#reports">日报与周报</a></nav></header>
   <p id="health" class="notice" role="status">正在读取订阅状态…</p>
   <p id="message" role="status" aria-live="polite"></p>
+  <details class="section disabled-subscriptions" id="shared-library">
+    <summary><h2>共享资料库</h2></summary>
+    <label class="check"><input id="shared-enabled" type="checkbox" checked>同步新增材料</label>
+    <p id="shared-library-status" class="hint" role="status">正在读取同步设置…</p>
+    <form id="shared-library-login" hidden>
+      <div class="form-grid">
+        <label>订阅账号<input id="shared-account" autocomplete="username" required maxlength="48"></label>
+        <label>密码<input id="shared-password" type="password" autocomplete="current-password" required maxlength="160"></label>
+      </div>
+      <div class="actions"><button id="shared-login" type="submit">登录</button></div>
+    </form>
+    <div class="actions"><button id="shared-logout" class="secondary" type="button" hidden>退出登录</button></div>
+  </details>
   <p id="zhihu-validation" class="hint" hidden></p>
   <section class="section" aria-labelledby="sources-title">
     <div class="section-head"><div><h2 id="sources-title">订阅来源</h2><p class="hint">在编辑中设置接收范围。扩大范围后，下次检查会补收来源仍可取得的内容。</p></div><button id="add" type="button">添加订阅</button></div>

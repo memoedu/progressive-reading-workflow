@@ -2,7 +2,7 @@ const $=id=>document.getElementById(id);
 // Hallmark · component critique: P4 H5 E4 S5 R5 V4; existing tokens retained.
 const kinds={rss:'RSS / Atom',bilibili_video:'B 站多 P 视频',bilibili_collection:'B 站合集',zhihu_author:'知乎作者',zhihu_column:'知乎专栏',github_repository:'GitHub Markdown 仓库'};
 const modes={standard_preprocess:'标准流程，自动入库',original_text:'提取原文，自动入库',reports:'日报 / 周报与阅读操作'};
-const states={queued:'排队中',pending:'待处理',processing:'处理中',running:'运行中',waiting_source:'等待来源',blocked:'处理受阻',source_blocked:'来源受限',verification_failed:'待重新核验',retry_wait:'等待下个周期重试',completed:'完成',completed_with_issues:'完成，部分待处理',failed:'失败',route_conflict:'需要选择模式',awaiting_review:'等待勾选',imported:'已入库',imported_with_warnings:'已入库，有提示',warning:'可导入，有提示'};
+const states={queued:'排队中',pending:'待处理',processing:'处理中',shared_pending_review:'投稿待合并',running:'运行中',waiting_source:'等待来源',blocked:'处理受阻',source_blocked:'来源受限',verification_failed:'待重新核验',retry_wait:'等待下个周期重试',completed:'完成',completed_with_issues:'完成，部分待处理',failed:'失败',route_conflict:'需要选择模式',awaiting_review:'等待勾选',imported:'已入库',imported_with_warnings:'已入库，有提示',warning:'可导入，有提示'};
 let current=null,editing=null,refreshing=false;
 const jobNames={rss:'RSS 检查',bilibili:'B 站检查',zhihu:'知乎检查',daily:'日报',weekly:'周报',decisions:'勾选处理',retry:'堵塞项重试',video_import:'视频图文导入'};
 const stepNames={scan:'检查来源',previews:'处理材料',decisions:'处理勾选',report:'生成报告',activity:'写入入库动态',
@@ -153,6 +153,13 @@ function render(data){current=data;if(!data.initialized){$('health').textContent
     const row=element('div',undefined,'queue-row'+(item.severity?' issue-'+item.severity:''));
     row.append(element('h3',item.title||'订阅任务'),element('p',item.severity==='blocking'?'暂不能导入':states[item.status]||item.status,'hint'));
     if(item.message||item.error)row.append(element('p',item.message||readableError(item.error),item.severity==='warning'?'hint':'error'));
+    if (/^https:\/\/github\.com\/memoedu\/progressive-reading-library\/pull\/[1-9][0-9]*$/u.test(item.shared_library?.pull_request || '')) {
+      const pull = element('a','查看待合并投稿');
+      pull.href = item.shared_library.pull_request;
+      pull.target = '_blank';
+      pull.rel = 'noopener noreferrer';
+      row.append(pull);
+    }
     if(item.source_paused)row.append(element('p','来源已停用；单篇导入不会重新启用订阅。','hint'));
     const actions=element('div',undefined,'actions');
     if(item.can_import)actions.append(button('仍要导入原文',()=>importWarning(item),''));
@@ -200,7 +207,37 @@ document.querySelectorAll('[data-run]').forEach(node=>{
 $('refresh').onclick=()=>busy($('refresh'),refresh);
 modeHelp();
 scopeHelp();
-await refresh();
+const sharedSettingsUrl = '/api/subscriptions/shared-library';
+function showSharedLibrary(state) {
+  $('shared-enabled').checked = state.enabled;
+  $('shared-library-login').hidden = !state.configured || state.signed_in;
+  $('shared-logout').hidden = !state.signed_in;
+  $('shared-library-status').textContent = !state.configured ? '尚未连接同步服务器。' : !state.enabled ?
+    '新增材料使用本地导入。' : state.signed_in ? '已登录，试点订阅的新增材料将同步到公开资料库。' :
+      '试点订阅可复用公开资料，新增材料由服务器代提 PR。';
+}
+async function refreshSharedLibrary() {
+  try { showSharedLibrary(await api(sharedSettingsUrl)); }
+  catch { $('shared-library-status').textContent = '暂时无法读取共享资料库设置。'; }
+}
+$('shared-enabled').onchange = async event => {
+  const field = event.target;
+  field.disabled = true;
+  try { showSharedLibrary(await api(sharedSettingsUrl, { enabled: field.checked })); }
+  catch { await refreshSharedLibrary(); message('未能保存同步设置，请重试。', true); }
+  finally { field.disabled = false; }
+};
+$('shared-library-login').onsubmit = event => {
+  event.preventDefault();
+  return busy($('shared-login'), async () => {
+    try { showSharedLibrary(await api(sharedSettingsUrl, { action: 'login',
+      account: $('shared-account').value.trim(), password: $('shared-password').value })); }
+    finally { $('shared-password').value = ''; }
+  });
+};
+$('shared-logout').onclick = () => busy($('shared-logout'),
+  async () => showSharedLibrary(await api(sharedSettingsUrl, { action: 'logout' })));
+await Promise.all([refreshSharedLibrary(), refresh()]);
 let lastPoll=Date.now();
 setInterval(()=>{
   if(document.hidden || (!trackedRuns.size && (editing || Date.now()-lastPoll<15000)))return;

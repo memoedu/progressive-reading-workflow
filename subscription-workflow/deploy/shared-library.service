@@ -1,0 +1,20 @@
+[Unit]
+Description=Progressive Reading shared library
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+LoadCredential=sync.json:/etc/progressive-reading-sync/config.json
+Environment=PROGRESSIVE_READING_SYNC_CONFIG=%d/sync.json
+WorkingDirectory=/opt/progressive-reading-sync/app
+ExecStart=/opt/decision-workbench/runtime/node-v24.22.2-linux-x64/bin/node --preserve-symlinks-main /opt/progressive-reading-sync/app/subscription-workflow/shared-library-service.mjs
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

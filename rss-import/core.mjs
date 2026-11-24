@@ -6,6 +6,7 @@ import { fetchText } from '../rss-source/cli.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { DEFAULT_HOME, loadConfig } from './config.mjs';
 import { includesPublication, retainedFeedSnapshots } from '../subscription-workflow/history.mjs';
+import { resolveSharedSubscription } from '../subscription-workflow/shared-library-client.mjs';
 export { DEFAULT_HOME, CONFIG_NAME, parseConfig, loadConfig } from './config.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -219,7 +220,7 @@ export class RssImporter {
   async advance(config, backend) {
     let inFlight = 0;
     for (const item of Object.values(this.state.items)) {
-      if (item.status !== 'processing') continue;
+      if (!['processing', 'shared_pending_review'].includes(item.status)) continue;
       try {
         // An uncertain POST always reuses its persisted client_request_id.
         if (!item.request_id) {
@@ -229,9 +230,22 @@ export class RssImporter {
             item.error=modes.length>1 ? 'article_in_multiple_import_modes' : null;
             await this.save(); continue;
           }
-          const cached = /^[a-f0-9]{64}$/u.test(item.cached_article_hash || '')
+          const previousShare = item.shared_library;
+          const waitForReview = previousShare?.status === 'pending_review' && Date.parse(previousShare.next_check_at) > this.now();
+          if (waitForReview) continue;
+          const shared = await resolveSharedSubscription(this.workflowRoot, item.url, previousShare);
+          if (shared?.status === 'pending_review') {
+            item.shared_library = { ...shared, next_check_at: new Date(this.now() + 60_000).toISOString() };
+            item.status = 'shared_pending_review';
+            item.error = '共享资料库投稿待合并。';
+            await this.save();
+            continue;
+          }
+          if (shared) item.shared_library = { status: shared.status, commit: shared.commit, sha256: shared.sha256 };
+          else delete item.shared_library;
+          const cached = shared?.article || (/^[a-f0-9]{64}$/u.test(item.cached_article_hash || '')
             ? await readJson(path.join(this.home,'cached-articles',hash(urlImportDedupeKey(item.url)),item.cached_article_hash+'.json'))
-            : null;
+            : null);
           const created = await this.request(backend.base + '/api/browser-import/requests', {
             urls: [item.url], source: 'rss_auto_import', entry_route: 'ai',
             destination_folder: item.destination_folder, client_request_id: item.client_request_id, user_instruction: '',
@@ -241,6 +255,7 @@ export class RssImporter {
           });
           if (!created.request_id) throw new Error('missing_request_id');
           item.request_id = created.request_id;
+          item.status = 'processing';
           await this.save();
         }
         const response = await this.request(backend.base + '/api/browser-import/requests/' + encodeURIComponent(item.request_id));
