@@ -14,6 +14,21 @@ import { processCollectionTask } from '../scripts/collection-import.mjs';
 const base='https://independent.example';
 const body='# 原始材料\n\n保留中文、公式 $a^2+b^2$、链接与代码。\n\n```js\nconst source = 1;\n```\n';
 const temp=()=>fs.mkdtemp('D:/Artifacts/ProgressiveReading/site-test-');
+
+test('article discovery can read large HTML archives within a separate bounded body limit',async()=>{
+  const html='<html><head><title>Long archive</title></head><body><article><h1>Original</h1><p>This document contains the complete evidence for the independently published historical article.</p></article></body></html>';
+  const url=base+'/archived-article.html';
+  const size=15*1024*1024;
+  const fetchPage=async(requested,options)=>{
+    assert.equal(requested,url);
+    if((options.maxBytes||0)<size)throw new Error('站点响应超过完整读取上限');
+    assert.ok(options.maxBytes<=32*1024*1024);
+    return {url,body:html,sha256:digest(html),bytes:size,content_type:'text/html'};
+  };
+  const captured=await captureArticle(url,{type:'html',body_selector:'article'},{fetchPage,fallbackHtml:true});
+  assert.match(captured.markdown,/complete evidence/u);
+  assert.equal(captured.source_response.bytes,size);
+});
 test('encoded source decoding, query/path templates and scope are generic',()=>{
   for(const [encoding,value]of [['base64_deflate',deflateSync(body)],['base64_gzip',gzipSync(body)],['base64',Buffer.from(body)]])assert.equal(decodeBody(value.toString('base64'),encoding),body);
   assert.equal(decodeBody(gzipSync(body).toString('base64'),'base64_deflate'),body);
