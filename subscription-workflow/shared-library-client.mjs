@@ -78,13 +78,14 @@ async function articleBytes(response, maxBytes = 700000) {
   return Buffer.concat(chunks, length);
 }
 
-export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch, lookupOnly = false } = {}) {
+export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch, lookupOnly = false, publicSourcesOnly = false } = {}) {
   const canonical = sharedArticleUrl(url);
   if (!canonical) return null;
   const state = await settings(root);
   if (!state.enabled || !state.endpoint) return null;
   const pending = previous?.status === 'pending_review';
-  const hashOnly = lookupOnly || (state.endpoint === defaultEndpoint && !defaultArticleOrigins.has(new URL(canonical).origin));
+  const publicOrigin = defaultArticleOrigins.has(new URL(canonical).origin);
+  const hashOnly = lookupOnly || (!publicOrigin && (publicSourcesOnly || state.endpoint === defaultEndpoint));
   let result;
   try { result = hashOnly ? await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl)
     : await request(state, pending ? 'status' : 'resolve', { url: canonical }, fetchImpl); }

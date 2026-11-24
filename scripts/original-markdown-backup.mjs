@@ -56,7 +56,7 @@ export function publicArchiveContainsPrivateData(relative, markdown, emailFinger
   return [...text.matchAll(emailAddress)].some(([email]) => emailFingerprints.includes(sha256(email.toLowerCase())));
 }
 
-export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = command }) {
+export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = command, mayWrite = () => true }) {
   const home = path.join(workflowRoot, '.local-ir', 'original-markdown-backup');
   const pending = path.join(home, 'pending');
   const held = path.join(home, 'held');
@@ -114,7 +114,7 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
 
   async function drain() {
     const config = await settings();
-    if (!config) return;
+    if (!config || !await mayWrite(config)) return;
     const items = await queuedFiles(pending);
     if (!items.length) { lastError = null; return; }
     const remote = await github(['repos/' + config.repository, '--jq', '[.private, .archived, .default_branch] | @tsv']);
@@ -148,6 +148,7 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
         continue;
       }
       if (scan.code !== 0) throw new Error('backup_credential_scan_failed');
+      if (!await mayWrite(config)) return;
       const result = await writeRemote(config.repository, item.relative, bytes, item.sha256);
       if (result === false) await hold(file, name);
       else await fs.unlink(file);
@@ -171,7 +172,7 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
       let temp;
       try {
         const config = await settings();
-        if (!config?.origins.includes(origin)) return;
+        if (!config?.origins.includes(origin) || !await mayWrite(config)) return;
         const hash = sha256(markdown);
         const id = sha256([config.repository, relative, hash].join('\0'));
         await fs.mkdir(pending, { recursive: true });
@@ -190,7 +191,7 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
       try {
         const config = await settings();
         const [queue, rejected] = await Promise.all([queuedFiles(pending), queuedFiles(held)]);
-        return { enabled: Boolean(config), queued: queue.length, held: rejected.length, lastError };
+        return { enabled: Boolean(config) && await mayWrite(config), queued: queue.length, held: rejected.length, lastError };
       } catch {
         return { enabled: false, lastError: 'invalid_backup_configuration' };
       }
