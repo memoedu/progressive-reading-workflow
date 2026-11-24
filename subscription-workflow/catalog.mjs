@@ -30,7 +30,7 @@ export async function saveSourceMaterial(root, source, item, markdown, extra = {
     const requestPath = path.join(directory, 'revisions', contentHash, 'preprocess-request.json');
     const request = buildPreprocessRequest({ markdown, metadata: { item_url: item.url, title: record.title,
       author: record.author, published_at: record.published_at, fetched_at: new Date().toISOString(),
-      content_completeness: 'full', original_source_ref: record.source_ref || item.url } });
+      content_completeness: 'full', original_source_ref: record.source_ref || item.url, shared_library: record.shared_library } });
     request.source_type = record.platform === 'bilibili' ? 'video' : 'web';
     request.source_metadata.subscription_ids = subscriptions;
     request.source_metadata.platform = record.platform;

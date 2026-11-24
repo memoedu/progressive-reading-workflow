@@ -1,0 +1,12 @@
+{
+  "public_rss": [
+    { "feed": "https://www.benkuhn.net/index.xml", "folder": "Ben Kuhn", "article_origins": ["https://www.benkuhn.net"] },
+    { "feed": "https://www.ruanyifeng.com/blog/atom.xml", "folder": "阮一峰的网络日志", "article_origins": ["https://www.ruanyifeng.com"] },
+    { "feed": "https://www.justinmath.com/feed.xml", "folder": "Justin Math", "article_origins": ["https://justinmath.com", "https://www.justinmath.com"] },
+    { "feed": "https://letters.thedankoe.com/feed", "folder": "Dan Koe Letters", "article_origins": ["https://letters.thedankoe.com"] },
+    { "feed": "https://kirigaya.cn/rss.xml", "folder": "汇尘轩 · 锦恢的博客", "article_origins": ["https://kirigaya.cn"] },
+    { "feed": "https://www.neelnanda.io/blog?format=rss", "folder": "Neel Nanda", "article_origins": ["https://www.neelnanda.io"] },
+    { "feed": "https://nintil.com/rss.xml", "folder": "Nintil", "article_origins": ["https://nintil.com"] }
+  ],
+  "public_materials": []
+}

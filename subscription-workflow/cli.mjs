@@ -1,12 +1,26 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { codeRoot, initialize, paths, loadConfig, writeJson, withLock } from './config.mjs';
 import { JOB_KINDS, enqueue, enqueueVideoRequest, launchWorker, drain, status, initializeActivity, localDate } from './service.mjs';
+import { downloadSharedVersion, resolveSharedMaterial } from './shared-library-client.mjs';
 
 export async function main(argv=process.argv.slice(2)) {
   const command=argv[0],options={};
   for(let i=1;i<argv.length;i+=2)options[argv[i].replace(/^--/u,'')]=argv[i+1];
   const root=options.root?path.resolve(options.root):codeRoot;
+  if(command==='download-shared-version'||command==='sync-shared-material') {
+    if (!options.output) throw new Error('需要 --output 指定新文件位置');
+    const result=command==='download-shared-version'
+      ? await downloadSharedVersion(root,{url:options.url,kind:options.kind,sha256:options.sha256})
+      : await resolveSharedMaterial(root,options.sha256,{lookupOnly:options['lookup-only']==='true'});
+    if (!result) return {status:'unavailable'};
+    const {bytes,...receipt}=result;
+    if (!bytes) return receipt;
+    const output=path.resolve(options.output);
+    await fs.writeFile(output,bytes,{flag:'wx'});
+    return {...receipt,output};
+  }
   if(command==='init') {const config=await initialize(root);await initializeActivity(root);return {status:'initialized',enabled:config.enabled,subscriptions:config.subscriptions.length};}
   if(command==='activate')return withLock(paths(root).config+'.lock',async()=>{const config=await loadConfig(root);if(!config)throw new Error('请先初始化');await initializeActivity(root);config.enabled=true;config.revision++;await writeJson(paths(root).config,config);return {status:'active'};});
   if(command==='status')return status(root);
