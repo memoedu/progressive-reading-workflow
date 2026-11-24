@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {organizeSiteFiles,remapReceipts} from '../site-import/organization.mjs';
 import {articleTaxonomy} from '../site-import/taxonomy.mjs';
 import {writeSiteIndexes} from '../site-import/indexes.mjs';
@@ -71,6 +72,28 @@ test('generated index ownership survives checked relocation and still protects h
   const inventory={articles:[{url,title:'First',taxonomy:articleTaxonomy({tags:['Topic']})}]},records=[{url,path:path.join(path.dirname(file),'标签/Topic/first.md')}];
   const written=await writeSiteIndexes(root,settings,inventory,records,runId('owned-next'));assert.equal(written.index,file);assert.match(await fs.readFile(file,'utf8'),/## 标签/u);
   await fs.appendFile(file,'\nHandwritten note\n');const before=await fs.readFile(file,'utf8'),next=await writeSiteIndexes(root,settings,{articles:[]},[],runId('owned-edited'));assert.notEqual(next.index,file);assert.equal(await fs.readFile(file,'utf8'),before);
+});
+
+test('generated article and group links resolve literal hash and percent characters',async t=>{
+  const root=await fs.mkdtemp(path.join(process.env.WEB_IMPORT_TEST_ROOT||'D:/Artifacts/ProgressiveReading','site-index-url-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const settings={id:'paths',name:'Independent',url:'https://index-paths.test',destination:'整站/Independent'};
+  const article={url:'https://index-paths.test/article',title:'A #1 (100%)',taxonomy:articleTaxonomy({tags:['Topic #2']})};
+  const file=path.join(root,'阅读区',settings.destination,'A #1 (100%).md');
+  await fs.mkdir(path.dirname(file),{recursive:true});
+  await fs.writeFile(file,'Article file');
+  const written=await writeSiteIndexes(root,settings,{articles:[article]},[{url:article.url,path:file}],runId('literal-url'));
+  const target=async index=>{
+    const body=await fs.readFile(index,'utf8');
+    const link=/\]\(<([^>]+)>\)/u.exec(body)[1];
+    const url=new URL(link,pathToFileURL(index));
+    assert.equal(url.hash,'');
+    assert.equal(url.search,'');
+    assert.match(link,/%23/u);
+    return fileURLToPath(url);
+  };
+  const group=await target(written.index);
+  assert.equal(await target(group),path.resolve(file));
 });
 
 test('the exact legacy flat generator is upgraded after native URL-encoded link changes',async()=>{
