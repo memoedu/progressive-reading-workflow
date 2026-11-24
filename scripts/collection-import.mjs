@@ -60,14 +60,19 @@ export async function processCollectionTask(task, { broker, discover, runRequest
       let executionError;
       const settled = execution.catch(error => { executionError = error; });
       let latest;
+      let previousRevision;
       do {
         if (executionError) throw executionError;
         latest = await broker.getRequest(request.request_id);
         if (!latest) throw new Error("collection_child_request_missing");
-        const retained = new Map(collection.results.map(row => [row.requested_url, row]));
-        for (const row of latest.results) retained.set(row.requested_url, row);
-        collection.results = [...retained.values()];
-        await progress();
+        const revision = JSON.stringify([latest.updated_at, latest.status, latest.results.map(row => row.status)]);
+        if (revision !== previousRevision) {
+          const retained = new Map(collection.results.map(row => [row.requested_url, row]));
+          for (const row of latest.results) retained.set(row.requested_url, row);
+          collection.results = [...retained.values()];
+          await progress();
+          previousRevision = revision;
+        }
         if (!latest.terminal) await wait(pollMs);
       } while (!latest.terminal);
       await settled;

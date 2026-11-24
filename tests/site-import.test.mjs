@@ -83,6 +83,21 @@ test('collection resume preserves batch membership after prior results were save
   await processCollectionTask(task,{broker,runRequest:async()=>{},pollMs:1});
   assert.deepEqual(calls,[urls.slice(50)]);assert.equal(collection.results.length,52);
 });
+test('collection polling checkpoints only when the child request changes',async()=>{
+  const url=base+'/article';
+  const working={updated_at:'first',status:'processing',terminal:false,results:[{requested_url:url,status:'claimed'}]};
+  const done={updated_at:'second',status:'completed',terminal:true,results:[{requested_url:url,status:'imported'}]};
+  const polls=[working,working,working,done];
+  let writes=0;
+  const broker={
+    createRequest:async()=>({request_id:'child'}),getRequest:async()=>polls.shift(),
+    updateTaskProgress:async()=>{writes++;},completeTask:async(_id,{ok})=>assert.equal(ok,true)
+  };
+  const task={id:'parent',requested_url:base,collection:{phase:'importing',inventory:{complete:true,articles:[{url}]},batches:[],results:[]}};
+  await processCollectionTask(task,{broker,runRequest:async()=>{},pollMs:1});
+  assert.equal(writes,4);
+  assert.deepEqual(task.collection.results,done.results);
+});
 test('all-page scope complements featured links with sitemap pages and reuses indexed Markdown', async()=>{
   const root=await temp(),hits=[];
   const featured=base+'/featured',unlisted=base+'/another.md',attachment=base+'/archive.pdf';
