@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assertLocalRequest } from '../subscription-workflow/http.mjs';
 import { readSources, saveSiteSource, listRuns, readRun, CODE_ROOT } from './store.mjs';
-import { startSiteRun } from './tasks.mjs';
+import { siteRunStatus,startSiteRun } from './tasks.mjs';
 import {resolveSourceRelation} from '../scripts/source-relations.mjs';
 import {candidatePage,updateCandidate} from './candidates.mjs';
 import {INTERACTIVE_IMPORT_SOURCES} from '../scripts/browser-import-broker.mjs';
@@ -23,7 +23,7 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
         'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});res.end(content);return true;
     }
     if(req.method==='GET'&&url.pathname==='/api/site-imports'){
-      const config=await readSources(root),runs=await listRuns(root);
+      const config=await readSources(root),runs=await Promise.all((await listRuns(root)).map(run=>siteRunStatus(run,broker)));
       send(res,200,{...config,capabilities:{infer_topics:true,compact_run_detail:true},sources:config.sources.map(source=>({...source,last_run:brief(runs.find(run=>run.source_id===source.id))})),runs:runs.slice(0,30).map(brief)});return true;
     }
     if(req.method==='GET'&&url.pathname==='/api/import-center/history'){
@@ -35,7 +35,7 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
       send(res,200,{failures:await broker.listMaintenanceFailures(since)});return true;
     }
     const detail=/^\/api\/site-imports\/runs\/(site-run-[a-f0-9]{24})$/u.exec(url.pathname);
-    if(req.method==='GET'&&detail){const run=await readRun(root,detail[1]);let value=run;
+    if(req.method==='GET'&&detail){const run=await siteRunStatus(await readRun(root,detail[1]),broker);let value=run;
       if(run&&url.searchParams.get('view')==='compact'){const {results,...collection}=run.collection||{};value={...run,detail_view:'compact',...(run.collection?{collection}: {})};}
       send(res,run?200:404,value || {error:'导入记录不存在'});return true;}
     if(req.method!=='POST'){send(res,405,{error:'此操作不支持该请求方法'});return true;}

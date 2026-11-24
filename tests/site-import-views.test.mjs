@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import {JSDOM} from 'jsdom';
 import {handleImportCenter} from '../site-import/http.mjs';
-import {runId,saveRun,readRun} from '../site-import/store.mjs';
+import {runId,saveRun,readRun,saveSiteSource} from '../site-import/store.mjs';
+import {startSiteRun} from '../site-import/tasks.mjs';
 
 test('compact run view retains every article and audit field without duplicate result payloads',async()=>{
   const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/site-view-');
@@ -17,6 +19,50 @@ test('compact run view retains every article and audit field without duplicate r
   assert.deepEqual(compact.value.results,results);assert.equal(compact.value.detail_view,'compact');assert.equal(Object.hasOwn(compact.value.collection,'results'),false);
   assert.deepEqual(compact.value.collection.inventory,run.collection.inventory);assert.equal(compact.value.collection.error,'fixture_failure');assert.deepEqual(compact.value.collection.verification,run.collection.verification);
   assert.deepEqual(full.value,run);assert.deepEqual(await readRun(root,run.id),run);
+});
+
+test('a terminal broker receipt releases a stale site run and preserves its candidate snapshot',async t=>{
+  const root=await fs.mkdtemp(path.join(process.env.WEB_IMPORT_TEST_ROOT||'D:/Artifacts/ProgressiveReading','site-run-status-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const {source}=await saveSiteSource(root,{url:'https://independent.example/',name:'Independent'},0);
+  const recorded={id:runId('first'),request_id:'request-first',source_id:source.id,settings:source,
+    phase:'discovering',created_at:new Date().toISOString(),results:[]};
+  await saveRun(root,recorded);
+  const articles=[{url:'https://independent.example/article'}];
+  let receipt={terminal:false};
+  let created=0;
+  const broker={
+    async getRequest(id){assert.equal(id,recorded.request_id);return receipt;},
+    async createRequest(_urls,options){assert.equal(options.siteImport.settings.id,source.id);created++;return {request_id:'request-new'};}
+  };
+  async function get(url){
+    let body;
+    await handleImportCenter({method:'GET',url,headers:{host:'127.0.0.1:12345'},socket:{remoteAddress:'127.0.0.1'}},
+      {writeHead(status){assert.equal(status,200);},end(value){body=JSON.parse(value);}},{root,broker});
+    return body;
+  }
+  const start=()=>startSiteRun(root,{source_id:source.id,client_request_id:'fresh'},broker,async()=>{});
+  assert.equal((await start()).id,recorded.id);
+  assert.equal(created,0);
+
+  receipt={terminal:true,updated_at:new Date().toISOString(),results:[{
+    status:'failed',error:'fixture_progress_snapshot_failed',collection:{phase:'discovering',inventory:{complete:true,articles},results:[]}
+  }]};
+  const listing=await get('/api/site-imports');
+  assert.equal(listing.sources[0].last_run.phase,'failed');
+  assert.equal(listing.sources[0].last_run.error,'fixture_progress_snapshot_failed');
+  const detail=await get('/api/site-imports/runs/'+recorded.id+'?view=compact');
+  assert.equal(detail.phase,'failed');
+  assert.deepEqual(detail.collection.inventory.articles,articles);
+  assert.equal(detail.counts.discovered,1);
+  assert.equal((await readRun(root,recorded.id)).phase,'discovering');
+  const next=await start();
+  assert.equal(next.id,runId('fresh'));
+  assert.equal(next.request_id,'request-new');
+  assert.equal(created,1);
+  let relaunched=false;
+  assert.equal((await startSiteRun(root,{source_id:source.id,client_request_id:'first'},broker,async()=>{relaunched=true;})).phase,'failed');
+  assert.equal(relaunched,false);
 });
 
 test('topic checkbox persists explicit choices across refresh and degrades safely with older backends',async()=>{

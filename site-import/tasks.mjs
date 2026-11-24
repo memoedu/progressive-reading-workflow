@@ -21,6 +21,22 @@ export const siteProcessingOptions=settings=>({input_form:'written',content_prof
   include_reading_guide:settings.generate_guide===true,translation_mode:settings.translation_mode});
 
 const SUCCESS=new Set(['imported','imported_with_warnings','idempotent_replay']);
+const TERMINAL_SITE_PHASES=new Set(['completed','completed_with_failures','failed','needs_classification']);
+
+export async function siteRunStatus(run,broker){
+  if(!run?.phase||!run.request_id||TERMINAL_SITE_PHASES.has(run.phase))return run;
+  const request=await broker?.getRequest(run.request_id);
+  if(!request?.terminal)return run;
+  // The broker may finish before the separate site view has been saved.
+  const row=request.results?.[0];
+  const saved=row?.collection||run.collection;
+  const phase=request.awaiting_input?'needs_classification':SUCCESS.has(row?.status)?'completed':
+    saved?.phase==='completed_with_failures'?'completed_with_failures':'failed';
+  const collection={...saved,phase,...(row?.error&&!saved?.error?{error:row.error}:{})};
+  return {...run,phase,collection,results:collection.results||run.results,
+    counts:siteCounts(collection),updated_at:request.updated_at||run.updated_at};
+}
+
 export async function startSiteRun(root,{source_id,client_request_id,retry_run_id},broker,runRequest,{maintenanceRetryOf=null}={}) {
   if(typeof client_request_id!=='string'||!/^[A-Za-z0-9_.:-]{1,180}$/u.test(client_request_id))throw new Error('导入请求缺少有效的恢复编号');
   if(client_request_id.startsWith('maintenance-retry:')&&!maintenanceRetryOf)throw new Error('reserved_maintenance_request_id');
@@ -28,12 +44,19 @@ export async function startSiteRun(root,{source_id,client_request_id,retry_run_i
   return withLock(directory+'.lock',async()=>{
     let run=await readRun(root,id);
     if(run&&run.source_id!==source_id)throw new Error('恢复编号已经用于另一个整站来源');
-    if(run?.request_id){void runRequest(run.request_id).catch(()=>{});return run;}
+    if(run?.request_id){
+      run=await siteRunStatus(run,broker);
+      if(!TERMINAL_SITE_PHASES.has(run.phase))void runRequest(run.request_id).catch(()=>{});
+      return run;
+    }
     const config=await readSources(root),source=config.sources.find(s=>s.id===source_id);
     if(!source)throw new Error('请先保存整站导入设置');
-    const active=(await listRuns(root)).find(run=>run.id!==id&&run.source_id===source_id&&!['completed','completed_with_failures','failed','needs_classification'].includes(run.phase));
-    if(active)return active;
-    const previous=retry_run_id?await readRun(root,retry_run_id):null;
+    for(const recorded of await listRuns(root)){
+      if(recorded.id===id||recorded.source_id!==source_id||TERMINAL_SITE_PHASES.has(recorded.phase))continue;
+      const active=await siteRunStatus(recorded,broker);
+      if(!TERMINAL_SITE_PHASES.has(active.phase))return active;
+    }
+    const previous=retry_run_id?await siteRunStatus(await readRun(root,retry_run_id),broker):null;
     if(retry_run_id&&!previous)throw new Error('要重试的整站记录不存在');
     if(previous&&previous.source_id!==source.id)throw new Error('重试任务与来源不一致');
     const settings=run?.settings || previous?.settings || structuredClone(source);
@@ -97,7 +120,7 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
 export async function processSiteTask(root,task,{broker,runRequest,planner,fetchPage}={}) {
   const {run_id:id,settings,retry_run_id:retry}=task.site_import;
   const run=await readRun(root,id);if(!run)throw new Error('整站任务记录不存在');
-  const previous=retry?await readRun(root,retry):null;
+  const previous=retry?await siteRunStatus(await readRun(root,retry),broker):null;
   let retryInventory=null;
   const attempts=new Set();
   const earlierPublications=new Map();
@@ -106,7 +129,7 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
       if(row.status==='imported'&&!earlierPublications.has(row.requested_url))earlierPublications.set(row.requested_url,row);
     }
   };
-  for(let earlier=previous;earlier&&earlier.source_id===run.source_id&&!attempts.has(earlier.id);earlier=earlier.retry_of?await readRun(root,earlier.retry_of):null){
+  for(let earlier=previous;earlier&&earlier.source_id===run.source_id&&!attempts.has(earlier.id);earlier=earlier.retry_of?await siteRunStatus(await readRun(root,earlier.retry_of),broker):null){
     attempts.add(earlier.id);
     if(earlier.collection?.inventory?.plan)retryInventory=earlier.collection.inventory;
     if(settings.processing_mode==='original_text'){
