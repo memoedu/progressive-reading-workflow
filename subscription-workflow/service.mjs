@@ -34,7 +34,7 @@ export async function enqueue(root, kind, key = localDate()) {
   if (!JOB_KINDS.includes(kind)) throw new Error('未知订阅任务');
   if (kind === 'video_import') throw new Error('单次视频导入请提供链接和精确分 P 范围');
   const p = paths(root), id = digest(`${kind}:${key}`).slice(0,32), file = path.join(p.jobs,id+'.json');
-  return withLock(path.join(p.home,'enqueue.lock'), async () => {
+  return withLock(path.join(p.home,`enqueue-${kind}.lock`), async () => {
     if (key.startsWith('manual-')) {
       const active = (await jobList(root)).find(job=>job.kind===kind && ['queued','running'].includes(job.status));
       if (active) return active;
@@ -49,7 +49,7 @@ export async function enqueue(root, kind, key = localDate()) {
 export async function enqueueVideoRequest(root, input, { retry = false } = {}) {
   const request = normalizeVideoRequest(root,input), p = paths(root);
   const id = digest('video_import:'+JSON.stringify(request)).slice(0,32);
-  return withLock(path.join(p.home,'enqueue.lock'),async()=>{
+  return withLock(path.join(p.home,'enqueue-video_import.lock'),async()=>{
     const file = path.join(p.jobs,id+'.json'), previous = await readJson(file);
     if (previous) {
       if (!retry || ['queued','running'].includes(previous.status)) return previous;
