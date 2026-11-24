@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { youtubeVideoIdentity } from "./url-import-input.mjs";
 import { buildPreprocessRequest, standardWorkflowOptions, validateRequestContract } from "../standard-preprocessing/index.mjs";
 import { stableJson } from "../standard-preprocessing/lib/core.mjs";
+import { renameWithRetry } from "../rss-source/core.mjs";
 
 const SCHEMA = "local-ir.browser-import-broker/v1";
 export const DEFAULT_LEASE_MS = 12 * 60 * 1000;
@@ -192,14 +193,15 @@ export class BrowserImportBroker {
   }
 
   async save() {
-    const temporary = `${this.statePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(this.state, null, 2)}\n`, "utf8");
+    const temporary = `${this.statePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await fs.rename(temporary, this.statePath);
+      await fs.writeFile(temporary, `${JSON.stringify(this.state)}\n`, "utf8");
+      // A reader can briefly deny replacement on Windows. Keep the last
+      // durable snapshot intact until the replacement succeeds.
+      await renameWithRetry(temporary, this.statePath, { attempts: 8 });
     } catch (error) {
-      if (!new Set(["EEXIST", "EPERM"]).has(error?.code)) throw error;
-      await fs.rm(this.statePath, { force: true });
-      await fs.rename(temporary, this.statePath);
+      await fs.rm(temporary, { force: true }).catch(() => {});
+      throw error;
     }
   }
 

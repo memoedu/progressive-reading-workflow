@@ -17,6 +17,7 @@ import { GUIDE_COVERAGE_VERSION } from '../standard-preprocessing/lib/guide-cove
 import { loadProducerConfig as loadUnifiedProducerConfig, requestProducerText } from '../standard-preprocessing/lib/producer.mjs';
 import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./standard-import-quality.mjs";
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
+import { BROWSER_DRAFT_BODY_LIMIT, normalizeMarkdownText } from "./markdown-text.mjs";
 import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
 import { generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
 import { sharedRepository } from '../subscription-workflow/shared-library.mjs';
@@ -279,16 +280,6 @@ async function withBrowserCommitLock(key, operation) {
   } finally {
     if (browserCommitLocks.get(normalizedKey) === current) browserCommitLocks.delete(normalizedKey);
   }
-}
-
-function normalizeMarkdownText(value, maxChars = 200000) {
-  return String(value || "")
-    .replace(/\r\n?/g, "\n")
-    .replace(/\u0000/g, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim()
-    .slice(0, maxChars);
 }
 
 function highlightMarkdown(value) {
@@ -1018,7 +1009,7 @@ async function browserDraftTarget(root, sourceUrl, title) {
   return path.join(root, `${safeName(title || parsed.hostname || "browser-reading")}${suffix}`);
 }
 
-function browserDraftDocument({ draft, converted, documentStatus }) {
+function browserDraftDocument({ draft, converted, documentStatus, preserveCapturedBody = false }) {
   const title = converted.title || draft.title || new URL(draft.url).hostname;
   const now = nowIso();
   return [
@@ -1046,7 +1037,7 @@ function browserDraftDocument({ draft, converted, documentStatus }) {
     "",
     `Source: [${draft.url}](${draft.url})`,
     "",
-    normalizeMarkdownText(converted.markdown || "", 300000),
+    preserveCapturedBody ? converted.markdown : normalizeMarkdownText(converted.markdown, BROWSER_DRAFT_BODY_LIMIT),
     ""
   ].join("\n");
 }
@@ -1328,7 +1319,8 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   const originalMarkdown = browserDraftDocument({
     draft: { ...draft, url: parsed.href },
     converted,
-    documentStatus
+    documentStatus,
+    preserveCapturedBody: originalImport && Boolean(cachedRssMarkdown)
   });
   const markdown = preprocessing ? updateFrontmatterFields(preprocessing.markdown, { status: completed ? 'done' : 'imported' }) : (originalImport ? updateFrontmatterFields(originalMarkdown, {
     import_method:'url_original_text',processing_mode:'original_text',processing_status:'original',llm_used:false

@@ -13,7 +13,8 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn){const end=Date.now()+120000;while(Date.now()<end){const value=await fn();if(value)return value;await delay(150);}throw new Error('site_acceptance_timeout');}
 test('new entry imports original, reuses annotated archived RSS source, persists and safely repeats',{timeout:180000},async()=>{
   const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/site-e2e-'),hits=[];
-  const original='# Independent source\n\n这是独立站点的完整合成原文，不应翻译或改写。\n\n## 公式与代码\n\n$x^2+y^2=z^2$\n\n```python\nprint("original")\n```\n\n[站内链接](/posts/old)\n\n最后一段：逐字保留的正文。\n';
+  const original='# Independent source\n\n这是独立站点的完整合成原文，不应翻译或改写。\n\n## 公式与代码\n\n$x^2+y^2=z^2$\n\n```python\nprint("original")\n```\n\n[站内链接](/posts/old)\n\n'
+    +'A complete source paragraph for the long-document fixture.\n\n'.repeat(5200)+'最后一段：逐字保留的正文。\n';
   const server=http.createServer((req,res)=>{hits.push(req.url);const url=new URL(req.url,'http://fixture');res.setHeader('content-type','application/json');
     if(url.pathname==='/')res.end('<title>Independent</title><script src="/main.js"></script>');
     else if(url.pathname==='/robots.txt')res.end('');
