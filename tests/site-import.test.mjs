@@ -134,6 +134,39 @@ test('mixed-layout fallback still rejects login forms and JavaScript shells',asy
     await assert.rejects(captureArticle(url,{type:'html',body_selector:'#regular'},{fetchPage,fallbackHtml:true}),error);
   }
 });
+
+test('site retry preserves its original candidates after the archive and sitemap expand',async()=>{
+  const root=await temp(),id=runId('protected-retry-scope');
+  const saved=base+'/archive/saved',missing=base+'/archive/missing',later=base+'/archive/new';
+  const hits=[];
+  let expanded=false;
+  const article='<title>Source</title><article><p>这是可完整提取的原始文章正文，任务重试应该继续使用先前已核验的内容。</p></article>';
+  const fetchPage=async url=>{
+    hits.push(url);
+    const urls=[saved,missing,...(expanded?[later]:[])];
+    const pages={
+      [base+'/']:'<title>Archive</title><ul class="archive">'+urls.map(url=>'<li><a href="'+url+'">Entry</a></li>').join('')+'</ul>',
+      [base+'/robots.txt']:'', [base+'/sitemap.xml']:'<urlset>'+urls.map(url=>'<url><loc>'+url+'</loc></url>').join('')+'</urlset>',
+      [saved]:article, [missing]:article, [later]:article
+    };
+    if(url===missing&&!expanded)throw new Error('fixture_extraction_error');
+    assert.ok(Object.hasOwn(pages,url),url);
+    return {url,body:pages[url],sha256:digest(pages[url]),content_type:'text/html'};
+  };
+  const plan={include_paths:['/*'],listing:{type:'html',url:base+'/',item_selector:'.archive a'}};
+  const settings=normalizeSiteSource({url:base,scope:'content',processing_mode:'original_text'});
+  let snapshot;
+  await assert.rejects(discoverSite(root,settings,id,{planner:async()=>({plan}),fetchPage}),error=>{
+    snapshot=error.inventory;
+    return snapshot?.candidate_count===2&&snapshot.failures.length===1;
+  });
+  expanded=true;
+  const result=await discoverSite(root,settings,id,{retryInventory:snapshot,fetchPage,planner:async()=>assert.fail('retry replanned the site')});
+  assert.equal(result.complete,true);
+  assert.deepEqual(result.articles.map(row=>row.url),[saved,missing]);
+  assert.equal(hits.includes(later),false);
+  assert.equal(hits.filter(url=>url===saved).length,1);
+});
 test('new page preserves source editor, original settings, failures, and existing learning payload',async()=>{
   const html=await fs.readFile(new URL('../site-import/web/index.html',import.meta.url),'utf8');
   const code=(await fs.readFile(new URL('../site-import/web/app.mjs',import.meta.url),'utf8')).replace("'/import/client.mjs'",JSON.stringify(pathToFileURL(path.resolve('scripts/browser-import-web/client.mjs')).href));

@@ -1,8 +1,8 @@
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 import { discoverSite } from './discovery.mjs';
 
-export async function discoverSiteInWorker(root, settings, runId, { onProgress }) {
-  const worker = new Worker(new URL(import.meta.url), { workerData: { root, settings, runId } });
+export async function discoverSiteInWorker(root, settings, runId, { onProgress, retryInventory }) {
+  const worker = new Worker(new URL(import.meta.url), { workerData: { root, settings, runId, retryInventory } });
   try {
     return await new Promise((resolve, reject) => {
       let progress = Promise.resolve();
@@ -30,9 +30,10 @@ export async function discoverSiteInWorker(root, settings, runId, { onProgress }
 }
 
 if (!isMainThread && workerData?.runId) {
-  const { root, settings, runId } = workerData;
+  const { root, settings, runId, retryInventory } = workerData;
   try {
     const inventory = await discoverSite(root, settings, runId, {
+      retryInventory,
       onProgress: detail => parentPort.postMessage({ type: 'progress', detail })
     });
     parentPort.postMessage({ type: 'success', inventory });
