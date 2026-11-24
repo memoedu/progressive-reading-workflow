@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {BrowserImportBroker} from '../scripts/browser-import-broker.mjs';
-import {countActiveBrowserImports,IMPORT_STATE_SCHEMA,readBrowserImportState,saveBrowserImportState} from '../scripts/browser-import-state.mjs';
+import {canResumeSiteDiscoveryOnReload,countActiveBrowserImports,IMPORT_STATE_SCHEMA,readBrowserImportState,saveBrowserImportState} from '../scripts/browser-import-state.mjs';
 
 test('legacy broker history migrates once and later updates leave its bytes unchanged', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'browser-import-state-lock-'));
@@ -45,6 +45,27 @@ test('an exited singleton source worker resumes frozen work without discarding i
   const next=await broker.claimTask('local-background-url-fetcher-1','claim2',{requestId:request.request_id});
   assert.deepEqual(next.collection,collection);
   const {value:saved}=await readBrowserImportState(root);assert.equal(saved.tasks[0].interruptedClaims.length,1);assert.equal(saved.tasks[0].attempts,1);
+});
+
+test('maintenance reload accepts only the requested singleton read-only site discovery',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'site-discovery-maintenance-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const broker=new BrowserImportBroker({stateRoot:root});
+  const url='https://independent.example/';
+  const run='site-run-0123456789abcdef01234567';
+  const request=await broker.createRequest([url],{siteImport:{run_id:run,settings:{url}},processingMode:'original_text'});
+  const task=await broker.claimTask('local-background-url-fetcher-1','claim',{requestId:request.request_id});
+  const progress=collection=>broker.updateTaskProgress(task.id,{collection},task.lease_token);
+  assert.equal(await canResumeSiteDiscoveryOnReload(root,run),false);
+  const collecting={phase:'discovering',discovery:{phase:'discovering'},inventory:null,batches:[]};
+  await progress(collecting);
+  assert.equal(await canResumeSiteDiscoveryOnReload(root,run),true);
+  assert.equal(await canResumeSiteDiscoveryOnReload(root,'site-run-111111111111111111111111'),false);
+  await progress({...collecting,inventory:{complete:true}});
+  assert.equal(await canResumeSiteDiscoveryOnReload(root,run),false);
+  await progress(collecting);
+  await broker.createRequest(['https://independent.example/concurrent'],{clientRequestId:'another-import'});
+  assert.equal(await canResumeSiteDiscoveryOnReload(root,run),false);
 });
 test('model work, external workers and newly claimed work are never reclaimed by source recovery',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'source-worker-model-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));

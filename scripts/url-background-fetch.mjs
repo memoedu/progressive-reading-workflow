@@ -194,7 +194,11 @@ function authPageReason(document, finalUrl) {
   if (document.querySelector('input[type="password"]')) return "password_form_detected";
   const loginForm = [...document.querySelectorAll("form")].some((form) => {
     const action = String(form.getAttribute("action") || "");
-    return /(?:login|signin|auth|passport)/iu.test(action);
+    if (!action || !URL.canParse(action, finalUrl)) return false;
+    const route = new URL(action, finalUrl);
+    const login = /^(?:log[-_]?in|sign[-_]?in|auth(?:enticate|orize)?|oauth2?|passport)(?:\.[a-z0-9]+)?$/iu;
+    return route.pathname.split("/").some(segment => login.test(segment))
+      || ["action", "mode"].some(key => login.test(route.searchParams.get(key) || ""));
   });
   if (loginForm) return "login_form_detected";
   const text = normalizedText(document.body?.textContent).slice(0, 12_000);

@@ -1,6 +1,9 @@
 #Requires -Version 7.4
 [CmdletBinding()]
-param([switch]$Apply)
+param(
+    [switch]$Apply,
+    [ValidatePattern('^site-run-[a-f0-9]{24}$')][string]$ResumeSiteDiscovery
+)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $entry = Join-Path $projectRoot 'scripts\progressive-reading-app.mjs'
@@ -15,9 +18,12 @@ if ($oldId) {
 }
 $stateRoot = Join-Path $projectRoot '.local-ir\browser-import-broker'
 $stateReader = Join-Path $PSScriptRoot 'browser-import-state.mjs'
-$active = & node --input-type=module -e 'import {pathToFileURL} from "node:url"; const {countActiveBrowserImports}=await import(pathToFileURL(process.argv[1])); console.log(await countActiveBrowserImports(process.argv[2]));' $stateReader $stateRoot
-if ($LASTEXITCODE -ne 0 -or "$active" -notmatch '^\d+$') { throw 'Unable to inspect durable import state' }
-if ([int]$active -ne 0) { throw 'Import tasks are active; reload deferred' }
+function Assert-CanReload {
+    $result = & node --input-type=module -e 'import {pathToFileURL} from "node:url"; const {countActiveBrowserImports,canResumeSiteDiscoveryOnReload}=await import(pathToFileURL(process.argv[1])); const [root,run]=process.argv.slice(2); console.log(run ? await canResumeSiteDiscoveryOnReload(root,run) : (await countActiveBrowserImports(root))===0);' $stateReader $stateRoot $ResumeSiteDiscovery
+    if ($LASTEXITCODE -ne 0 -or "$result" -notmatch '^(true|false)$') { throw 'Unable to inspect durable import state' }
+    if ("$result" -ne 'true') { throw 'Import tasks are active or the selected site is outside read-only discovery; reload deferred' }
+}
+Assert-CanReload
 if (-not $Apply) {
     [pscustomobject]@{status='ready_for_reload'; project=$projectRoot; old_pid=$oldId; port=$port; snapshot_mode='durable_live_sync_with_legacy_pointer_fallback'} | ConvertTo-Json
     return
@@ -28,6 +34,7 @@ $runner = Join-Path $PSScriptRoot 'run-local-ir-app.ps1'
 if ($task.Actions.Count -ne 1 -or $task.Actions[0].Arguments -notlike "*`"$runner`"*") { throw 'Run repair-local-ir-task.ps1 -Apply before reloading; persistent task runner is required' }
 $logRoot = Join-Path 'D:\Artifacts\ProgressiveReading\activation' (Get-Date -Format 'yyyyMMdd-HHmmss')
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+Assert-CanReload
 if ($task.State -eq 'Running') {
     Stop-ScheduledTask -TaskName $taskName
     for ($i=0; $i -lt 30 -and (Get-ScheduledTask -TaskName $taskName).State -eq 'Running'; $i++) { Start-Sleep -Milliseconds 500 }
