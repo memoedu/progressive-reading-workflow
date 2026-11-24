@@ -7,7 +7,9 @@ import { withoutUrlCookieEnvironment } from './url-background-fetch.mjs';
 const maxBytes = 2 * 1024 * 1024;
 const archivePath = /^(?!\.|\/)(?!.*(?:^|\/)\.)[^\\:\x00-\x1f]+\.md$/iu;
 const archiveIdentity = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
-const credentialLink = /https?:\/\/[^\s<>]+[?&](?:access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?(?:id|key|token)|cookie|x-amz-credential)=/iu;
+const credentialLink = /https?:\/\/[^\s<>]+(?:\?|&(?:amp;)?)(?:access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?(?:id|key|token)|cookie|x-amz-credential)=/iu;
+const readerData = /(?:\b[a-z]:[\\/](?:Users|AppData)[\\/]|(?:^|\n)(?:reader_(?:email|username|account)|browser_draft_id)\s*:|<!--\s*(?:local-ir:(?:highlight|annotation|musing)|subscriptions:archived-short))/iu;
+const emailAddress = /[a-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/giu;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const gitBlob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 
@@ -48,6 +50,12 @@ function originalOrigin(value) {
   return null;
 }
 
+function publicPrivateData(item, emailFingerprints) {
+  const text = (item.relative + '\n' + item.markdown).replace(/%[a-f0-9]{2}/giu, encoded => String.fromCharCode(parseInt(encoded.slice(1), 16)));
+  if (readerData.test(text) || credentialLink.test(text)) return true;
+  return [...text.matchAll(emailAddress)].some(([email]) => emailFingerprints.includes(sha256(email.toLowerCase())));
+}
+
 export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = command }) {
   const home = path.join(workflowRoot, '.local-ir', 'original-markdown-backup');
   const pending = path.join(home, 'pending');
@@ -64,12 +72,16 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
     });
     if (!raw) return null;
     const config = JSON.parse(raw);
+    const visibility = config.visibility ?? 'private';
+    const privateEmailSha256 = config.private_email_sha256 ?? [];
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/u.test(config.repository || '') ||
+        !['private', 'public'].includes(visibility) ||
+        !Array.isArray(privateEmailSha256) || !privateEmailSha256.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)) ||
         !Array.isArray(config.origins) || !config.origins.length ||
         !config.origins.every(value => typeof value === 'string' && originalOrigin(value) === value)) {
       throw new Error('invalid_backup_configuration');
     }
-    return config;
+    return { ...config, visibility, privateEmailSha256 };
   }
 
   async function writeRemote(repository, relative, bytes, hash) {
@@ -106,7 +118,10 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
     const items = await queuedFiles(pending);
     if (!items.length) { lastError = null; return; }
     const remote = await github(['repos/' + config.repository, '--jq', '[.private, .archived, .default_branch] | @tsv']);
-    if (remote.code !== 0 || remote.stdout !== 'true\tfalse\tmain') throw new Error('backup_repository_must_be_private_with_main');
+    const expectedPrivate = config.visibility === 'private';
+    if (remote.code !== 0 || remote.stdout !== expectedPrivate + '\tfalse\tmain') {
+      throw new Error('backup_repository_visibility_mismatch');
+    }
     for (const name of items) {
       const file = path.join(pending, name);
       let item;
@@ -122,7 +137,8 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
       }
       const bytes = Buffer.from(item.markdown || '', 'utf8');
       if (!config.origins.includes(item.origin) || item.repository !== config.repository || !archivePath.test(item.relative)
-          || !bytes.length || bytes.length > maxBytes || sha256(bytes) !== item.sha256 || credentialLink.test(item.markdown)) {
+          || !bytes.length || bytes.length > maxBytes || sha256(bytes) !== item.sha256 || credentialLink.test(item.markdown)
+          || (config.visibility === 'public' && publicPrivateData(item, config.privateEmailSha256))) {
         await hold(file, name);
         continue;
       }
