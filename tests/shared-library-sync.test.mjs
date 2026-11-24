@@ -4,14 +4,33 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createSharedAccount, createSharedLibraryServer } from '../subscription-workflow/shared-library-service.mjs';
+import { createSharedGitHub } from '../subscription-workflow/shared-library-github.mjs';
 import { resolveSharedSubscription, sharedLibrarySettings, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
-import { sharedDigest, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
+import { sharedDigest, sharedIndexPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
 
 const existingUrl = 'https://www.benkuhn.net/existing';
 const commit = '1'.repeat(40);
 const markdown = '# Public fixture\n\n' + 'An independently sourced paragraph. '.repeat(10);
 const record = { schema: sharedSchema, title: 'Public fixture', url: existingUrl,
   original: { path: 'Test folder/Original.md', sha256: sharedDigest(markdown) } };
+
+test('the cloud index uses GitHub Contents at the selected commit and distinguishes missing from corrupt entries', async () => {
+  const base = 'https://api.github.com/repos/memoedu/progressive-reading-library';
+  const index = url => base + '/contents/' + sharedIndexPath(url) + '?ref=' + commit;
+  const missing = 'https://www.benkuhn.net/missing';
+  const corrupt = 'https://www.benkuhn.net/corrupt';
+  const file = data => Response.json({ type: 'file', encoding: 'base64', content: Buffer.from(data).toString('base64') });
+  const github = createSharedGitHub({ fetchImpl: async url => {
+    if (url === base + '/git/ref/heads/main') return Response.json({ object: { sha: commit } });
+    if (url === index(existingUrl)) return file(JSON.stringify(record));
+    if (url === index(missing)) return new Response(null, { status: 404 });
+    if (url === index(corrupt)) return file('truncated JSON');
+    throw new Error('Unexpected GitHub request');
+  } });
+  assert.deepEqual(await github.lookup(existingUrl), { commit, record });
+  assert.deepEqual(await github.lookup(missing), { commit, record: null });
+  await assert.rejects(github.lookup(corrupt), /shared_library_invalid_index/);
+});
 
 test('anonymous reads, anonymous review and signed-in writes share the same service', async t => {
   const writes = [];
