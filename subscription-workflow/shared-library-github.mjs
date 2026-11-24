@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { createSign } from 'node:crypto';
-import { sharedRepository, sharedIndexPath, sharedRecord, sharedRawUrl, commitPattern } from './shared-library.mjs';
+import { sharedRepository, sharedIndexPath, sharedRecord, commitPattern } from './shared-library.mjs';
 
 const account = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
 const repo = '/repos/' + sharedRepository;
@@ -47,13 +47,19 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
   }
 
   async function lookup(url) {
-    const current = await api(repo + '/git/ref/heads/main', { token: await token() });
+    const auth = await token();
+    const current = await api(repo + '/git/ref/heads/main', { token: auth });
     const commit = current.object?.sha;
     if (!commitPattern.test(commit || '')) throw new Error('shared_github_invalid_head');
-    const response = await fetchImpl(sharedRawUrl(commit, sharedIndexPath(url)), { signal: AbortSignal.timeout(12_000) });
-    if (response.status === 404) return { commit, record: null };
-    if (!response.ok) throw new Error('shared_github_index_' + response.status);
-    return { commit, record: sharedRecord(await response.json(), url) };
+    const entry = await api(repo + '/contents/' + sharedIndexPath(url) + '?ref=' + commit, { token: auth, missing: true });
+    if (!entry) return { commit, record: null };
+    if (entry.type !== 'file' || entry.encoding !== 'base64' || typeof entry.content !== 'string') {
+      throw new Error('shared_library_invalid_index');
+    }
+    let record;
+    try { record = JSON.parse(Buffer.from(entry.content, 'base64').toString('utf8')); }
+    catch { throw new Error('shared_library_invalid_index'); }
+    return { commit, record: sharedRecord(record, url) };
   }
 
   async function publishedCommit(base, record, markdown, auth) {
