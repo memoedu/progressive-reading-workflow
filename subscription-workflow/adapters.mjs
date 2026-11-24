@@ -20,6 +20,7 @@ import { readingDestination } from './reading-options.mjs';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import {fetchArticleContent} from '../rss-source/article-fetch.mjs';
 import {scanRepositories} from './repositories.mjs';
+import { resolveSharedSubscription } from './shared-library-client.mjs';
 
 export function autoConfig(config, onlyRss = false) {
   const subscriptions = config.subscriptions.filter(s => s.enabled && s.kind!=='github_repository' && !s.kind.startsWith('bilibili_') && s.mode !== 'reports' && (!onlyRss || s.kind === 'rss'))
@@ -72,7 +73,8 @@ export async function scanRss(root, cycle, { retryOnly = false } = {}) {
     await importer.scan(autoConfig(config, true), { force: true }); return importer.summary(autoConfig(config, true));
   });
   const config = await loadConfig(root);
-  const reports = await syncAll({ config: path.join(config.rss_home, 'RSS 自动导入.md'), force:true });
+  const reports = await syncAll({ config: path.join(config.rss_home, 'RSS 自动导入.md'), force:true,
+    sharedArticleFetcher: (url, previous) => resolveSharedSubscription(root, url, previous) });
   const history = await replayRssHistory(root, config, reports);
   const sourceRetries = [...history, ...await retryBlockedReportSources(root, cycle, {
     results: [...reports.results, ...history.filter(item => item.result).map(item => ({result:item.result}))]
@@ -103,7 +105,8 @@ export async function replayRssHistory(root, config, reports, fetchPage = fetchT
         const result = await syncFeedDocument({
           feedUrl:source.url, xml, outputRoot:path.join(root,'imports','rss','source-v1'), onlyItemUrls:urls,
           preserveFeedState:true, fetchFulltext:true,
-          articleFetcher:url=>fetchArticleContent(url,fetchPage)
+          articleFetcher:url=>fetchArticleContent(url,fetchPage),
+          sharedArticleFetcher:(url, previous)=>resolveSharedSubscription(root,url,previous)
         });
         urls.forEach(url => known.add(materialKey(url)));
         results.push({urls,status:result.status,run_dir:result.run_dir,result});
@@ -132,7 +135,8 @@ export async function retryBlockedReportSources(root, cycle, reports = {}, fetch
   for(const group of groups.values()) {
     try {
       const result=await syncFeedDocument({feedUrl:group.feedUrl,xml:await fs.readFile(group.snapshot,'utf8'),outputRoot:path.join(root,'imports','rss','source-v1'),
-        fetchFulltext:true,onlyItemUrls:group.urls,preserveFeedState:true,articleFetcher:url=>fetchArticleContent(url,fetchPage)});
+        fetchFulltext:true,onlyItemUrls:group.urls,preserveFeedState:true,articleFetcher:url=>fetchArticleContent(url,fetchPage),
+        sharedArticleFetcher:(url, previous)=>resolveSharedSubscription(root,url,previous)});
       results.push({urls:group.urls,status:result.status,run_dir:result.run_dir});
     } catch(error){results.push({urls:group.urls,error:error.message});}
   }
@@ -156,6 +160,7 @@ export async function prepareVideoPreview(root, source, item, watch, { acquire, 
   const markdown = transcript.segments.map(s => s.text.trim()).join('\n\n');
   const record = await saveSourceMaterial(root, source, { ...item, title: item.parts > 1 ? `${item.video_title} · P${item.part} ${item.part_title}` : item.video_title }, markdown,
     { source_ref: path.join(acquired.sourceDir, 'transcript.json'), subtitle_segments: transcript.segments.length,
+      shared_library: { status: 'local_only', reason: 'video_source_not_publicly_verified' },
       video: { ...item, watch: { ...watch } } });
   return { status: 'awaiting_review', material_id: record.material_id };
 }
@@ -201,6 +206,7 @@ export async function scanVideos(root, cycle, { discoverFn = discover, processFn
       processItem: async item => {
         const candidates = matches(item), watch = candidates.find(w => w.mode === 'standard_preprocess') || candidates[0];
         const source = sources.find(s => s.id === watch.subscription_id);
+        item.shared_library = { status: 'local_only', reason: 'video_source_not_publicly_verified' };
         console.log(JSON.stringify({ event: 'subscription_video', key: item.key, mode: watch.mode }));
         if (watch.mode === 'reports') {
           const result = await previewFn(root, source, item, watch);
@@ -326,9 +332,16 @@ export async function scanZhihu(root, cycle, { access = zhihuAccess, discoverCol
     try {
       const reports = sources.filter(s => s.mode === 'reports');
       if (reports.length) {
-        const page = item.html ? { body: item.html, isHtml: true, title: item.title, finalUrl: item.url } : await fetchPage(item.url, options);
-        const markdown = page.isHtml ? htmlArticleToMarkdown({ html: page.body, sourceUrl: page.finalUrl, title: item.title }).markdown : page.body;
-        for (const source of reports) await saveSourceMaterial(root, source, item, markdown);
+        const shared = await resolveSharedSubscription(root, item.url, item.shared_library);
+        const { article, ...receipt } = shared || {};
+        if (shared) item.shared_library = receipt;
+        if (shared?.status === 'pending_review') throw new Error('共享资料库投稿待合并');
+        let markdown = article?.markdown;
+        if (!markdown) {
+          const page = item.html ? { body: item.html, isHtml: true, title: item.title, finalUrl: item.url } : await fetchPage(item.url, options);
+          markdown = page.isHtml ? htmlArticleToMarkdown({ html: page.body, sourceUrl: page.finalUrl, title: item.title }).markdown : page.body;
+        }
+        for (const source of reports) await saveSourceMaterial(root, source, item, markdown, shared ? { shared_library: receipt } : {});
       }
       const automatic = sources.filter(s => s.mode !== 'reports');
       if (automatic.length) await withAutoImporter(root, async importer => {

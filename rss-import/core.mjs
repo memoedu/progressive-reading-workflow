@@ -241,7 +241,7 @@ export class RssImporter {
             await this.save();
             continue;
           }
-          if (shared) item.shared_library = { status: shared.status, commit: shared.commit, sha256: shared.sha256 };
+          if (shared) item.shared_library = { status: shared.status, commit: shared.commit, sha256: shared.sha256, reason: shared.reason };
           else delete item.shared_library;
           const cached = shared?.article || (/^[a-f0-9]{64}$/u.test(item.cached_article_hash || '')
             ? await readJson(path.join(this.home,'cached-articles',hash(urlImportDedupeKey(item.url)),item.cached_article_hash+'.json'))

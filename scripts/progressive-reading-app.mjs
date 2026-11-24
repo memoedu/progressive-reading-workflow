@@ -18,6 +18,7 @@ import { loadProducerConfig as loadUnifiedProducerConfig, requestProducerText } 
 import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./standard-import-quality.mjs";
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
 import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
+import { generatedSharedVersions, resolveSharedSubscription, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
 import { extractUrls, urlImportDedupeKey } from "./url-import-input.mjs";
 import { findSourcePublication, withSourcePublication, sourceReuseResult,sourceAliasEvidence,sourceIdentityUrl } from './reading-source-library.mjs';
 import { IMPORT_RULES, zhihuColumnIdentity } from "./import-rule-catalog.mjs";
@@ -1118,6 +1119,8 @@ async function standardizeBrowserDraft(draft, parsedUrl, converted, onProgress) 
   const processorVersion = String(run.result.receipt?.processor_version || "unknown");
   const promptVersion = String(run.result.receipt?.prompt_version || "unknown");
   const conversionMethod = `progressive_reading_preprocess/${processorVersion}`;
+  const shareableVersions = draft.sourceMetadata?.shared_original_sha256 && !draft.userInstruction && quality.quality_status === 'ready'
+    ? generatedSharedVersions(run.result) : [];
   const markdown = updateFrontmatterFields(rendered, {
     source_url: String(draft.sourceMetadata?.source_url || parsedUrl.href),
     canonical_url: String(draft.sourceMetadata?.canonical_url || parsedUrl.href),
@@ -1144,6 +1147,7 @@ async function standardizeBrowserDraft(draft, parsedUrl, converted, onProgress) 
     targetZone: run.result.artifacts.target_zone,
     qualityStatus: quality.quality_status,
     readableWithWarnings: quality.readable_with_warnings,
+    shareableVersions,
     warningCodes: quality.warning_codes,
     workflowAttempts: run.workflow_attempts || [],
     processingPlan: run.result.receipt.workflow_route?.plan,
@@ -1386,6 +1390,8 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   }
   await writeFileAtomic(target, markdown, {exclusive: Boolean(orphanState)});
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
+  const sharedVersions = draft.sourceMetadata.shared_original_sha256 === rawMarkdownSha256
+    ? await syncSharedVersions(workflowRoot, parsed.href, rawMarkdownSha256, preprocessing?.shareableVersions || []) : [];
   return {
     status: completed ? "completed_pending_archive" : "saved_locked",
     artifacts: [
@@ -1401,6 +1407,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       committed_at: nowIso(),
       ...(orphanState ? {restored_missing_publication: true} : {}),
       conversion_fidelity: converted.fidelity || null,
+      ...(sharedVersions.length ? { shared_versions: sharedVersions } : {}),
       ...(guardedReimport && reimportSnapshot ? { supersedes_publication: {
         markdown_sha256: reimportSnapshot.body, metadata_sha256: reimportSnapshot.metadata,
         document_id: previousPublication.document.id, revision: previousPublication.document.revision,
@@ -1461,6 +1468,13 @@ function authenticatedCookieHealth() {
 async function fetchUrlImportDraft(requestedUrl) {
   if (youtubeVideoIdentity(requestedUrl)) {
     return fetchYoutubeSubtitleDraft(requestedUrl, { liveSnapshot: liveCookieSnapshot });
+  }
+  const shared = await resolveSharedSubscription(workflowRoot, requestedUrl, null, { lookupOnly: true }).catch(() => null);
+  if (shared?.status === 'available') {
+    return { requestedUrl, finalUrl: requestedUrl, redirectChain: [], fetchReceipt: { source_reused: 'shared_library' },
+      draft: { id: `local-ir-url-${shortHash(requestedUrl, 16)}`, url: requestedUrl, title: shared.article.title,
+        cachedRssMarkdown: shared.article.markdown, sourceType: 'url_import', sourceMetadata: { source_url: requestedUrl,
+          canonical_url: requestedUrl, source_is_original: true, shared_original_sha256: shared.sha256 } } };
   }
   const fetched = await fetchUrlWithoutBrowser(requestedUrl, { cookieHeaderForUrl: runtimeCookieHeaderForUrl });
   const capturedAt = nowIso();
@@ -2941,7 +2955,9 @@ async function handle(req, res) {
         const url = urls[0];
         browserSnapshot = { draft: { url, title: String(cached.title || ""), sourceType:"url_import",
           cachedRssMarkdown:cached.markdown, sourceMetadata:{ source_url:url, canonical_url:url,
-            published_at:typeof cached.published_at === "string" ? cached.published_at : null, source_is_original:true } } };
+            published_at:typeof cached.published_at === "string" ? cached.published_at : null, source_is_original:true,
+            ...(cached.shared_original_sha256 === createHash('sha256').update(cached.markdown).digest('hex')
+              ? { shared_original_sha256: cached.shared_original_sha256 } : {}) } } };
       }
       const request = await submitSharedUrlImport(urls, {
         source: String(body.source || "unknown"),

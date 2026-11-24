@@ -10,6 +10,7 @@ import { dataPath } from '../scripts/runtime-paths.mjs';
 import { auditVisibleReadingAnchors } from '../standard-preprocessing/lib/core.mjs';
 import { readingDestination } from './reading-options.mjs';
 import { ExternalProducer, loadBatchProducerConfig } from '../standard-preprocessing/lib/producer.mjs';
+import { generatedSharedVersions, syncSharedVersions } from './shared-library-client.mjs';
 
 export async function subscriptionProducer(config = null) {
   return new ExternalProducer({...config || await loadBatchProducerConfig(),AI_PRODUCER_PROVIDER:'codex_exec'});
@@ -97,6 +98,10 @@ export async function deliverArticle(paths, item, name, options = {}) {
   item.publication = {status:'published',path:run.publication.markdown.path,sha256:run.publication.markdown.sha256,
     published_at:new Date().toISOString(),result_path:path.join(outputDir,'result.json'),
     publication_path:path.join(outputDir,'publication.json'),direct_reading:true};
+  if (source.source_metadata?.shared_original_sha256 && !source.user_instruction && !run.publication.preserved_existing) {
+    item.publication.shared_versions = await syncSharedVersions(paths.workflowRoot, item.item_url,
+      source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
+  }
   if (item.reading_options.generate_guide) item.reading_guide = {status:'ready',result_path:item.publication.result_path};
   return item.review_preview = {status:'ready',direct_reading:true,result_path:item.publication.result_path,
     source_request_sha256:item.preprocess_request_sha256};
@@ -145,6 +150,11 @@ export async function addReadingGuide(paths,item,options = {}) {
   } finally { await fs.unlink(temporary).catch(error=>{if(error.code !== 'ENOENT')throw error;}); }
   item.reading_guide = {status:'ready',result_path:path.join(outputDir,'result.json'),body_preserved:true,added_anchors:anchored.added_anchors,anchor_audit:anchorAudit};
   item.publication.sha256 = digest(after);
+  const originalPublication = item.publication.publication_path && await readJson(item.publication.publication_path);
+  if (source.source_metadata?.shared_original_sha256 && !source.user_instruction && originalPublication?.markdown?.sha256 === digest(before)) {
+    item.reading_guide.shared_versions = await syncSharedVersions(paths.workflowRoot, item.item_url,
+      source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
+  }
 }
 
 export async function archiveArticle(paths,item,save) {

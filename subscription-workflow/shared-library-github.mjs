@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { createSign } from 'node:crypto';
-import { sharedRepository, sharedIndexPath, sharedRecord, commitPattern } from './shared-library.mjs';
+import { sharedRepository, sharedIndexPath, sharedRecord, sharedArticleUrl, sharedDigest,
+  commitPattern, sha256Pattern, sharedMaterialIndexPath, sharedMaterialRecord } from './shared-library.mjs';
 
 const account = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
 const repo = '/repos/' + sharedRepository;
@@ -46,12 +47,12 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
     return (await renewing).token;
   }
 
-  async function lookup(url) {
+  async function lookupIndex(path, validate) {
     const auth = await token();
     const current = await api(repo + '/git/ref/heads/main', { token: auth });
     const commit = current.object?.sha;
     if (!commitPattern.test(commit || '')) throw new Error('shared_github_invalid_head');
-    const entry = await api(repo + '/contents/' + sharedIndexPath(url) + '?ref=' + commit, { token: auth, missing: true });
+    const entry = await api(repo + '/contents/' + path + '?ref=' + commit, { token: auth, missing: true });
     if (!entry) return { commit, record: null };
     if (entry.type !== 'file' || entry.encoding !== 'base64' || typeof entry.content !== 'string') {
       throw new Error('shared_library_invalid_index');
@@ -59,16 +60,24 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
     let record;
     try { record = JSON.parse(Buffer.from(entry.content, 'base64').toString('utf8')); }
     catch { throw new Error('shared_library_invalid_index'); }
-    return { commit, record: sharedRecord(record, url) };
+    return { commit, record: validate(record) };
   }
+  const lookup = url => lookupIndex(sharedIndexPath(url), record => sharedRecord(record, url));
+  const lookupArticleHash = hash => {
+    if (!sha256Pattern.test(hash || '')) throw new Error('shared_library_invalid_index');
+    return lookupIndex('index/articles/' + hash + '.json', record => {
+      const url = sharedArticleUrl(record?.url);
+      if (!url || url !== record.url || sharedDigest(url) !== hash) throw new Error('shared_library_invalid_index');
+      return sharedRecord(record, url);
+    });
+  };
+  const lookupMaterial = hash => lookupIndex(sharedMaterialIndexPath(hash), record => sharedMaterialRecord(record, hash));
 
-  async function publishedCommit(base, record, markdown, auth) {
+  async function publishedCommit(base, entries, auth) {
     const parent = await api(repo + '/git/commits/' + base, { token: auth });
     const tree = await api(repo + '/git/trees', {
-      method: 'POST', token: auth, body: { base_tree: parent.tree.sha, tree: [
-        { path: record.original.path, mode: '100644', type: 'blob', content: markdown },
-        { path: sharedIndexPath(record.url), mode: '100644', type: 'blob', content: JSON.stringify(record, null, 2) + '\n' }
-      ] }
+      method: 'POST', token: auth, body: { base_tree: parent.tree.sha,
+        tree: entries.map(entry => ({ mode: '100644', type: 'blob', ...entry })) }
     });
     const created = await api(repo + '/git/commits', { method: 'POST', token: auth, body: {
       message: 'Add shared subscription material', tree: tree.sha, parents: [base], author: account, committer: account
@@ -76,6 +85,8 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
     if (!commitPattern.test(created.sha || '')) throw new Error('shared_github_invalid_commit');
     return created.sha;
   }
+
+  const indexEntry = (path, record) => ({ path, content: JSON.stringify(record, null, 2) + '\n' });
 
   async function pending(submission, auth) {
     const branch = 'subscription-submissions/' + submission;
@@ -86,25 +97,17 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
     return { branch, existing };
   }
 
-  return {
-    ready, lookup,
-    async submission(urlHash) {
-      if (!ready) return null;
-      const { pull } = await pending(urlHash, await token());
-      if (!pull) return null;
-      if (pull.state !== 'open') throw new Error('shared_submission_closed');
-      return { status: 'pending_review', pull_request: pull.html_url };
-    },
-    async publish({ url, record, markdown, direct, submission }) {
+  async function publish({ read, build, direct, submission, title, url }) {
       const auth = await token(true);
       for (let attempt = 0; attempt < 3; attempt++) {
-        const current = await lookup(url);
-        if (current.record) return { status: 'available', commit: current.commit, record: current.record };
+        const current = await read();
+        const change = await build(current.record, auth);
+        if (!change.entries.length) return { status: 'available', commit: current.commit, record: current.record };
         if (direct) {
-          const sha = await publishedCommit(current.commit, record, markdown, auth);
+          const sha = await publishedCommit(current.commit, change.entries, auth);
           try {
             await api(repo + '/git/refs/heads/main', { method: 'PATCH', token: auth, body: { sha, force: false } });
-            return { status: 'available', commit: sha, record };
+            return { status: 'available', commit: sha, record: change.record };
           } catch (error) {
             if (![409, 422].includes(error.status)) throw error;
           }
@@ -114,11 +117,11 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
           if (pull) throw new Error('shared_submission_closed');
           try {
             if (!existing) {
-              const sha = await publishedCommit(current.commit, record, markdown, auth);
+              const sha = await publishedCommit(current.commit, change.entries, auth);
               await api(repo + '/git/refs', { method: 'POST', token: auth, body: { ref: 'refs/heads/' + branch, sha } });
             }
             const result = await api(repo + '/pulls', { method: 'POST', token: auth, body: {
-              title: 'Add subscription material: ' + record.title.slice(0, 120), head: branch, base: 'main', body: record.url
+              title: 'Add shared material: ' + title.slice(0, 120), head: branch, base: 'main', body: url
             } });
             return { status: 'pending_review', pull_request: result.html_url };
           } catch (error) {
@@ -127,6 +130,39 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
         }
       }
       throw new Error('shared_github_publish_conflict');
+  }
+
+  return {
+    ready, lookup, lookupMaterial, lookupArticleHash,
+    async submission(urlHash) {
+      if (!ready) return null;
+      const { pull } = await pending(urlHash, await token());
+      if (!pull) return null;
+      if (pull.state !== 'open') throw new Error('shared_submission_closed');
+      return { status: 'pending_review', pull_request: pull.html_url };
+    },
+    publish({ url, record, markdown, direct, submission }) {
+      return publish({ url, direct, submission, title: record.title, read: () => lookup(url), build: current => current
+        ? { entries: [] } : { record, entries: [{ path: record.original.path, content: markdown }, indexEntry(sharedIndexPath(url), record)] } });
+    },
+    publishVersion({ url, originalSha256, version, markdown }) {
+      return publish({ url, direct: true, read: () => lookup(url), build: current => {
+        if (current?.original.sha256 !== originalSha256) throw new Error('shared_version_original_changed');
+        const existing = current.versions || [];
+        if (existing.some(item => item.kind === version.kind && item.sha256 === version.sha256)) return { entries: [] };
+        const record = sharedRecord({ ...current, versions: [...existing, version] }, url);
+        return { record, entries: [{ path: version.path, content: markdown }, indexEntry(sharedIndexPath(url), record)] };
+      } });
+    },
+    publishMaterial({ record, bytes, direct }) {
+      return publish({ url: record.url, direct, title: record.extension.toUpperCase(), submission: 'material-' + record.sha256,
+        read: () => lookupMaterial(record.sha256), build: async (current, auth) => {
+          if (current) return { entries: [] };
+          const blob = await api(repo + '/git/blobs', { method: 'POST', token: auth,
+            body: { content: bytes.toString('base64'), encoding: 'base64' } });
+          if (!commitPattern.test(blob.sha || '')) throw new Error('shared_github_invalid_blob');
+          return { record, entries: [{ path: record.path, sha: blob.sha }, indexEntry(sharedMaterialIndexPath(record.sha256), record)] };
+        } });
     }
   };
 }

@@ -272,6 +272,7 @@ export function buildPreprocessRequest({ markdown, metadata, userInstruction = "
       fetched_at: metadata.fetched_at,
       content_completeness: metadata.content_completeness,
       original_source_ref: metadata.original_source_ref,
+      ...(metadata.shared_library?.status === 'available' ? { shared_original_sha256: metadata.shared_library.sha256 } : {}),
       source_is_original: true,
       translation: { is_translation: false }
     },
@@ -360,6 +361,7 @@ export async function syncFeedDocument({
   userInstruction = "",
   fetchFulltext = false,
   articleFetcher = null,
+  sharedArticleFetcher = null,
   maxItems = 0,
   onlyItemUrls = null,
   acceptItem = null,
@@ -417,11 +419,37 @@ export async function syncFeedDocument({
     let rawPageHtml = "";
     let itemPageResponse = null;
     let originalArticle = null;
+    let sharedLibrary = null;
     const refreshRichText=fetchFulltext && existingPackage?.content_status==='fulltext_ready'
       && originalArticleTarget(item.item_url) && existingPackage.receipt?.fulltext_evidence?.extraction_version!==ARTICLE_EXTRACTION_VERSION;
     const errors = [];
 
-    if ((contentStatus === "summary_only" || refreshRichText) && item.item_url) {
+    if (fetchFulltext && sharedArticleFetcher && item.item_url && (existingPackage?.content_status !== 'fulltext_ready' || refreshRichText)) {
+      try {
+        const shared = await sharedArticleFetcher(item.item_url, existingPackage?.source_metadata?.shared_library);
+        if (shared) {
+          const { article, ...receipt } = shared;
+          sharedLibrary = receipt;
+          if (shared.status === 'available') {
+            contentStatus = 'fulltext_ready';
+            sourceRef = 'shared-library';
+            markdownBody = rawContent = article.markdown;
+            statusHistory.push(contentStatus);
+          } else if (shared.status === 'pending_review') {
+            contentStatus = 'fetch_failed';
+            statusHistory.push(contentStatus);
+            errors.push({ code: 'shared_pending_review', stage: 'shared_library', message: '共享资料库投稿待合并' });
+          }
+        }
+      } catch (error) {
+        sharedLibrary = { status: 'retry_wait' };
+        contentStatus = 'fetch_failed';
+        statusHistory.push(contentStatus);
+        errors.push({ code: 'shared_lookup_failed', stage: 'shared_library', message: error.message });
+      }
+    }
+
+    if ((!sharedLibrary || sharedLibrary.status === 'local_only') && (contentStatus === "summary_only" || refreshRichText) && item.item_url) {
       statusHistory.push("fetch_required");
       contentStatus = "fetch_required";
       if (fetchFulltext && (existingPackage?.content_status !== "fulltext_ready" || refreshRichText)) {
@@ -494,6 +522,7 @@ export async function syncFeedDocument({
       fetched_at: fetchedAt,
       content_completeness: contentStatus,
       original_source_ref: sourceRef,
+      ...(sharedLibrary ? { shared_library: sharedLibrary } : {}),
       ...(originalArticle ? {original_url:originalArticle.url} : {}),
       user_instruction: userInstruction
     };

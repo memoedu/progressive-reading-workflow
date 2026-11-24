@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { pilotArticleUrl, sharedDigest, sharedSchema } from './shared-library.mjs';
+import { pilotArticleUrl, sharedArticleUrl, sharedDigest, sharedSchema, sharedVariantPath, variantKind,
+  sharedIndexPath, sharedMaterialRecord, sha256Pattern } from './shared-library.mjs';
+import { createPublicRssSources, localOnly } from './shared-library-sources.mjs';
 import { createSharedGitHub } from './shared-library-github.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
@@ -22,13 +24,13 @@ function json(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-async function readBody(req) {
+async function readBody(req, limit = 8192) {
   if (!/^application\/json(?:;|$)/iu.test(req.headers['content-type'] || '')) throw new Error('shared_json_required');
   req.setEncoding('utf8');
   let body = '';
   for await (const chunk of req) {
     body += chunk;
-    if (Buffer.byteLength(body) > 8192) throw new Error('shared_request_too_large');
+    if (Buffer.byteLength(body) > limit) throw new Error('shared_request_too_large');
   }
   const input = JSON.parse(body);
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('shared_invalid_request');
@@ -99,13 +101,20 @@ function checkCredentials(markdown, executable) {
 }
 
 export function createSharedLibraryServer({
-  config, github = createSharedGitHub(config.github), fetchArticle = fetchPilotArticle,
-  scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now
+  config, github = createSharedGitHub(config.github), fetchArticle = config.public_rss
+    ? createPublicRssSources(config.public_rss) : url => pilotArticleUrl(url) ? fetchPilotArticle(url) : localOnly('source_not_in_public_feed'),
+  scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now, fetchMaterial = fetch
 }) {
   const sessions = sessionProtocol(config, now);
   const limits = new Map();
   const pending = new Map();
   const writeAvailable = Boolean(github.ready && config.gitleaks);
+  const publicMaterials = new Map((config.public_materials || []).map(({ url, extension, sha256, bytes, article_url }) => {
+    const record = sharedMaterialRecord({ schema: 'progressive-reading.shared-material/v1', url, extension, sha256, bytes,
+      path: '原材料/' + String(extension).toUpperCase() + '/' + sha256 + '.' + extension,
+      ...(article_url ? { article_url, article_index: sharedIndexPath(article_url) } : {}) }, sha256);
+    return [sha256, record];
+  }));
 
   function allowed(req, scope, limit) {
     const address = config.trust_proxy ? (req.headers['x-real-ip'] || req.socket.remoteAddress) : req.socket.remoteAddress;
@@ -120,8 +129,9 @@ export function createSharedLibraryServer({
 
   async function write(url, direct) {
     const article = await fetchArticle(url);
+    if (article.status === 'local_only') return article;
     const markdown = article.markdown;
-    const title = String(article.title || 'Ben Kuhn').replace(/\s+/gu, ' ').trim().slice(0, 160);
+    const title = String(article.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);
     const bytes = Buffer.byteLength(markdown || '');
     if (bytes < 200 || bytes > 700000 || markdown.length > 300000 ||
         publicArchiveContainsPrivateData(title, markdown, config.private_email_sha256) ||
@@ -129,9 +139,42 @@ export function createSharedLibraryServer({
     const sourceHash = sharedDigest(markdown);
     const sourceId = sharedDigest(url);
     const record = { schema: sharedSchema, url, title, original: {
-      path: '订阅/RSS/Ben Kuhn/' + sourceId.slice(0, 24) + '.md', sha256: sourceHash
+      path: '订阅/RSS/' + (article.folder || 'Ben Kuhn') + '/' + sourceId.slice(0, 24) + '.md', sha256: sourceHash
     } };
     return github.publish({ url, record, markdown, direct, submission: sourceId });
+  }
+
+  async function saveVersion(input) {
+    const url = sharedArticleUrl(input.url);
+    const { kind, markdown, original_sha256: originalSha256 } = input;
+    if (!url || !variantKind(kind) || !sha256Pattern.test(originalSha256 || '') || typeof markdown !== 'string' ||
+        markdown.trim().length < 80 || markdown.startsWith('---') || Buffer.byteLength(markdown) > 600000) {
+      throw new Error('shared_invalid_version');
+    }
+    const current = await github.lookup(url);
+    if (current.record?.original.sha256 !== originalSha256) throw new Error('shared_version_original_changed');
+    if (publicArchiveContainsPrivateData(url, markdown, config.private_email_sha256) || !await scan(markdown)) {
+      throw new Error('shared_material_not_publication_ready');
+    }
+    const sha256 = sharedDigest(markdown);
+    const version = { kind, sha256, path: sharedVariantPath(url, kind, sha256) };
+    const result = await github.publishVersion({ url, originalSha256, version, markdown });
+    return { status: result.status, commit: result.commit, version };
+  }
+
+  async function saveMaterial(record, direct) {
+    const response = await fetchMaterial(record.url, { redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(20_000) });
+    if (!response.ok || (response.url && response.url !== record.url)) throw new Error('shared_material_source_unavailable');
+    const chunks = [];
+    let length = 0;
+    for await (const chunk of response.body) {
+      length += chunk.byteLength;
+      if (length > record.bytes) throw new Error('shared_material_source_changed');
+      chunks.push(chunk);
+    }
+    const bytes = Buffer.concat(chunks);
+    if (bytes.length !== record.bytes || sharedDigest(bytes) !== record.sha256) throw new Error('shared_material_source_changed');
+    return github.publishMaterial({ record, bytes, direct });
   }
 
   return http.createServer({ requestTimeout: 45_000, headersTimeout: 8_000 }, async (req, res) => {
@@ -140,8 +183,15 @@ export function createSharedLibraryServer({
       if (req.method === 'GET' && route.pathname === prefix + 'health') {
         return json(res, 200, { status: 'ok', service: 'progressive-reading-sync', write_available: writeAvailable });
       }
-      if (req.method !== 'POST' || ![prefix + 'session', prefix + 'resolve', prefix + 'status'].includes(route.pathname)) {
+      const action = ['session', 'resolve', 'status', 'variant', 'material', 'article'].find(name => route.pathname === prefix + name);
+      if (req.method !== 'POST' || !action) {
         return json(res, 404, { error: 'shared_route_not_found' });
+      }
+      if (action === 'variant') {
+        if (!sessions.verify(req.headers.authorization)) return json(res, 401, { error: 'shared_login_required' });
+        if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
+        if (!allowed(req, 'variant', 12)) return json(res, 429, { error: 'shared_submission_rate_limited' });
+        return json(res, 200, await saveVersion(await readBody(req, 1024 * 1024)));
       }
       const input = await readBody(req);
       if (route.pathname === prefix + 'session') {
@@ -149,10 +199,36 @@ export function createSharedLibraryServer({
         const token = await sessions.login(input);
         return token ? json(res, 200, { token }) : json(res, 401, { error: 'shared_login_invalid' });
       }
-      const url = pilotArticleUrl(input.url);
-      if (!url) return json(res, 400, { error: 'shared_source_outside_pilot' });
+      if (action === 'article') {
+        if (!sha256Pattern.test(input.sha256 || '')) return json(res, 400, { error: 'shared_invalid_article' });
+        const hit = await github.lookupArticleHash(input.sha256);
+        return json(res, 200, hit.record ? { status: 'available', ...hit } : localOnly('source_not_in_library'));
+      }
+      if (action === 'material') {
+        if (!sha256Pattern.test(input.sha256 || '')) return json(res, 400, { error: 'shared_invalid_material' });
+        const hit = await github.lookupMaterial(input.sha256);
+        if (hit.record) return json(res, 200, { status: 'available', ...hit });
+        if (input.lookup_only === true) return json(res, 200, localOnly('source_not_in_library'));
+        const record = publicMaterials.get(input.sha256);
+        if (!record) return json(res, 200, localOnly('material_source_not_verified'));
+        if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
+        const direct = sessions.verify(req.headers.authorization);
+        if (req.headers.authorization && !direct) return json(res, 401, { error: 'shared_session_expired' });
+        if (!direct) {
+          const prior = await github.submission('material-' + record.sha256);
+          if (prior) return json(res, 202, prior);
+        }
+        if (!allowed(req, 'material', 2) || pending.size >= 8) return json(res, 429, { error: 'shared_submission_rate_limited' });
+        const key = 'material-' + record.sha256 + ':' + Boolean(direct);
+        if (!pending.has(key)) pending.set(key, saveMaterial(record, direct).finally(() => pending.delete(key)));
+        const result = await pending.get(key);
+        return json(res, result.status === 'pending_review' ? 202 : 200, result);
+      }
+      const url = sharedArticleUrl(input.url);
+      if (!url) return json(res, 200, localOnly('source_not_publicly_verified'));
       const hit = await github.lookup(url);
       if (hit.record) return json(res, 200, { status: 'available', commit: hit.commit, record: hit.record });
+      if (input.lookup_only === true) return json(res, 200, localOnly('source_not_in_library'));
       const direct = sessions.verify(req.headers.authorization);
       if (req.headers.authorization && !direct) return json(res, 401, { error: 'shared_session_expired' });
       if (!direct || route.pathname === prefix + 'status') {
@@ -169,11 +245,11 @@ export function createSharedLibraryServer({
         pending.set(key, write(url, direct).finally(() => pending.delete(key)));
       }
       const result = await pending.get(key);
-      return json(res, result.status === 'available' ? 200 : 202, result);
+      return json(res, result.status === 'pending_review' ? 202 : 200, result);
     } catch (error) {
       const code = error instanceof SyntaxError ? 'shared_invalid_request' : error.message;
       const safe = /^shared_[a-z0-9_]+$/u.test(code || '') ? code : 'shared_service_unavailable';
-      const status = ['shared_json_required', 'shared_invalid_request', 'shared_request_too_large'].includes(safe) ? 400 :
+      const status = ['shared_json_required', 'shared_invalid_request', 'shared_request_too_large', 'shared_invalid_version'].includes(safe) ? 400 :
         safe === 'shared_material_not_publication_ready' ? 422 : 503;
       return json(res, status, { error: safe });
     }

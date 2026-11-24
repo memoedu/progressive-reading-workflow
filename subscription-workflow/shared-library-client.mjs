@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readJson, writeJson, withLock } from './config.mjs';
-import { pilotArticleUrl, sharedDigest, sharedRecord, sharedRawUrl } from './shared-library.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sha256Pattern, variantKind } from './shared-library.mjs';
+import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 
 const statePath = root => path.join(root, '.local-ir', 'subscription-library-sync.json');
 
@@ -32,7 +33,7 @@ async function request(state, route, input, fetchImpl = fetch) {
   const response = await fetchImpl(new URL(route, state.endpoint), {
     method: 'POST', headers: { 'Content-Type': 'application/json',
       ...(route !== 'session' && state.token ? { Authorization: 'Bearer ' + state.token } : {}) },
-    body: JSON.stringify(input), signal: AbortSignal.timeout(40_000)
+    body: JSON.stringify(input), signal: AbortSignal.timeout(route === 'article' ? 8000 : 40_000)
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'shared_sync_unavailable');
@@ -62,9 +63,9 @@ export async function updateSharedLibrarySettings(root, input, fetchImpl = fetch
   }, { waitMs: 2000 });
 }
 
-async function articleBytes(response) {
+async function articleBytes(response, maxBytes = 700000) {
   if (!response.ok) throw new Error('shared_download_failed');
-  const maxBytes = 700000, chunks = [];
+  const chunks = [];
   let length = 0;
   for await (const chunk of response.body) {
     length += chunk.byteLength;
@@ -74,13 +75,20 @@ async function articleBytes(response) {
   return Buffer.concat(chunks, length);
 }
 
-export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch } = {}) {
-  const canonical = pilotArticleUrl(url);
+export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch, lookupOnly = false } = {}) {
+  const canonical = sharedArticleUrl(url);
   if (!canonical) return null;
   const state = await settings(root);
   if (!state.enabled || !state.endpoint) return null;
   const pending = previous?.status === 'pending_review';
-  const result = await request(state, pending ? 'status' : 'resolve', { url: canonical }, fetchImpl);
+  let result;
+  try { result = lookupOnly ? await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl)
+    : await request(state, pending ? 'status' : 'resolve', { url: canonical }, fetchImpl); }
+  catch (error) {
+    if (error.message === 'shared_source_outside_pilot') return { status: 'local_only', reason: 'source_not_enabled' };
+    throw error;
+  }
+  if (result.status === 'local_only') return { status: 'local_only', reason: result.reason || 'source_not_verified' };
   if (result.status === 'pending_review') {
     const link = result.pull_request || previous?.pull_request;
     return { status: result.status, ...(typeof link === 'string' &&
@@ -94,5 +102,73 @@ export async function resolveSharedSubscription(root, url, previous, { fetchImpl
   const markdown = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   if (markdown.length > 300000) throw new Error('shared_download_too_large');
   return { status: 'available', commit: result.commit, sha256: original.original.sha256,
-    article: { markdown, title: original.title || '' } };
+    article: { markdown, title: original.title || '', shared_original_sha256: original.original.sha256 } };
+}
+
+export async function publishSharedVersion(root, { url, kind, markdown, originalSha256 }, { fetchImpl = fetch } = {}) {
+  const state = await settings(root);
+  if (!state.enabled || !state.endpoint || !state.token) return null;
+  const canonical = sharedArticleUrl(url);
+  if (!canonical || !variantKind(kind) || !sha256Pattern.test(originalSha256 || '') || typeof markdown !== 'string') {
+    throw new Error('shared_invalid_version');
+  }
+  const backup = await readJson(path.join(root, '.local-ir', 'original-markdown-backup.json'), {});
+  if (publicArchiveContainsPrivateData(canonical, markdown, backup.private_email_sha256 || [])) {
+    throw new Error('shared_material_not_publication_ready');
+  }
+  return request(state, 'variant', { url: canonical, kind, markdown, original_sha256: originalSha256 }, fetchImpl);
+}
+
+export function generatedSharedVersions(result) {
+  const versions = [];
+  if (result.translation_state === 'generated_translation') {
+    const markdown = result.artifacts.body_blocks.map(block => block.markdown).join('\n\n').trim();
+    if (markdown) versions.push({ kind: 'translation', markdown });
+  }
+  if (result.receipt.reading_guide?.status === 'generated') {
+    const markdown = result.artifacts.reading_markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '').trim();
+    if (markdown) versions.push({ kind: 'reading_guide', markdown });
+  }
+  return versions;
+}
+
+export async function syncSharedVersions(root, url, originalSha256, versions) {
+  const receipts = [];
+  for (const version of versions) {
+    try {
+      const receipt = await publishSharedVersion(root, { url, originalSha256, ...version });
+      if (receipt) receipts.push({ kind: version.kind, ...receipt });
+    } catch (error) {
+      receipts.push({ kind: version.kind, status: 'retry_wait',
+        error: /^shared_[a-z0-9_]+$/u.test(error.message) ? error.message : 'shared_sync_unavailable' });
+    }
+  }
+  return receipts;
+}
+
+export async function downloadSharedVersion(root, { url, kind, sha256 }, { fetchImpl = fetch } = {}) {
+  const canonical = sharedArticleUrl(url);
+  if (!canonical || !variantKind(kind) || (sha256 && !sha256Pattern.test(sha256))) throw new Error('shared_invalid_version');
+  const state = await settings(root);
+  if (!state.endpoint) throw new Error('shared_sync_endpoint_required');
+  const result = await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl);
+  if (result.status !== 'available') return null;
+  const record = sharedRecord(result.record, canonical);
+  const version = (record.versions || []).findLast(row => row.kind === kind && (!sha256 || row.sha256 === sha256));
+  if (!version) return null;
+  const bytes = await articleBytes(await fetchImpl(sharedRawUrl(result.commit, version.path), { signal: AbortSignal.timeout(15_000) }));
+  if (sharedDigest(bytes) !== version.sha256) throw new Error('shared_download_hash_mismatch');
+  return { status: 'available', commit: result.commit, version, bytes };
+}
+
+export async function resolveSharedMaterial(root, hash, { lookupOnly = false, fetchImpl = fetch } = {}) {
+  if (!sha256Pattern.test(hash || '')) throw new Error('shared_invalid_material');
+  const state = await settings(root);
+  if (!state.enabled || !state.endpoint) return null;
+  const result = await request(state, 'material', { sha256: hash, ...(lookupOnly ? { lookup_only: true } : {}) }, fetchImpl);
+  if (result.status !== 'available') return result;
+  const record = sharedMaterialRecord(result.record, hash);
+  const bytes = await articleBytes(await fetchImpl(sharedRawUrl(result.commit, record.path), { signal: AbortSignal.timeout(30_000) }), record.bytes);
+  if (bytes.length !== record.bytes || sharedDigest(bytes) !== hash) throw new Error('shared_download_hash_mismatch');
+  return { status: result.status, commit: result.commit, record, bytes };
 }

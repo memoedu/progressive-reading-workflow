@@ -165,6 +165,7 @@ async function sync(options) {
     userInstruction: String(options["user-instruction"] || ""),
     fetchFulltext,
     articleFetcher,
+    sharedArticleFetcher: options.sharedArticleFetcher,
     acceptItem: options.acceptItem,
     maxItems,
     fetchedAt,
