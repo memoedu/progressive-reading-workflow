@@ -6,6 +6,8 @@ import { withoutUrlCookieEnvironment } from './url-background-fetch.mjs';
 
 const maxBytes = 2 * 1024 * 1024;
 const archivePath = /^(?!\.|\/)(?!.*(?:^|\/)\.)[^\\:\x00-\x1f]+\.md$/iu;
+const archiveIdentity = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
+const credentialLink = /https?:\/\/[^\s<>]+[?&](?:access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?(?:id|key|token)|cookie|x-amz-credential)=/iu;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const gitBlob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 
@@ -81,7 +83,10 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
         continue;
       }
       if (!current.missing) throw new Error('backup_github_read_failed');
-      const payload = JSON.stringify({ message: 'Back up captured Markdown', content: bytes.toString('base64'), branch: 'main' });
+      const payload = JSON.stringify({
+        message: 'Back up captured Markdown', content: bytes.toString('base64'), branch: 'main',
+        author: archiveIdentity, committer: archiveIdentity
+      });
       // The API requires the previous blob SHA for updates. Omit it to create only.
       const created = await github(['--method', 'PUT', endpoint, '--input', '-', '--jq', '.content.sha'], payload);
       if (created.code !== 0 || created.stdout !== expected) throw new Error('backup_github_write_failed');
@@ -117,7 +122,7 @@ export function createOriginalMarkdownBackup({ workflowRoot, readingRoot, run = 
       }
       const bytes = Buffer.from(item.markdown || '', 'utf8');
       if (!config.origins.includes(item.origin) || item.repository !== config.repository || !archivePath.test(item.relative)
-          || !bytes.length || bytes.length > maxBytes || sha256(bytes) !== item.sha256) {
+          || !bytes.length || bytes.length > maxBytes || sha256(bytes) !== item.sha256 || credentialLink.test(item.markdown)) {
         await hold(file, name);
         continue;
       }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
-import { initialize, paths, normalizeSource, saveSource, loadConfig, writeJson, readJson, digest } from '../subscription-workflow/config.mjs';
+import { initialize, paths, normalizeSource, saveSource, loadConfig, writeJson, readJson, digest, withLock } from '../subscription-workflow/config.mjs';
 import { saveSourceMaterial, canonicalCatalog } from '../subscription-workflow/catalog.mjs';
 import { autoConfig, prepareVideoPreview, discoverAuthor, retryAuto, scanZhihu, scanVideos, replayRssHistory } from '../subscription-workflow/adapters.mjs';
 import { enqueue, jobList, monitorMarkdown, resolveMode, drain, appendActivity, weekKey } from '../subscription-workflow/service.mjs';
@@ -275,6 +275,22 @@ test('file monitor waits for stable save then queues once; job identity survives
   const f=await fixture();await fs.mkdir(paths(f.root).summaryRoot,{recursive:true});const file=path.join(paths(f.root).summaryRoot,'2026-11-06 订阅 日报.md');await fs.writeFile(file,'- [x] 已保存');
   assert.equal((await monitorMarkdown(f.root,1000)).queued,0);assert.equal((await monitorMarkdown(f.root,30000)).queued,0);assert.equal((await monitorMarkdown(f.root,46000)).queued,1);assert.equal((await monitorMarkdown(f.root,61000)).queued,0);
   const job=await enqueue(f.root,'rss','2026-11-06');assert.equal((await enqueue(f.root,'rss','2026-11-06')).id,job.id);assert.equal((await jobList(f.root)).length,2);
+});
+
+test('simultaneous scheduled triggers wait for the enqueue lock and preserve each job once', async () => {
+  const f = await fixture();
+  const cycle = 'scheduled-2026-11-24';
+  let submissions;
+  await withLock(path.join(f.home, 'enqueue.lock'), async () => {
+    const jobs = ['rss', 'zhihu', 'bilibili', 'rss'].map(kind => enqueue(f.root, kind, cycle));
+    submissions = Promise.allSettled(jobs);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal((await jobList(f.root)).length, 0);
+  });
+  const results = await submissions;
+  assert.ok(results.every(result => result.status === 'fulfilled'));
+  assert.equal(results[0].value.id, results[3].value.id);
+  assert.deepEqual((await jobList(f.root)).map(job => job.kind).sort(), ['bilibili', 'rss', 'zhihu']);
 });
 
 test('mode conflicts stop one material only; stored resolution restarts it without a model-mode ambiguity',async()=>{

@@ -43,7 +43,7 @@ export async function enqueue(root, kind, key = localDate()) {
     if (existing) return existing;
     const job = { id, kind, cycle: key, status: 'queued', created_at: stamp(), steps: {} };
     await writeJson(file,job); return job;
-  });
+  }, { waitMs: 5000 });
 }
 
 export async function enqueueVideoRequest(root, input, { retry = false } = {}) {
