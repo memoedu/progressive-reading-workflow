@@ -35,6 +35,8 @@ test('archives exact anonymous Markdown once and preserves an existing different
     const body = JSON.parse(input);
     assert.equal(body.branch, 'main');
     assert.equal('sha' in body, false);
+    assert.match(body.author.email, /@users\.noreply\.github\.com$/u);
+    assert.deepEqual(body.committer, body.author);
     const raw = Buffer.from(body.content, 'base64');
     assert.deepEqual(raw, Buffer.from(source.markdown));
     remote.set(endpoint, blob(raw));
@@ -75,4 +77,19 @@ test('holds scan findings, retries unavailable GitHub, and ignores login-bound s
   assert.equal((await backup.status()).held, 1);
   assert.equal((await backup.status()).queued, 0);
   assert.equal(scanned, 1);
+});
+
+test('keeps links with access token parameters in the local held queue', async t => {
+  const calls = [];
+  const { backup, ...source } = await fixture(t, async (program, args) => {
+    calls.push([program, ...args]);
+    return { code: 0, stdout: 'true\tfalse\tmain' };
+  });
+  await backup.capture({ ...source, markdown: 'Sample link https://example.org/?access_token=placeholder' });
+  await backup.flush();
+  assert.equal((await backup.status()).held, 1);
+  assert.equal((await backup.status()).queued, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'gh');
+  assert.ok(calls[0].every(arg => !arg.includes('/contents/')));
 });

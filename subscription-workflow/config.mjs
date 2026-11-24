@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as pause } from 'node:timers/promises';
 import { dataPath, artifactPath } from '../scripts/runtime-paths.mjs';
 import { renameWithRetry } from '../rss-source/core.mjs';
 import { readingDestination } from './reading-options.mjs';
@@ -39,19 +40,39 @@ export async function writeJson(file, value) {
   await renameWithRetry(temporary, file);
 }
 
-export async function withLock(file, action) {
+export async function withLock(file, action, { waitMs = 0 } = {}) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const token = randomUUID();
+  const deadline = Date.now() + waitMs;
   let handle;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 2;) {
     try { handle = await fs.open(file, 'wx'); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const previous = await readJson(file);
+      let previous;
+      try { previous = await readJson(file); }
+      catch (readError) {
+        // Another process may have created the lock and still be writing its PID.
+        if (!(readError instanceof SyntaxError) || Date.now() >= deadline) throw readError;
+        await pause(35);
+        continue;
+      }
+      if (!previous && Date.now() < deadline) {
+        await pause(35);
+        continue;
+      }
       if (!Number.isSafeInteger(previous?.pid)) throw new Error('订阅锁文件需要检查');
-      try { process.kill(previous.pid, 0); throw new Error('该操作正在执行，请稍后重试'); }
-      catch (probe) { if (probe.code !== 'ESRCH') throw probe; }
-      await fs.unlink(file);
+      try { process.kill(previous.pid, 0); }
+      catch (probe) {
+        if (probe.code !== 'ESRCH') throw probe;
+        if ((await readJson(file))?.token === previous.token) {
+          await fs.unlink(file).catch(unlinkError => { if (unlinkError.code !== 'ENOENT') throw unlinkError; });
+        }
+        attempt++;
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error('该操作正在执行，请稍后重试');
+      await pause(35);
     }
   }
   if (!handle) throw new Error('无法取得订阅写入锁');
