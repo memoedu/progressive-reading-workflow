@@ -5,7 +5,7 @@ import path from 'node:path';
 import { deflateSync,gzipSync } from 'node:zlib';
 import { JSDOM } from 'jsdom';
 import { pathToFileURL } from 'node:url';
-import { decodeBody,templateUrl,captureArticle } from '../site-import/network.mjs';
+import { decodeBody,templateUrl,captureArticle,fetchSiteText } from '../site-import/network.mjs';
 import { discoverSite,matchesPath,scriptEvidence } from '../site-import/discovery.mjs';
 import { normalizeSiteSource,saveSiteSource,runId,runPath,readSources } from '../site-import/store.mjs';
 import { digest,writeJson } from '../subscription-workflow/config.mjs';
@@ -97,6 +97,24 @@ test('an advertised same-origin Markdown source preserves its bytes and the arti
   const fallback=await captureArticle(url,recipe,{fetchPage});
   assert.equal(fallback.source_response.url,url);
   assert.match(fallback.markdown,/rendered HTML body remains available/u);
+});
+test('large HTML retains all text around inline media and hashes the raw response',async()=>{
+  const url=base+'/archive/recorded-lecture.html';
+  const before='<html><head><title>Archival lecture</title></head><body><p>Open transcript</p><audio src="';
+  const middle='"></audio><video src=';
+  const after='></video><p>最後的正文段落</p></body></html>';
+  const html=before+'data:audio/ogg;base64,'+'A'.repeat(4096)+'&#43;%2B'+middle+'data:video/webm;base64,'+'B'.repeat(8192)+after;
+  const raw=Buffer.from(html),type='text/html; charset=utf-8';
+  const fetchImpl=async()=>new Response(new ReadableStream({start(controller){
+    for(let offset=0;offset<raw.length;offset+=7)controller.enqueue(raw.subarray(offset,offset+7));
+    controller.close();
+  }}),{headers:{'content-type':type}});
+  const capture=await fetchSiteText(url,{fetchImpl,maxBytes:512,separateEmbeddedMedia:true});
+  assert.equal(capture.body,(before+middle+'""'+after).replace(/src=/gu,'data-pr-separated-media="" src='));
+  assert.equal(capture.sha256,digest(raw));
+  assert.equal(capture.bytes,raw.length);
+  assert.equal(capture.separated_inline_media,2);
+  await assert.rejects(fetchSiteText(url,{fetchImpl,maxBytes:512}),/超过完整读取上限/u);
 });
 test('encoded source decoding, query/path templates and scope are generic',()=>{
   for(const [encoding,value]of [['base64_deflate',deflateSync(body)],['base64_gzip',gzipSync(body)],['base64',Buffer.from(body)]])assert.equal(decodeBody(value.toString('base64'),encoding),body);
@@ -223,6 +241,59 @@ test('an HTML archive preserves articles with different body layouts',async()=>{
   assert.match(capture.markdown,new RegExp(original,'u'));
 });
 
+test('a typed article region inherits its document title during HTML fallback',async()=>{
+  const url=base+'/archive/field-report.html';
+  const title='Field report from the east river';
+  const html=`<html><head><title>${title}</title></head><body>
+    <div itemprop="articleBody"><p>The complete field report is available in the public archive.</p></div>
+    </body></html>`;
+  const fetchPage=async()=>({url,body:html,sha256:digest(html),bytes:Buffer.byteLength(html),content_type:'text/html'});
+  const capture=await captureArticle(url,{type:'html',body_selector:'#unmatched'},{fetchPage,fallbackHtml:true});
+  assert.equal(capture.title,title);
+  assert.match(capture.markdown,/complete field report/u);
+});
+test('an archive form with an authentication-like hostname is not a login form',async()=>{
+  const url=base+'/archive/civic-article.html';
+  const html=`<html><head><title>Archive notes</title></head><body>
+    <nav><form action="/archive/https://passports.example.org/Search/search.cgi"><input name="query"></form></nav>
+    <main><h1>Open archive text</h1><p>This public notice includes the complete archived instructions for renewing a library card.</p></main>
+    </body></html>`;
+  const fetchPage=async()=>({url,body:html,sha256:digest(html),bytes:Buffer.byteLength(html),content_type:'text/html'});
+  const result=await captureArticle(url,{type:'html',body_selector:'#unmatched'},{fetchPage,fallbackHtml:true});
+  assert.match(result.markdown,/renewing a library card/u);
+});
+test('an article publicly visible beside a navigation sign-in form retains the full body',async()=>{
+  const url=base+'/archives/seasonal-field-notes.html';
+  const title='Seasonal field notes from the river';
+  const paragraph=label=>`<p>${label} — ${'Records describe changes observed along the footpath, based on measurements during the following season. '.repeat(3)}</p>`;
+  const login='<form action="/login"><label>Password <input type="password"></label></form>';
+  const article=`<article><h1>${title}</h1>${paragraph('Introduction')}${paragraph('Earlier observations')}${paragraph('Last primary paragraph')}
+    <p hidden>This hidden element is never article evidence or output.</p></article>`;
+  const fetchPage=async()=>({url,body:html,sha256:digest(html),bytes:Buffer.byteLength(html),content_type:'text/html'});
+  const capture=()=>captureArticle(url,{type:'html',body_selector:'#ordinary'},{fetchPage,fallbackHtml:true});
+  let html=`<!doctype html><html><head><title>Archive | ${title}</title></head><body><nav>${login}</nav>${article}</body></html>`;
+  const publicPage=await capture();
+  assert.match(publicPage.markdown,/Last primary paragraph/u);
+  assert.doesNotMatch(publicPage.markdown,/Password|This hidden element/u);
+
+  html=html.replace('</head>','<script type="application/ld+json">{"isAccessibleForFree": false}</script></head>');
+  await assert.rejects(capture,/来源需要登录：password_form_detected/u);
+  html=`<html><head><title>${title}</title></head><body>${article.replace('</article>',login+'</article>')}</body></html>`;
+  await assert.rejects(capture,/来源需要登录：password_form_detected/u);
+
+  const lines=Array.from({length:4},(_,index)=>`Line ${index} ${'The historical observations preserve the original measured results for future comparison. '.repeat(3)}`);
+  html=`<html><head><title>Local records | ${title}</title><meta property="og:title" content="${title}"></head>
+    <body><nav>${login}</nav><table><tr><td class="caption">${title}</td></tr><tr><td>${lines.join('<br>')}</td></tr></table></body></html>`;
+  const oldLayout=await capture();
+  assert.match(oldLayout.markdown,/Line 3/u);
+  assert.doesNotMatch(oldLayout.markdown,/Password/u);
+
+  const photos=['east','south','north'].map(direction=>`<figure><img src="/${direction}.jpg" alt="${direction} view"></figure>`);
+  html=`<html><head><title>${title}</title></head><body><nav>${login}</nav><main><h1>${title}</h1>${photos.join('')}</main></body></html>`;
+  const photoEssay=await capture();
+  assert.match(photoEssay.markdown,/north view/u);
+  assert.doesNotMatch(photoEssay.markdown,/Password/u);
+});
 test('mixed-layout fallback still rejects login forms and JavaScript shells',async()=>{
   const url=base+'/other-layout';
   for(const [body,error]of [

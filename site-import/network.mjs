@@ -3,13 +3,47 @@ import { unzipSync, gunzipSync } from 'node:zlib';
 import { setTimeout as pause } from 'node:timers/promises';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import { htmlDetails } from '../scripts/url-background-fetch.mjs';
-import { canonicalUrl, digest } from '../subscription-workflow/config.mjs';
+import { canonicalUrl } from '../subscription-workflow/config.mjs';
 import {articleTaxonomy,taxonomyFromJson} from './taxonomy.mjs';
 import {pageBookResource} from './book-resources.mjs';
 import {pageKind} from './page-kind.mjs';
+import {readSiteResponse} from './read-html-response.mjs';
 export const CAPTURE_VERSION='site-body/v2';
 const ARTICLE_HTML_LIMIT = 32 * 1024 * 1024;
 const isMarkdownType = type => /^(?:text\/(?:x-)?markdown)(?:;|$)/iu.test(type||'');
+const articleHeading = text => String(text||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+const hiddenArticle = 'aside,nav,footer,template,[hidden],[inert],[aria-hidden="true"],[style*="display:none" i],[style*="display: none" i]';
+function visibleArticle(node) {
+  const clone=node.cloneNode(true);
+  clone.querySelectorAll(hiddenArticle+',script:not([type^="math/tex"]),style,noscript').forEach(item=>item.remove());
+  return clone;
+}
+
+function publicArticleWithSeparateLogin(document) {
+  const restricted='[itemprop~="isAccessibleForFree"][content="false" i], [data-paywall], [class*="paywall" i]';
+  if(document.querySelector(restricted)||[...document.querySelectorAll('script[type="application/ld+json"]')]
+    .some(script=>/"isAccessibleForFree"\s*:\s*(?:false|"false")/iu.test(script.textContent)))return null;
+  const pageHeading=articleHeading(document.title);
+  for(const article of document.querySelectorAll('article,main,[role="article"],[role="main"],[itemprop~="articleBody"],.h-entry,.entry')){
+    if(article.closest(hiddenArticle))continue;
+    const heading=articleHeading(article.querySelector('h1,h2,[itemprop~="headline"],.entry-title,a.title,a[rel="bookmark"]')?.textContent);
+    if(heading.length<12||!pageHeading.includes(heading))continue;
+    const visible=visibleArticle(article);
+    const paragraphs=[...visible.querySelectorAll('p')].filter(p=>p.textContent.trim().length>=60);
+    if(paragraphs.length>=3&&paragraphs.reduce((size,p)=>size+p.textContent.trim().length,0)>=750)return visible.outerHTML;
+    const figures=visible.querySelectorAll('figure img[src],img[src][alt]');
+    if(figures.length>=3&&visible.querySelector('h1,figcaption'))return visible.outerHTML;
+  }
+  const openGraphTitle=articleHeading(document.querySelector('meta[property="og:title"]')?.content);
+  if(openGraphTitle.length>=12)for(const caption of document.querySelectorAll('caption,th,td.caption')){
+    if(articleHeading(caption.textContent)!==openGraphTitle)continue;
+    const table=caption.closest('table');
+    if(!table||table.closest(hiddenArticle))continue;
+    const visible=visibleArticle(table);
+    if(visible.querySelectorAll('br').length>=3&&visible.textContent.trim().length>=750)return visible.outerHTML;
+  }
+  return null;
+}
 
 export function sitePageUrl(value) {
   const pathname = new URL(value).pathname;
@@ -23,10 +57,11 @@ export function scopedUrl(value,base) {
   if(url.origin!==origin.origin)throw new Error('站点发现地址超出当前网站：'+url.origin);
   url.hash='';return url.href;
 }
-export async function fetchSiteText(url,{base=url,fetchImpl=globalThis.fetch,maxBytes=6*1024*1024}={}) {
+export async function fetchSiteText(url,{base=url,fetchImpl=globalThis.fetch,maxBytes=6*1024*1024,separateEmbeddedMedia=false}={}) {
   let target=scopedUrl(url,base);
+  const responseTimeout=separateEmbeddedMedia?90000:45000;
   for(let i=0;i<8;i++){
-    const response=await fetchImpl(target,{headers:{'User-Agent':'Mozilla/5.0','Accept':'text/html,application/json,application/xml,text/xml,*/*'},redirect:'manual',signal:AbortSignal.timeout(45000)});
+    const response=await fetchImpl(target,{headers:{'User-Agent':'Mozilla/5.0','Accept':'text/html,application/json,application/xml,text/xml,*/*'},redirect:'manual',signal:AbortSignal.timeout(responseTimeout)});
     if([301,302,303,307,308].includes(response.status)){
       const location=response.headers.get('location');await response.body?.cancel();
       if(!location)throw new Error('站点跳转没有目标地址');
@@ -36,10 +71,8 @@ export async function fetchSiteText(url,{base=url,fetchImpl=globalThis.fetch,max
       target=scopedUrl(next.href,base);continue;
     }
     if(!response.ok){await response.body?.cancel();const error=new Error('site_http_'+response.status);error.status=response.status;throw error;}
-    const chunks=[];let bytes=0;
-    for await(const chunk of response.body){bytes+=chunk.length;if(bytes>maxBytes)throw new Error('站点响应超过完整读取上限');chunks.push(chunk);}
-    const body=Buffer.concat(chunks).toString('utf8');
-    return {url:target,body,sha256:digest(body),bytes,content_type:response.headers.get('content-type') || ''};
+    const captured=await readSiteResponse(response,maxBytes,{separateEmbeddedMedia});
+    return {url:target,...captured,content_type:response.headers.get('content-type') || ''};
   }
   throw new Error('站点跳转次数过多');
 }
@@ -70,7 +103,7 @@ export function decodeBody(value,encoding='plain') {
 }
 export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbackHtml=false}={}) {
   const source=recipe?.type==='json' ? templateUrl(recipe.url_template,url,url) : url;
-  const options = fallbackHtml && recipe?.type !== 'json' ? { base: url, maxBytes: ARTICLE_HTML_LIMIT } : { base: url };
+  const options = fallbackHtml && recipe?.type !== 'json' ? { base: url, maxBytes: ARTICLE_HTML_LIMIT,separateEmbeddedMedia:true } : { base: url };
   let response;
   for(let attempt=0;attempt<3;attempt++){
     try{
@@ -84,13 +117,15 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbac
       await pause(1000*(attempt+1));
     }
   }
-  let title='',markdown='',metadata={};
+  let title='',markdown='',metadata={},pageHtml='';
   const nativeMarkdown=isMarkdownType(response.content_type);
   if(recipe?.type!=='json'&&!nativeMarkdown){
     if(/^(?:image|video|audio)\/|^application\/(?:pdf|zip|octet-stream)(?:;|$)/iu.test(response.content_type||''))
       return {excluded:true,url,reason:'站点地址指向附件或媒体文件'};
-    const resource=pageBookResource(response.body,response.url);if(resource)return {excluded:true,url,reason:resource.reason,resource};
-    const kind=pageKind(response.body,response.url);if(kind.kind!=='article')return {excluded:true,url,...kind};
+    // Styles are part of the archived response hash, but never article content.
+    pageHtml=response.body.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/giu,'');
+    const resource=pageBookResource(pageHtml,response.url);if(resource)return {excluded:true,url,reason:resource.reason,resource};
+    const kind=pageKind(pageHtml,response.url);if(kind.kind!=='article')return {excluded:true,url,...kind};
   }
   if(recipe?.type==='json'){
     const json=JSON.parse(response.body);
@@ -112,13 +147,22 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbac
     title=/^title:\s*(.+)$/imu.exec(markdown)?.[1]?.replace(/^["']|["']$/gu,'')||/^#\s+(.+)$/mu.exec(markdown)?.[1]||new URL(url).pathname;
     metadata.taxonomy=articleTaxonomy({});
   } else {
-    let html=response.body,selectedBody=false,declaredSource='',pageTitle='';
+    let html=pageHtml,selectedBody=false,declaredSource='',pageTitle='',publicArticle=null;
     const dom=new JSDOM(html,{url:response.url});
     try{
       const document=dom.window.document;
-      pageTitle=document.title;
+      if(response.separated_inline_media){
+        for(const media of document.querySelectorAll('[data-pr-separated-media]')){
+          if(media.tagName==='IMG')media.replaceWith(document.createTextNode(media.alt));
+          else{media.removeAttribute('src');media.removeAttribute('href');}
+        }
+        html=document.documentElement.outerHTML;
+      }
+      pageTitle=document.title.trim()||document.querySelector('meta[property="og:title"],meta[name="twitter:title"]')?.content?.trim()
+        ||document.querySelector('h1,[itemprop="headline"]')?.textContent?.trim()||'';
       const body=recipe?.body_selector?document.querySelector(recipe.body_selector):null;
       if(body){html=body.outerHTML;title=pageTitle;selectedBody=true;}
+      if(!body&&fallbackHtml&&document.querySelector('input[type="password"], form[action]'))publicArticle=publicArticleWithSeparateLogin(document);
       const origin=new URL(response.url).origin;
       declaredSource=[...document.head.querySelectorAll('link[rel~="alternate"][type][href]')]
         .find(link=>isMarkdownType(link.type)&&URL.canParse(link.href)&&new URL(link.href).origin===origin&&link.href!==response.url)?.href||'';
@@ -136,14 +180,21 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbac
       if(recipe?.body_selector&&!selectedBody){
         if(!fallbackHtml)throw new Error('站点指定的正文区域不存在');
         const {authReason,jsReason}=htmlDetails(html,response.url);
-        if(authReason)throw new Error('来源需要登录：'+authReason);
+        if(authReason){
+          const article=publicArticle&&htmlDetails(publicArticle,response.url);
+          if(!['password_form_detected','login_form_detected'].includes(authReason)||!article||article.authReason||article.jsReason)
+            throw new Error('来源需要登录：'+authReason);
+          html=publicArticle;title=pageTitle;selectedBody=true;
+        }
         if(jsReason)throw new Error('来源未返回正文，需要浏览器渲染：'+jsReason);
       }
       const converted=htmlArticleToMarkdown({html,sourceUrl:url,title,extractArticle:!selectedBody});
-      title=title || converted.title;markdown=converted.markdown;
+      title=title || converted.title || pageTitle || new URL(url).pathname.split('/').filter(Boolean).at(-1) || new URL(url).hostname;
+      markdown=converted.markdown;
       if(/^(?:loading[. …]*|正在加载[. …]*)$/iu.test(markdown.trim()) || markdown.replace(/\s/gu,'').length<20)throw new Error('网页未提供可核验正文，需要站点正文接口');
     }
   }
   if(!markdown.trim()||!title)throw new Error('来源缺少完整正文或文章标题');
-  return {capture_version:CAPTURE_VERSION,url,title,markdown,source_response:{url:response.url,sha256:response.sha256,bytes:response.bytes,content_type:response.content_type},metadata};
+  return {capture_version:CAPTURE_VERSION,url,title,markdown,source_response:{url:response.url,sha256:response.sha256,bytes:response.bytes,content_type:response.content_type,
+    ...(response.separated_inline_media?{separated_inline_media:response.separated_inline_media}:{})},metadata};
 }

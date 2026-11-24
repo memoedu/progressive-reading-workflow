@@ -86,6 +86,18 @@ export async function countActiveBrowserImports(root) {
   return value;
 }
 
+export async function canResumeSiteDiscoveryOnReload(root, runId) {
+  const { value: active } = await readState(root,
+    db => db.prepare("SELECT data FROM tasks WHERE status IN ('queued', 'claimed') LIMIT 2").all().map(row=>JSON.parse(row.data)),
+    state => state.tasks.filter(task=>task.status==='queued'||task.status==='claimed').slice(0,2));
+  const [task] = active;
+  const collection = task?.result?.collection;
+  return active.length===1 && task.status==='claimed' && task.siteImport?.run_id===runId
+    && /^local-background-url-fetcher-/u.test(task.workerId||'')
+    && collection?.phase==='discovering' && collection.discovery?.phase==='discovering'
+    && !collection.inventory && !collection.batches?.length;
+}
+
 export function migrateBrowserImportState(root, state) {
   return withWriter(root, db => {
     db.exec("PRAGMA journal_mode = WAL");
