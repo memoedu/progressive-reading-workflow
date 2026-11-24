@@ -68,6 +68,37 @@ test('collection resume preserves batch membership after prior results were save
   await processCollectionTask(task,{broker,runRequest:async()=>{},pollMs:1});
   assert.deepEqual(calls,[urls.slice(50)]);assert.equal(collection.results.length,52);
 });
+test('all-page scope complements featured links with sitemap pages and reuses indexed Markdown', async()=>{
+  const root=await temp(),hits=[];
+  const featured=base+'/featured',unlisted=base+'/another.md',attachment=base+'/archive.pdf';
+  const fetchPage=async url=>{
+    hits.push(url);
+    const pages={
+      [base+'/']:'<ul class="featured"><li><a href="/featured">Featured</a></li></ul>',
+      [base+'/robots.txt']:'',
+      [base+'/sitemap.xml']:'<urlset>'+[featured,unlisted,attachment].map(url=>'<url><loc>'+url+'</loc></url>').join('')+'</urlset>',
+      [unlisted]:body
+    };
+    assert.ok(Object.hasOwn(pages,url),'unexpected fetch: '+url);
+    return {url,body:pages[url],sha256:digest(pages[url]),content_type:url===unlisted?'text/markdown':'text/html'};
+  };
+  const planner=async()=>({plan:{include_paths:['/*'],listing:{type:'html',url:base+'/',item_selector:'.featured a'}}});
+  const settings=normalizeSiteSource({url:base,scope:'content',processing_mode:'original_text'});
+  const tree='a'.repeat(40),commit='b'.repeat(40);
+  const inventory=await discoverSite(root,settings,runId('full-site-fixture'),{planner,fetchPage,
+    lookupSharedIndex:async()=>({tree,keys:new Set([digest(featured)])}),
+    lookupSharedArticle:async(_root,url,_prior,{lookupOnly})=>{
+      assert.equal(url,featured);assert.equal(lookupOnly,true);
+      return {status:'available',commit,path:'Fixtures/article.md',sha256:digest(body),article:{title:'Original from GitHub',markdown:body}};
+    }
+  });
+  assert.equal(inventory.complete,true);
+  assert.deepEqual(inventory.articles.map(row=>row.url),[featured,unlisted]);
+  assert.equal(inventory.shared_library.tree,tree);
+  assert.equal(hits.includes(featured),false);
+  assert.equal(hits.includes(attachment),false);
+  assert.equal(inventory.articles[1].markdown_sha256,digest(body));
+});
 test('new page preserves source editor, original settings, failures, and existing learning payload',async()=>{
   const html=await fs.readFile(new URL('../site-import/web/index.html',import.meta.url),'utf8');
   const code=(await fs.readFile(new URL('../site-import/web/app.mjs',import.meta.url),'utf8')).replace("'/import/client.mjs'",JSON.stringify(pathToFileURL(path.resolve('scripts/browser-import-web/client.mjs')).href));

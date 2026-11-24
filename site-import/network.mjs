@@ -1,11 +1,18 @@
 import { JSDOM } from 'jsdom';
 import { unzipSync, gunzipSync } from 'node:zlib';
+import { setTimeout as pause } from 'node:timers/promises';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import { canonicalUrl, digest } from '../subscription-workflow/config.mjs';
 import {articleTaxonomy,taxonomyFromJson} from './taxonomy.mjs';
 import {pageBookResource} from './book-resources.mjs';
 import {pageKind} from './page-kind.mjs';
 export const CAPTURE_VERSION='site-body/v2';
+
+export function sitePageUrl(value) {
+  const pathname = new URL(value).pathname;
+  const suffix = pathname.split('/').at(-1)?.match(/\.[a-z0-9_-]+$/iu)?.[0];
+  return !suffix || /^\.(?:html?|xhtml|md|markdown|php|aspx?)$/iu.test(suffix);
+}
 
 export function scopedUrl(value,base) {
   const url=new URL(value,base),origin=new URL(base);
@@ -58,12 +65,23 @@ export function decodeBody(value,encoding='plain') {
   if(encoding==='base64_gzip')return gunzipSync(data,{maxOutputLength:8*1024*1024}).toString('utf8');
   throw new Error('正文编码不支持');
 }
-export async function captureArticle(url,recipe,{fetchPage=fetchSiteText}={}) {
+export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbackHtml=false}={}) {
   const source=recipe?.type==='json' ? templateUrl(recipe.url_template,url,url) : url;
   let response;
-  try{response=await fetchPage(source,{base:url});}catch(error){if(error.status===404||error.status===410)return {excluded:true,url,reason:'来源已下线',response_status:error.status};throw error;}
+  for(let attempt=0;attempt<3;attempt++){
+    try{response=await fetchPage(source,{base:url});break;}
+    catch(error){
+      if(error.status===404||error.status===410)return {excluded:true,url,reason:'来源已下线',response_status:error.status};
+      const transient=[408,429,500,502,503,504].includes(error.status)||error.name==='TimeoutError'||error.message==='fetch failed';
+      if(!transient||attempt===2)throw error;
+      await pause(1000*(attempt+1));
+    }
+  }
   let title='',markdown='',metadata={};
-  if(recipe?.type!=='json'){
+  const nativeMarkdown=/^(?:text\/(?:x-)?markdown)(?:;|$)/iu.test(response.content_type||'');
+  if(recipe?.type!=='json'&&!nativeMarkdown){
+    if(/^(?:image|video|audio)\/|^application\/(?:pdf|zip|octet-stream)(?:;|$)/iu.test(response.content_type||''))
+      return {excluded:true,url,reason:'站点地址指向附件或媒体文件'};
     const resource=pageBookResource(response.body,response.url);if(resource)return {excluded:true,url,reason:resource.reason,resource};
     const kind=pageKind(response.body,response.url);if(kind.kind!=='article')return {excluded:true,url,...kind};
   }
@@ -82,12 +100,16 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText}={}) {
     const body=decodeBody(field(json,recipe.content_path),recipe.encoding);
     markdown=recipe.content_format==='html'?htmlArticleToMarkdown({html:body,sourceUrl:url,title,extractArticle:false}).markdown:body;
     metadata={published_at:recipe.published_at_path?field(json,recipe.published_at_path):null,taxonomy:taxonomyFromJson(json,{collection_item_identity_path:recipe.identity_path?.split('.').at(-1),...recipe.taxonomy},field,recipe.identity_path?field(json,recipe.identity_path):null)};
+  } else if(nativeMarkdown){
+    markdown=response.body;
+    title=/^title:\s*(.+)$/imu.exec(markdown)?.[1]?.replace(/^["']|["']$/gu,'')||/^#\s+(.+)$/mu.exec(markdown)?.[1]||new URL(url).pathname;
+    metadata.taxonomy=articleTaxonomy({});
   } else {
-    let html=response.body;
+    let html=response.body,selectedBody=false;
     if(recipe?.body_selector){
-      const dom=new JSDOM(html,{url});try{const body=dom.window.document.querySelector(recipe.body_selector);if(!body)throw new Error('站点指定的正文区域不存在');html=body.outerHTML;title=dom.window.document.title;}finally{dom.window.close();}
+      const dom=new JSDOM(html,{url});try{const body=dom.window.document.querySelector(recipe.body_selector);if(body){html=body.outerHTML;title=dom.window.document.title;selectedBody=true;}else if(!fallbackHtml)throw new Error('站点指定的正文区域不存在');}finally{dom.window.close();}
     }
-    const converted=htmlArticleToMarkdown({html,sourceUrl:url,title,extractArticle:!recipe?.body_selector});
+    const converted=htmlArticleToMarkdown({html,sourceUrl:url,title,extractArticle:!selectedBody});
     title=title || converted.title;markdown=converted.markdown;
     if(/^(?:loading[. …]*|正在加载[. …]*)$/iu.test(markdown.trim()) || markdown.replace(/\s/gu,'').length<20)throw new Error('网页未提供可核验正文，需要站点正文接口');
   }

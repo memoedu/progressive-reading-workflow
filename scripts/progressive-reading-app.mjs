@@ -1568,10 +1568,10 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
     } else {
       if (articleSource) destinationFolder = taxonomyFolder(destinationFolder, source.metadata?.taxonomy);
       fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[],
-        anonymousSiteCapture: source.capture_version === CAPTURE_VERSION && !source.metadata?.repository,
+        anonymousSiteCapture: source.capture_version === CAPTURE_VERSION && !source.metadata?.repository && !source.metadata?.shared_original_sha256,
         draft:{id:'site-'+shortHash(source.url),url:source.url,title:source.title,sourceType:'url_import',pageText:source.markdown,cachedRssMarkdown:source.markdown,
         sourceMetadata:{...source.metadata,source_url:url,canonical_url:source.url,input_form:'written',title:source.title,capture_agent:'verified_site_source',source_response:source.source_response,published_at:source.metadata?.published_at||null}},
-        fetchReceipt:{source_reused:'verified_site_capture',source_response:source.source_response,browser_tab_created:false} };
+        fetchReceipt:{source_reused:source.metadata?.shared_original_sha256?'shared_library':'verified_site_capture',source_response:source.source_response,browser_tab_created:false} };
     }
   }
   fetched.draft.userInstruction = String(userInstruction || "");
