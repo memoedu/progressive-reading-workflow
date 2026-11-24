@@ -1,9 +1,12 @@
 import path from 'node:path';
+import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
 import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sha256Pattern, variantKind } from './shared-library.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 
 const statePath = root => path.join(root, '.local-ir', 'subscription-library-sync.json');
+const defaultEndpoint = 'https://124.221.144.155/progressive-reading-sync/';
+const defaultArticleOrigins = new Set(defaultSources.public_rss.flatMap(source => source.article_origins));
 
 function serverEndpoint(value) {
   try {
@@ -16,7 +19,7 @@ function serverEndpoint(value) {
 
 async function settings(root) {
   const local = await readJson(statePath(root), {});
-  const endpoint = serverEndpoint(process.env.PROGRESSIVE_READING_SHARED_LIBRARY_ENDPOINT || local.endpoint);
+  const endpoint = serverEndpoint(process.env.PROGRESSIVE_READING_SHARED_LIBRARY_ENDPOINT ?? local.endpoint ?? defaultEndpoint);
   return { ...local, endpoint, enabled: local.enabled !== false,
     token: endpoint && endpoint === local.session_endpoint && typeof local.token === 'string' ? local.token : null };
 }
@@ -81,8 +84,9 @@ export async function resolveSharedSubscription(root, url, previous, { fetchImpl
   const state = await settings(root);
   if (!state.enabled || !state.endpoint) return null;
   const pending = previous?.status === 'pending_review';
+  const hashOnly = lookupOnly || (state.endpoint === defaultEndpoint && !defaultArticleOrigins.has(new URL(canonical).origin));
   let result;
-  try { result = lookupOnly ? await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl)
+  try { result = hashOnly ? await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl)
     : await request(state, pending ? 'status' : 'resolve', { url: canonical }, fetchImpl); }
   catch (error) {
     if (error.message === 'shared_source_outside_pilot') return { status: 'local_only', reason: 'source_not_enabled' };

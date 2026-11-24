@@ -150,6 +150,22 @@ test('anonymous reads, anonymous review and signed-in writes share the same serv
 test('local sync defaults to enabled and only accepts byte-verified pinned downloads', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shared-subscription-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const previousEndpoint = process.env.PROGRESSIVE_READING_SHARED_LIBRARY_ENDPOINT;
+  delete process.env.PROGRESSIVE_READING_SHARED_LIBRARY_ENDPOINT;
+  t.after(() => {
+    if (previousEndpoint === undefined) delete process.env.PROGRESSIVE_READING_SHARED_LIBRARY_ENDPOINT;
+    else process.env.PROGRESSIVE_READING_SHARED_LIBRARY_ENDPOINT = previousEndpoint;
+  });
+  assert.deepEqual(await sharedLibrarySettings(root), { enabled: true, configured: true, signed_in: false });
+  const customUrl = 'https://another.example.org/article';
+  await resolveSharedSubscription(root, customUrl, null, {
+    fetchImpl: async (input, options) => {
+      assert.equal(String(input), 'https://124.221.144.155/progressive-reading-sync/article');
+      assert.equal(options.headers.Authorization, undefined);
+      assert.deepEqual(JSON.parse(options.body), { sha256: sharedDigest(customUrl) });
+      return Response.json({ status: 'local_only' });
+    }
+  });
   const local = path.join(root, '.local-ir');
   await fs.mkdir(local);
   await fs.writeFile(path.join(local, 'subscription-library-sync.json'),

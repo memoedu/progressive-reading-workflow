@@ -26,6 +26,6 @@ node subscription-workflow/cli.mjs sync-shared-material --sha256 '<原件哈希>
 
 将[来源配置示例](../config/shared-library-server-sources.example.json)的字段合并到服务器配置。`public_rss` 声明公开 feed、可接受的文章域名和分类目录。`public_materials` 的每条记录包含 `url`、`extension`、`sha256` 和 `bytes`，并可用 `article_url` 关联文章索引及加工版本。仅登记已验证的匿名原件下载地址，单件不超过 25 MiB。
 
-客户端将 [配置示例](../config/subscription-library-sync.example.json)保存到工作流数据根目录的 .local-ir/subscription-library-sync.json。使用账号时通过订阅页登录，会话绑定所配置的 HTTPS endpoint。
+新安装默认连接 Memo Edu 共享资料库的 HTTPS 服务。使用自建服务时，可将 [配置示例](../config/subscription-library-sync.example.json)保存到工作流数据根目录的 `.local-ir/subscription-library-sync.json` 并修改地址。使用账号时通过订阅页登录，会话绑定所配置的 HTTPS 地址。
 
 缺少服务器写入配置时，健康接口的 write_available 返回 false。此时可校验现有索引和匿名下载，实际新材料发布待写入配置就绪后启用。
