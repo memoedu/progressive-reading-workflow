@@ -50,7 +50,10 @@ test('new entry imports original, reuses annotated archived RSS source, persists
     const output=fresh.artifacts.find(a=>a.kind==='markdown');const bytes=await fs.readFile(output.path);assert.equal(digest(bytes),output.sha256);assert.ok(bytes.toString('utf8').includes(original.trim()));
     assert.equal(await fs.readFile(archived,'utf8'),old);assert.equal(hits.some(url=>url.includes('slug=secret')),false);assert.equal(run.collection.inventory.excluded_count,1);assert.equal(run.collection.verification.verified,2);
     assert.match(await fs.readFile(run.collection.verification.index,'utf8'),/合集/u);
-    const course=path.join(path.dirname(run.collection.verification.index),'合集','Independent course','目录.md');assert.match(await fs.readFile(course,'utf8'),/已归档原文/u);
+    const course=path.join(path.dirname(run.collection.verification.index),'合集','Independent course','目录.md');
+    const link=/\[Independent old\]\(<([^>]+)>\)/u.exec(await fs.readFile(course,'utf8'))?.[1];
+    assert.ok(link,'the index links to the reused article');
+    assert.equal(path.resolve(path.dirname(course),decodeURIComponent(link)),archived);
     assert.equal(path.dirname(output.path),path.dirname(course));assert.equal(run.collection.verification.groups.length,3);
     mounted.stop();dom.window.close();dom=new JSDOM(html,{url:fixture.baseUrl+'/imports'});mounted=mountImportCenter(dom.window.document,{fetchImpl,pollMs:100000});await delay(100);await mounted.refresh();
     assert.match(dom.window.document.getElementById('site-sources').textContent,/新增 1 · 复用 1/u);
