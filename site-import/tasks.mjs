@@ -5,6 +5,7 @@ import { findSourcePublications, sourceReuseResult } from '../scripts/reading-so
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { processCollectionTask } from '../scripts/collection-import.mjs';
 import { discoverSite,inventoryCurrent } from './discovery.mjs';
+import { discoverSiteInWorker } from './discovery-worker.mjs';
 import { readSources, readRun, saveRun, listRuns, runPath, runId, siteCounts, now } from './store.mjs';
 import {organizeSiteFiles} from './organization.mjs';
 import {writeSiteIndexes} from './indexes.mjs';
@@ -116,7 +117,15 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   };
   await processCollectionTask(task,{broker,runRequest,initialCollection:initial,onProgress:update,
     discover:async(_url,onProgress)=>{
-      const inventory=await discoverSite(root,settings,previous?.id || id,{planner,fetchPage,onProgress:async detail=>{run.stage=detail.stage;run.discovery=detail;run.updated_at=now();await saveRun(root,run);await onProgress(detail);}});
+      let savedAt=0,savedStage;
+      const reportProgress=async detail=>{
+        const at=Date.now();
+        if(detail.stage===savedStage&&detail.checked!==detail.total&&at-savedAt<10000)return;
+        savedAt=at;savedStage=detail.stage;run.stage=detail.stage;run.discovery=detail;
+        await onProgress(detail);
+      };
+      const discover=planner||fetchPage?discoverSite:discoverSiteInWorker;
+      const inventory=await discover(root,settings,previous?.id || id,{planner,fetchPage,onProgress:reportProgress});
       const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
       initial.results=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url))).map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
       return inventory;
