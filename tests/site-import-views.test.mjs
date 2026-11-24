@@ -39,3 +39,33 @@ test('topic checkbox persists explicit choices across refresh and degrades safel
     capabilities=undefined;await app.refresh();app.editor(source);assert.equal(field.disabled,true);assert.equal(field.closest('label').hidden,true);await save();assert.equal(Object.hasOwn(saved.at(-1),'infer_topics'),false);
   }finally{app.stop();dom.window.close();}
 });
+
+test('a delayed start shows the pending receipt and blocks duplicate clicks across polling',async()=>{
+  const html=await fs.readFile(new URL('../site-import/web/index.html',import.meta.url),'utf8');
+  const code=(await fs.readFile(new URL('../site-import/web/app.mjs',import.meta.url),'utf8')).replace("'/import/client.mjs'",JSON.stringify(new URL('../scripts/browser-import-web/client.mjs',import.meta.url).href));
+  const {mountImportCenter}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
+  const dom=new JSDOM(html,{url:'http://127.0.0.1/imports'}),doc=dom.window.document;
+  const source={id:'fixture',name:'Fixture',url:'https://independent.example/'};
+  const run={id:'run',phase:'queued',settings:{...source}};
+  const response=Promise.withResolvers();
+  let starts=0;
+  const app=mountImportCenter(doc,{pollMs:100000,fetchImpl:async url=>{
+    if(url==='/api/site-imports/start'){starts++;return response.promise;}
+    if(url==='/api/site-imports')return Response.json({sources:[source],runs:[]});
+    if(url.endsWith('/history'))return Response.json({requests:[],legacy_jobs:[]});
+    return Response.json(run);
+  }});
+  try{
+    await app.refresh();
+    const work=app.start(source);
+    await app.refresh();
+    assert.match(doc.getElementById('site-sources').textContent,/正在提交，等待后台确认/u);
+    assert.equal(doc.querySelector('[data-focus="fixture-start"]').disabled,true);
+    await app.start(source);
+    assert.equal(starts,1);
+    source.last_run=run;
+    response.resolve(Response.json(run));
+    await work;
+    assert.match(doc.getElementById('site-sources').textContent,/排队中/u);
+  }finally{app.stop();dom.window.close();}
+});

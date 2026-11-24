@@ -1,7 +1,7 @@
 import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
-import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sha256Pattern, variantKind } from './shared-library.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 
 const statePath = root => path.join(root, '.local-ir', 'subscription-library-sync.json');
@@ -78,6 +78,23 @@ async function articleBytes(response, maxBytes = 700000) {
   return Buffer.concat(chunks, length);
 }
 
+export async function readSharedArticleIndex(root, { fetchImpl = fetch } = {}) {
+  const state = await settings(root);
+  if (!state.enabled || !state.endpoint) return null;
+  const url = `https://api.github.com/repos/${sharedRepository}/git/trees/main?recursive=1`;
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error('shared_index_unavailable');
+  const result = await response.json();
+  if (result.truncated !== false || !commitPattern.test(result.sha || '') || !Array.isArray(result.tree)) {
+    throw new Error('shared_index_incomplete');
+  }
+  const keys = new Set(result.tree.flatMap(entry => {
+    const match = /^index\/articles\/([a-f0-9]{64})\.json$/u.exec(entry.path);
+    return entry.type === 'blob' && match ? [match[1]] : [];
+  }));
+  return { tree: result.sha, keys };
+}
+
 export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch, lookupOnly = false, publicSourcesOnly = false } = {}) {
   const canonical = sharedArticleUrl(url);
   if (!canonical) return null;
@@ -106,7 +123,7 @@ export async function resolveSharedSubscription(root, url, previous, { fetchImpl
   if (sharedDigest(bytes) !== original.original.sha256) throw new Error('shared_download_hash_mismatch');
   const markdown = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   if (markdown.length > 300000) throw new Error('shared_download_too_large');
-  return { status: 'available', commit: result.commit, sha256: original.original.sha256,
+  return { status: 'available', commit: result.commit, sha256: original.original.sha256, path: original.original.path,
     article: { markdown, title: original.title || '', shared_original_sha256: original.original.sha256 } };
 }
 

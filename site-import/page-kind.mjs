@@ -5,6 +5,8 @@ export function pageKind(html,url){
  const dom=new JSDOM(html,{url});
  try{
   const doc=dom.window.document,script=[...doc.querySelectorAll('script')].map(node=>node.textContent).join('\n');
+  if(/\/index(?:\.html?)?\/?$/iu.test(new URL(url).pathname)&&/\b(?:directory|tag index|category index)(?:\s*[·|–—].*)?$/iu.test(doc.title.trim()))
+   return {kind:'navigation',reason:'来源页面是标签或文档目录'};
   for(const node of doc.querySelectorAll('script,style,nav,footer'))node.remove();
   const text=doc.body.textContent.replace(/\s+/gu,' ').trim();
   if(text.length<300&&doc.querySelector('svg,canvas')&&/requestAnimationFrame|\.getContext\(/u.test(script))return {kind:'interactive',reason:'主要内容为交互图像或动画，没有可完整导入的文章正文'};

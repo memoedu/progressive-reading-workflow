@@ -6,7 +6,9 @@ import { callCodexText } from '../standard-preprocessing/lib/codex-exec.mjs';
 import { readJson, writeJson, digest } from '../subscription-workflow/config.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { runPath } from './store.mjs';
-import { fetchSiteText, scopedUrl, captureArticle, field, templateUrl,CAPTURE_VERSION } from './network.mjs';
+import { fetchSiteText, scopedUrl, captureArticle, field, templateUrl,CAPTURE_VERSION, sitePageUrl } from './network.mjs';
+import { readSharedArticleIndex, resolveSharedSubscription } from '../subscription-workflow/shared-library-client.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
 import {discoverRepository} from './repository.mjs';
 import {archiveEvidence,enumerateHtmlArchive} from './html-archive.mjs';
 import {bookResources,mergeBookResources} from './book-resources.mjs';
@@ -17,7 +19,7 @@ import {articleTaxonomy,mergeTaxonomies,classifyExclusiveTags} from './taxonomy.
 import {taxonomyIndexes} from './taxonomy-indexes.mjs';
 import {classifySiteTopics,TOPIC_VERSION} from './topic-classification.mjs';
 
-const PLANNER_VERSION='site-discovery/v10';
+const PLANNER_VERSION='site-discovery/v11';
 export const inventoryCurrent=(inventory,settings)=>Boolean(inventory?.complete&&inventory.taxonomy_version==='source-taxonomy/v1'&&(!settings.infer_topics||inventory.topic_classification?.version===TOPIC_VERSION)&&(settings.repository||inventory.discovery_version===PLANNER_VERSION));
 export function matchesPath(url,patterns) {
   if(!patterns?.length)return true;
@@ -88,7 +90,8 @@ function validatePlan(plan,evidence) {
   return plan;
 }
 
-export async function discoverSite(root,settings,runId,{onProgress=async()=>{},planner=codexSitePlan,fetchPage=fetchSiteText,topicProducer}={}) {
+export async function discoverSite(root,settings,runId,{onProgress=async()=>{},planner=codexSitePlan,fetchPage=fetchSiteText,topicProducer,
+  lookupSharedIndex=fetchPage===fetchSiteText?readSharedArticleIndex:null, lookupSharedArticle=resolveSharedSubscription}={}) {
   const directory=runPath(root,runId),manifestFile=path.join(directory,'inventory.json');
   const saved=await readJson(manifestFile);
   if(inventoryCurrent(saved,settings))return saved;
@@ -134,12 +137,13 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     evidence={url:base,title,html_excerpt:htmlEvidence(page.body),links:links.slice(0,300),feeds,sitemaps,urls:[...new Set(urls)],scripts,archives,books:[...bookResources(page.body,base),...catalogs.books],book_catalogs:catalogs.evidence};
     await writeJson(evidenceFile,evidence);
   }
-  const planFile=path.join(directory,'plan-v10-with-taxonomy.json');
+  const planFile=path.join(directory,'plan-v11-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
-    const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:evidence.urls.slice(0,2000),sitemap_url_count:evidence.urls.length,settings};
-    planned=await planner(input);await writeJson(path.join(directory,'plan-v10-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
+    const sitemapPages=evidence.urls.filter(sitePageUrl);
+    const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:sitemapPages.slice(0,2000),sitemap_url_count:evidence.urls.length,sitemap_page_count:sitemapPages.length,settings};
+    planned=await planner(input);await writeJson(path.join(directory,'plan-v11-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
   const plan=validatePlan(planned.plan,evidence);
   // An article can also be linked from navigation. The observed HTML title
@@ -182,7 +186,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     }
     await writeJson(path.join(directory,'listing-evidence.json'),{url:response.url,sha256:response.sha256,data,declared_total:declared,listed_urls:listedUrls});
   }
-  const candidates=[...new Map((listedUrls || (evidence.urls.length?evidence.urls:evidence.links.map(item=>item.url))).filter(url=>matchesPath(url,includes)&&!(excludes.length&&matchesPath(url,excludes))).map(url=>[urlImportDedupeKey(url),url])).values()];
+  const includeSitemapPages=settings.scope==='content'&&(!listedUrls||htmlListing);
+  const listedKeys=new Set((listedUrls||[]).map(urlImportDedupeKey));
+  const sitemapPages=evidence.urls.filter(url=>sitePageUrl(url)&&(!plan.exclude_paths?.length||!matchesPath(url,plan.exclude_paths)));
+  const supplemental=htmlListing&&includeSitemapPages?sitemapPages.filter(url=>!listedKeys.has(urlImportDedupeKey(url))):[];
+  const available=listedUrls?[...listedUrls,...supplemental]:evidence.urls.length?(includeSitemapPages?sitemapPages:evidence.urls):evidence.links.map(item=>item.url);
+  const candidates=[...new Map(available.filter(url=>matchesPath(url,includes)&&!(excludes.length&&matchesPath(url,excludes))).map(url=>[urlImportDedupeKey(url),url])).values()];
   const candidateKeys=new Set(candidates.map(urlImportDedupeKey));
   const parents=new Map();
   if(!candidates.length)throw new Error('没有发现符合范围的文章；请编辑来源范围后重新运行');
@@ -191,6 +200,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   const books=new Map(deferred.map(item=>[urlImportDedupeKey(item.url),item]));
   const articles=[],excluded=[],failures=[];let next=0,completed=0;
   await onProgress({phase:'discovering',stage:'逐篇核对文章来源',discovered:candidates.length,total:candidates.length,checked:0});
+  const sharedIndex=lookupSharedIndex ? await lookupSharedIndex(root).catch(()=>null) : null;
   await Promise.all(Array.from({length:Math.min(4,candidates.length)},async()=>{
     while(next<candidates.length){
       const url=candidates[next++],file=path.join(directory,'sources',digest(url)+'.json');
@@ -198,7 +208,22 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
         const book=books.get(urlImportDedupeKey(url));
         if(book){excluded.push({url,reason:book.reason,kind:'book'});completed++;continue;}
         let captured=await readJson(file);
-        if(!captured || captured.kind==='collection'&&!captured.title || (!captured.excluded&&(!captured.metadata?.taxonomy||captured.capture_version!==CAPTURE_VERSION))){captured=privateUrls.has(url)?{excluded:true,url,reason:'来源目录标记为私密，未读取正文'}:await captureArticle(url,plan.article_source,{fetchPage});await writeJson(file,captured);}
+        const canonical=sharedIndex&&sharedArticleUrl(url);
+        const sharedHit=canonical&&sharedIndex.keys.has(sharedDigest(canonical));
+        if(!captured || captured.kind==='collection'&&!captured.title || (!captured.excluded&&(!captured.metadata?.taxonomy||captured.capture_version!==CAPTURE_VERSION||sharedHit&&!captured.metadata?.shared_original_sha256))){
+          if(privateUrls.has(url))captured={excluded:true,url,reason:'来源目录标记为私密，未读取正文'};
+          else {
+            const shared=sharedHit?await lookupSharedArticle(root,url,null,{lookupOnly:true}):null;
+            if(shared?.status==='available'){
+              captured={capture_version:CAPTURE_VERSION,url,title:shared.article.title||new URL(url).pathname,markdown:shared.article.markdown,
+                source_response:{url:sharedRawUrl(shared.commit,shared.path),sha256:shared.sha256},
+                metadata:{taxonomy:articleTaxonomy({}),shared_original_sha256:shared.sha256}};
+            }else{
+              captured=await captureArticle(url,plan.article_source,{fetchPage,fallbackHtml:includeSitemapPages});
+            }
+          }
+          await writeJson(file,captured);
+        }
         if(captured.excluded){
           excluded.push(captured);if(captured.resource)deferred.push(captured.resource);
           for(const [order,child] of (captured.subpages||[]).entries()){
@@ -226,6 +251,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   const deferred_resources=mergeBookResources(deferred);
   await registerCandidates(root,deferred_resources,{source_id:settings.id,run_id:runId});
   const inventory={discovery_version:PLANNER_VERSION,taxonomy_version:'source-taxonomy/v1',tag_classification:null,taxonomy_indexes,complete:failures.length===0,articles,excluded,excluded_count:excluded.length,deferred_resources,failures,candidate_count:candidates.length,declared_total:declared,sitemaps:evidence.sitemaps,planner:planned.producer,plan,settings_sha256:digest(JSON.stringify(settings)),article_source:{run_id:runId}};
+  if(sharedIndex)inventory.shared_library={tree:sharedIndex.tree};
   const expected=listedUrls||excluded.some(item=>item.subpages?.length) ? candidates.length : declared;
   if(expected!==null && articles.length+excluded.length!==expected){inventory.complete=false;inventory.count_error=`范围内应有 ${expected} 篇，已核实 ${articles.length} 篇，排除 ${excluded.length} 项。`;}
   if(plan.listing?.type==='html'){
