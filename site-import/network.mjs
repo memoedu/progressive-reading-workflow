@@ -8,6 +8,7 @@ import {articleTaxonomy,taxonomyFromJson} from './taxonomy.mjs';
 import {pageBookResource} from './book-resources.mjs';
 import {pageKind} from './page-kind.mjs';
 export const CAPTURE_VERSION='site-body/v2';
+const ARTICLE_HTML_LIMIT = 32 * 1024 * 1024;
 
 export function sitePageUrl(value) {
   const pathname = new URL(value).pathname;
@@ -68,9 +69,13 @@ export function decodeBody(value,encoding='plain') {
 }
 export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbackHtml=false}={}) {
   const source=recipe?.type==='json' ? templateUrl(recipe.url_template,url,url) : url;
+  const options = fallbackHtml && recipe?.type !== 'json' ? { base: url, maxBytes: ARTICLE_HTML_LIMIT } : { base: url };
   let response;
   for(let attempt=0;attempt<3;attempt++){
-    try{response=await fetchPage(source,{base:url});break;}
+    try{
+      response=await fetchPage(source,options);
+      break;
+    }
     catch(error){
       if(error.status===404||error.status===410)return {excluded:true,url,reason:'来源已下线',response_status:error.status};
       const transient=[408,429,500,502,503,504].includes(error.status)||error.name==='TimeoutError'||error.message==='fetch failed';

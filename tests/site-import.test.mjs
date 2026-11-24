@@ -14,6 +14,21 @@ import { processCollectionTask } from '../scripts/collection-import.mjs';
 const base='https://independent.example';
 const body='# 原始材料\n\n保留中文、公式 $a^2+b^2$、链接与代码。\n\n```js\nconst source = 1;\n```\n';
 const temp=()=>fs.mkdtemp('D:/Artifacts/ProgressiveReading/site-test-');
+
+test('article discovery can read large HTML archives within a separate bounded body limit',async()=>{
+  const html='<html><head><title>Long archive</title></head><body><article><h1>Original</h1><p>This document contains the complete evidence for the independently published historical article.</p></article></body></html>';
+  const url=base+'/archived-article.html';
+  const size=15*1024*1024;
+  const fetchPage=async(requested,options)=>{
+    assert.equal(requested,url);
+    if((options.maxBytes||0)<size)throw new Error('站点响应超过完整读取上限');
+    assert.ok(options.maxBytes<=32*1024*1024);
+    return {url,body:html,sha256:digest(html),bytes:size,content_type:'text/html'};
+  };
+  const captured=await captureArticle(url,{type:'html',body_selector:'article'},{fetchPage,fallbackHtml:true});
+  assert.match(captured.markdown,/complete evidence/u);
+  assert.equal(captured.source_response.bytes,size);
+});
 test('encoded source decoding, query/path templates and scope are generic',()=>{
   for(const [encoding,value]of [['base64_deflate',deflateSync(body)],['base64_gzip',gzipSync(body)],['base64',Buffer.from(body)]])assert.equal(decodeBody(value.toString('base64'),encoding),body);
   assert.equal(decodeBody(gzipSync(body).toString('base64'),'base64_deflate'),body);
@@ -67,6 +82,21 @@ test('collection resume preserves batch membership after prior results were save
   broker.getRequest=async id=>({request_id:id,terminal:true,results:urls.slice(50).map(row)});
   await processCollectionTask(task,{broker,runRequest:async()=>{},pollMs:1});
   assert.deepEqual(calls,[urls.slice(50)]);assert.equal(collection.results.length,52);
+});
+test('collection polling checkpoints only when the child request changes',async()=>{
+  const url=base+'/article';
+  const working={updated_at:'first',status:'processing',terminal:false,results:[{requested_url:url,status:'claimed'}]};
+  const done={updated_at:'second',status:'completed',terminal:true,results:[{requested_url:url,status:'imported'}]};
+  const polls=[working,working,working,done];
+  let writes=0;
+  const broker={
+    createRequest:async()=>({request_id:'child'}),getRequest:async()=>polls.shift(),
+    updateTaskProgress:async()=>{writes++;},completeTask:async(_id,{ok})=>assert.equal(ok,true)
+  };
+  const task={id:'parent',requested_url:base,collection:{phase:'importing',inventory:{complete:true,articles:[{url}]},batches:[],results:[]}};
+  await processCollectionTask(task,{broker,runRequest:async()=>{},pollMs:1});
+  assert.equal(writes,4);
+  assert.deepEqual(task.collection.results,done.results);
 });
 test('all-page scope complements featured links with sitemap pages and reuses indexed Markdown', async()=>{
   const root=await temp(),hits=[];
