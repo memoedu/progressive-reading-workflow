@@ -18,7 +18,8 @@ import { loadProducerConfig as loadUnifiedProducerConfig, requestProducerText } 
 import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./standard-import-quality.mjs";
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
 import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
-import { generatedSharedVersions, resolveSharedSubscription, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
+import { generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
+import { sharedRepository } from '../subscription-workflow/shared-library.mjs';
 import { extractUrls, urlImportDedupeKey } from "./url-import-input.mjs";
 import { findSourcePublication, withSourcePublication, sourceReuseResult,sourceAliasEvidence,sourceIdentityUrl } from './reading-source-library.mjs';
 import { IMPORT_RULES, zhihuColumnIdentity } from "./import-rule-catalog.mjs";
@@ -121,7 +122,11 @@ const importScript = path.join(__dirname, "import-web-md.mjs");
 const rssReadingScript = path.join(workflowRoot, "rss-reading", "cli.mjs");
 const localTranscribeScript = path.join(__dirname, "local-whispercpp-transcribe.py");
 const readingRoot = path.join(workflowRoot, "阅读区");
-const originalMarkdownBackup = createOriginalMarkdownBackup({ workflowRoot, readingRoot });
+const originalMarkdownBackup = createOriginalMarkdownBackup({ workflowRoot, readingRoot, mayWrite: async config => {
+  if (config.visibility !== 'public' || config.repository.toLowerCase() !== sharedRepository) return true;
+  const sharing = await sharedLibrarySettings(workflowRoot);
+  return sharing.enabled && sharing.signed_in;
+} });
 const importsRoot = path.join(workflowRoot, "imports");
 const appRunsRoot = path.join(importsRoot, "app-runs");
 const learningRoot = path.resolve(process.env.LEARNING_PROJECT_ROOT || defaultLearningRoot);
@@ -1469,7 +1474,7 @@ async function fetchUrlImportDraft(requestedUrl) {
   if (youtubeVideoIdentity(requestedUrl)) {
     return fetchYoutubeSubtitleDraft(requestedUrl, { liveSnapshot: liveCookieSnapshot });
   }
-  const shared = await resolveSharedSubscription(workflowRoot, requestedUrl, null, { lookupOnly: true }).catch(() => null);
+  const shared = await resolveSharedSubscription(workflowRoot, requestedUrl, null, { publicSourcesOnly: true }).catch(() => null);
   if (shared?.status === 'available') {
     return { requestedUrl, finalUrl: requestedUrl, redirectChain: [], fetchReceipt: { source_reused: 'shared_library' },
       draft: { id: `local-ir-url-${shortHash(requestedUrl, 16)}`, url: requestedUrl, title: shared.article.title,
@@ -1482,7 +1487,7 @@ async function fetchUrlImportDraft(requestedUrl) {
     requestedUrl: fetched.requestedUrl,
     finalUrl: fetched.finalUrl,
     redirectChain: fetched.redirectChain,
-    fetchReceipt: fetched.fetchReceipt,
+    fetchReceipt: { ...fetched.fetchReceipt, ...(shared ? { shared_library: shared } : {}) },
     draft: {
       id: `local-ir-url-${shortHash(fetched.finalUrl, 16)}`,
       url: fetched.finalUrl,
@@ -1578,7 +1583,8 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
       standardize: processingMode==='standard_preprocess', onProgress, cachedRssMarkdown:fetched.draft.cachedRssMarkdown,
       captureMethod:fetched.fetchReceipt.source_reused,
       anonymousOriginalCapture: !pendingInputPath && !cachedRssDraft && (fetched.anonymousSiteCapture === true ||
-        (fetched.fetchReceipt.authenticated_fetch === false && !fetched.fetchReceipt.source_reused)),
+        (fetched.fetchReceipt.authenticated_fetch === false && !fetched.fetchReceipt.source_reused &&
+          fetched.fetchReceipt.shared_library?.status !== 'pending_review')),
       missingPublicationHash:articleSource?.missing_publications?.[url]
     });
   } catch (error) {

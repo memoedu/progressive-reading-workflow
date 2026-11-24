@@ -8,7 +8,7 @@ import { createOriginalMarkdownBackup } from '../scripts/original-markdown-backu
 
 const blob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 
-async function fixture(t, run, config = {}) {
+async function fixture(t, run, config = {}, mayWrite) {
   const workflowRoot = await fs.mkdtemp(path.join(process.env.PROGRESSIVE_READING_TEST_TEMP || os.tmpdir(), 'original-markdown-'));
   t.after(() => fs.rm(workflowRoot, { recursive: true, force: true }));
   const readingRoot = path.join(workflowRoot, '阅读区');
@@ -16,7 +16,7 @@ async function fixture(t, run, config = {}) {
   await fs.writeFile(path.join(workflowRoot, '.local-ir/original-markdown-backup.json'),
     JSON.stringify({ repository: 'example/private-archive', origins: ['https://example.org'], ...config }));
   return {
-    backup: createOriginalMarkdownBackup({ workflowRoot, readingRoot, run }),
+    backup: createOriginalMarkdownBackup({ workflowRoot, readingRoot, run, mayWrite }),
     file: path.join(readingRoot, '分组', '原始.md'),
     url: 'https://example.org/article',
     markdown: '# 原标题\r\n\r\n原始的 Markdown。 \r\n',
@@ -112,6 +112,41 @@ test('explicitly targets a public library and holds matching private data', asyn
   assert.equal((await backup.status()).held, 2);
   assert.equal(writes, 0);
   await backup.capture(source);
+  await backup.flush();
+  assert.equal((await backup.status()).queued, 0);
+  assert.equal(writes, 1);
+});
+
+test('paused sharing skips new captures and preserves the pending public backup queue', async t => {
+  let sharing = false;
+  let online = false;
+  let remoteChecks = 0;
+  let writes = 0;
+  const { backup, ...source } = await fixture(t, async (program, args, input) => {
+    if (program === 'gitleaks') return { code: 0 };
+    if (args.includes('repos/example/public-library')) {
+      remoteChecks++;
+      return { code: 0, stdout: online ? 'false\tfalse\tmain' : 'true\tfalse\tmain' };
+    }
+    if (!args.includes('PUT')) return { code: 1, missing: true };
+    writes++;
+    return { code: 0, stdout: blob(Buffer.from(JSON.parse(input).content, 'base64')) };
+  }, { repository: 'example/public-library', visibility: 'public' }, () => sharing);
+  await backup.capture(source);
+  assert.equal((await backup.status()).queued, 0);
+  assert.equal(remoteChecks, 0);
+
+  sharing = true;
+  await backup.capture(source);
+  await backup.flush();
+  sharing = false;
+  online = true;
+  await backup.flush();
+  assert.equal((await backup.status()).queued, 1);
+  assert.equal(remoteChecks, 1);
+  assert.equal(writes, 0);
+
+  sharing = true;
   await backup.flush();
   assert.equal((await backup.status()).queued, 0);
   assert.equal(writes, 1);
