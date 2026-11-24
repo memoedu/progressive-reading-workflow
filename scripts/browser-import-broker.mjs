@@ -4,9 +4,8 @@ import { randomUUID } from "node:crypto";
 import { youtubeVideoIdentity } from "./url-import-input.mjs";
 import { buildPreprocessRequest, standardWorkflowOptions, validateRequestContract } from "../standard-preprocessing/index.mjs";
 import { stableJson } from "../standard-preprocessing/lib/core.mjs";
-import { renameWithRetry } from "../rss-source/core.mjs";
+import { IMPORT_STATE_SCHEMA, readBrowserImportState, migrateBrowserImportState, saveBrowserImportState } from "./browser-import-state.mjs";
 
-const SCHEMA = "local-ir.browser-import-broker/v1";
 export const DEFAULT_LEASE_MS = 12 * 60 * 1000;
 export const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 1000;
@@ -147,7 +146,6 @@ export class BrowserImportBroker {
   } = {}) {
     if (!stateRoot) throw new Error("browser_import_broker_state_root_required");
     this.stateRoot = path.resolve(stateRoot);
-    this.statePath = path.join(this.stateRoot, "state.json");
     this.now = now;
     this.leaseMs = leaseMs;
     this.maxAttempts = Math.max(1, Number(maxAttempts || DEFAULT_MAX_ATTEMPTS));
@@ -156,7 +154,7 @@ export class BrowserImportBroker {
     this.concurrency = Number.isFinite(requestedConcurrency)
       ? Math.max(1, Math.min(8, Math.floor(requestedConcurrency)))
       : 1;
-    this.state = { schema: SCHEMA, requests: [], tasks: [] };
+    this.state = { schema: IMPORT_STATE_SCHEMA, requests: [], tasks: [] };
     this.initialized = false;
     this.lock = Promise.resolve();
     this.waiters = new Set();
@@ -165,20 +163,15 @@ export class BrowserImportBroker {
   async initialize() {
     if (this.initialized) return;
     await fs.mkdir(this.stateRoot, { recursive: true });
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.statePath, "utf8"));
-      if (parsed?.schema === SCHEMA && Array.isArray(parsed.requests) && Array.isArray(parsed.tasks)) {
-        const requiresMigration = parsed.requests.some((request) => request.transport !== BACKGROUND_FETCH_TRANSPORT)
-          || parsed.tasks.some((task) => task.transport !== BACKGROUND_FETCH_TRANSPORT || task.handoffStatus || task.result?.cookie || task.result?.cookies);
-        this.state = {
-          ...parsed,
-          requests: parsed.requests.map((request) => ({ ...request, transport: BACKGROUND_FETCH_TRANSPORT })),
-          tasks: parsed.tasks.map((task) => normalizeTask(task, this.maxAttempts))
-        };
-        if (requiresMigration) await this.save();
-      }
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+    const { value: parsed, migrated } = await readBrowserImportState(this.stateRoot);
+    this.state = migrated ? parsed : {
+      schema: IMPORT_STATE_SCHEMA,
+      requests: parsed.requests.map(request => ({ ...request, transport: BACKGROUND_FETCH_TRANSPORT })),
+      tasks: parsed.tasks.map(task => normalizeTask(task, this.maxAttempts))
+    };
+    if (!migrated && !migrateBrowserImportState(this.stateRoot, this.state)) {
+      // Another process completed migration after the read; load its state.
+      return this.initialize();
     }
     this.initialized = true;
   }
@@ -192,15 +185,11 @@ export class BrowserImportBroker {
     return run;
   }
 
-  async save() {
-    const temporary = `${this.statePath}.${process.pid}.${randomUUID()}.tmp`;
+  save(changes) {
     try {
-      await fs.writeFile(temporary, `${JSON.stringify(this.state)}\n`, "utf8");
-      // A reader can briefly deny replacement on Windows. Keep the last
-      // durable snapshot intact until the replacement succeeds.
-      await renameWithRetry(temporary, this.statePath, { attempts: 8 });
+      saveBrowserImportState(this.stateRoot, changes);
     } catch (error) {
-      await fs.rm(temporary, { force: true }).catch(() => {});
+      this.initialized = false;
       throw error;
     }
   }
@@ -265,14 +254,14 @@ export class BrowserImportBroker {
         createdAt,
         updatedAt: createdAt
       };
-      this.state.requests.push(request);
+      const createdTasks = [];
       for (const url of normalized) {
         const taskId = `browser-import-task-${randomUUID()}`;
         if (browserSnapshot) {
           await fs.mkdir(path.join(this.stateRoot, "snapshots"), { recursive: true });
           await fs.writeFile(path.join(this.stateRoot, "snapshots", `${taskId}.json`), JSON.stringify(sanitizePersistedValue(browserSnapshot)), "utf8");
         }
-        this.state.tasks.push({
+        createdTasks.push({
           id: taskId,
           browserSnapshot: Boolean(browserSnapshot),
           requestId: request.id,
@@ -300,15 +289,19 @@ export class BrowserImportBroker {
           error: null
         });
       }
+      this.state.requests.push(request);
+      this.state.tasks.push(...createdTasks);
+      let removedRequestIds = [];
       if (this.state.requests.length > MAX_REQUESTS) {
         const removable = this.state.requests
           .filter((item) => { const summary = this.requestSummary(item.id); return summary?.terminal && !summary.awaiting_input; })
           .slice(0, this.state.requests.length - MAX_REQUESTS);
         const ids = new Set(removable.map((item) => item.id));
+        removedRequestIds = [...ids];
         this.state.requests = this.state.requests.filter((item) => !ids.has(item.id));
         this.state.tasks = this.state.tasks.filter((item) => !ids.has(item.requestId));
       }
-      await this.save();
+      this.save({ requests: [request], tasks: createdTasks, removedRequestIds });
       this.notifyWaiters();
       return this.requestSummary(request.id);
     });
@@ -316,7 +309,7 @@ export class BrowserImportBroker {
 
   recoverExpiredClaims() {
     const cutoff = this.now() - this.leaseMs;
-    let changed = false;
+    const changed = [];
     for (const task of this.state.tasks) {
       if (task.status !== "claimed" || !task.claimedAt || Date.parse(task.claimedAt) > cutoff) continue;
       const exhausted = Number(task.attempts || 0) >= Number(task.maxAttempts || this.maxAttempts);
@@ -328,7 +321,7 @@ export class BrowserImportBroker {
       task.availableAt = nowIso(this.now);
       if (exhausted) task.error = "browser_import_worker_lease_expired_after_max_attempts";
       task.updatedAt = nowIso(this.now);
-      changed = true;
+      changed.push(task);
     }
     return changed;
   }
@@ -338,7 +331,7 @@ export class BrowserImportBroker {
   }}={}) {
     if(!Number.isSafeInteger(previousOwnerPid)||previousOwnerPid<=0||previousOwnerPid===process.pid||isAlive(previousOwnerPid))return {recovered:0};
     return this.withLock(async()=>{
-      let recovered=0;
+      const recovered=[];
       for(const task of this.state.tasks){
         // A site discovery already in its capture phase only reads public pages.
         // Planning/model work keeps its original lease and retry semantics.
@@ -353,20 +346,20 @@ export class BrowserImportBroker {
         task.status='queued';task.workerId=null;task.claimedAt=null;task.leaseToken=null;task.claimRequestId=null;
         // A proven process interruption is recorded separately from failed work.
         task.attempts=Math.max(0,Number(task.attempts||0)-1);
-        task.availableAt=nowIso(this.now);task.updatedAt=task.availableAt;recovered++;
+        task.availableAt=nowIso(this.now);task.updatedAt=task.availableAt;recovered.push(task);
       }
-      if(recovered){await this.save();this.notifyWaiters();}
-      return {recovered};
+      if(recovered.length){this.save({tasks:recovered});this.notifyWaiters();}
+      return {recovered:recovered.length};
     });
   }
 
   async claimTask(workerId, claimRequestId = null, { transport = null, requestId = null } = {}) {
     return this.withLock(async () => {
-      const recovered = this.recoverExpiredClaims();
       const normalizedWorkerId = String(workerId || "browser-extension");
       const normalizedClaimRequestId = String(claimRequestId || "").trim() || null;
       if (transport && transport !== BACKGROUND_FETCH_TRANSPORT) throw new Error("browser_import_claim_transport_not_supported");
       const normalizedTransport = transport ? normalizeTransport(transport) : null;
+      const recovered = this.recoverExpiredClaims();
       if (normalizedClaimRequestId) {
         const existing = this.state.tasks.find((item) => item.status === "claimed"
           && item.workerId === normalizedWorkerId
@@ -374,7 +367,7 @@ export class BrowserImportBroker {
           && (!normalizedTransport || item.transport === normalizedTransport)
           && (!requestId || item.requestId === requestId));
         if (existing) {
-          if (recovered) await this.save();
+          if (recovered.length) this.save({ tasks: recovered });
           return taskReceipt(existing);
         }
       }
@@ -386,7 +379,7 @@ export class BrowserImportBroker {
           && (!normalizedTransport || item.transport === normalizedTransport);
       });
       if (!task) {
-        if (recovered) await this.save();
+        if (recovered.length) this.save({ tasks: recovered });
         return null;
       }
       task.status = "claimed";
@@ -396,7 +389,8 @@ export class BrowserImportBroker {
       task.leaseToken = randomUUID();
       task.claimRequestId = normalizedClaimRequestId;
       task.updatedAt = task.claimedAt;
-      await this.save();
+      if (!recovered.includes(task)) recovered.push(task);
+      this.save({ tasks: recovered });
       return taskReceipt(task);
     });
   }
@@ -416,7 +410,7 @@ export class BrowserImportBroker {
       task.result = { ...(task.result || {}), ...sanitizePersistedValue(result) };
       task.claimedAt = nowIso(this.now);
       task.updatedAt = task.claimedAt;
-      await this.save();
+      this.save({ tasks: [task] });
     });
   }
 
@@ -450,7 +444,7 @@ export class BrowserImportBroker {
       task.updatedAt = nowIso(this.now);
       const request = this.state.requests.find((item) => item.id === task.requestId);
       if (request) request.updatedAt = task.updatedAt;
-      await this.save();
+      this.save({ tasks: [task], requests: request ? [request] : [] });
       this.notifyWaiters();
       return this.requestSummary(task.requestId);
     });
@@ -534,6 +528,7 @@ export class BrowserImportBroker {
       const request = this.state.requests.find(item => item.id === requestId);
       if (!request) throw new Error("browser_import_request_not_found");
       const selected = urls ? new Set(urls.map(normalizedUrlIdentity)) : null;
+      const changed = [];
       const requeue = task => {
         if (task.status !== INPUT_REQUIRED) return;
         task.processingOptions = { ...task.processingOptions, ...additions };
@@ -541,6 +536,7 @@ export class BrowserImportBroker {
         task.error = null;
         task.attempts = Math.max(0, task.attempts - 1);
         task.availableAt = task.updatedAt = nowIso(this.now);
+        changed.push(task);
         for (const batch of task.result?.collection?.batches || []) {
           const children = this.state.tasks.filter(item => item.requestId === batch.request_id && item.status === INPUT_REQUIRED);
           if (children.length) batch.terminal = false;
@@ -552,7 +548,7 @@ export class BrowserImportBroker {
         requeue(task);
       }
       request.updatedAt = nowIso(this.now);
-      await this.save();
+      this.save({ tasks: changed, requests: [request] });
       this.notifyWaiters();
       return this.requestSummary(requestId);
     });
@@ -619,7 +615,12 @@ export class BrowserImportBroker {
 
   async relocateSourceArtifacts(entries,hashEntries){
     const {remapReceipts}=await import('../site-import/organization.mjs');
-    return this.withLock(async()=>{const mapping=new Map(entries),hashes=new Map(hashEntries);for(const task of this.state.tasks)if(task.result)task.result=remapReceipts(task.result,mapping,path.dirname(path.dirname(this.stateRoot)),hashes);await this.save();});
+    return this.withLock(()=>{
+      const mapping=new Map(entries),hashes=new Map(hashEntries),root=path.dirname(path.dirname(this.stateRoot));
+      const tasks=this.state.tasks.filter(task=>task.result);
+      for(const task of tasks)task.result=remapReceipts(task.result,mapping,root,hashes);
+      this.save({tasks});
+    });
   }
 
   async findSuccessfulResultForUrl(requestedUrl, { excludeTaskId = null } = {}) {
@@ -641,7 +642,7 @@ export class BrowserImportBroker {
       const requestIds = [...new Set(this.state.tasks
         .filter((task) => !terminalTask(task) && (!normalizedTransport || task.transport === normalizedTransport))
         .map((task) => task.requestId))];
-      if (recovered) await this.save();
+      if (recovered.length) this.save({ tasks: recovered });
       return requestIds;
     });
   }

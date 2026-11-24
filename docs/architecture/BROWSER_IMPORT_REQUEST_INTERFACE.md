@@ -53,4 +53,4 @@ HTML 转换在 Readability/Turndown 前提取 KaTeX、MathJax、MathML 注解和
 
 维护只接收本机入口、浏览器扩展或 Obsidian 发起的请求。普通跨站网页请求不会触发维护。重试关联由 broker 创建。修复后若再次得到失败终态，可用该次尝试的任务编号发起下一次重试。工作台持续回读原事件所关联的最新结果。
 
-连接失败后的请求重试沿用稳定的 `client_request_id`；收到 `request_id` 后只继续查询。后端终态请求不可变，用户明确重新处理失败条目时创建新尝试 ID，只提交失败项，并保留原失败回执。不得因短暂查询失败重复创建整批任务。网页在同一标签页 sessionStorage 保存当前批次与重试记录。队列状态位于 `.local-ir/browser-import-broker/state.json`，不进入阅读区。正式输出必须使用后端核定的本地目录，不使用 Codex worktree。
+连接失败后的请求重试沿用稳定的 `client_request_id`；收到 `request_id` 后只继续查询。后端终态请求不可变，用户明确重新处理失败条目时创建新尝试 ID，只提交失败项，并保留原失败回执。不得因短暂查询失败重复创建整批任务。网页在同一标签页 sessionStorage 保存当前批次与重试记录。队列通过 `.local-ir/browser-import-broker/state.sqlite3` 事务记录请求、任务和回执。服务首次启动时读取并保留旧 `state.json`。日常状态查询使用导入接口。正式输出使用后端核定的本地阅读目录。

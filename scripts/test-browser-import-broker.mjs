@@ -6,6 +6,7 @@ import {
   BACKGROUND_FETCH_TRANSPORT,
   BrowserImportBroker
 } from "./browser-import-broker.mjs";
+import { readBrowserImportState } from "./browser-import-state.mjs";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "local-ir-browser-broker-"));
 let now = Date.parse("2026-08-21T00:00:00.000Z");
@@ -122,7 +123,7 @@ try {
   assert.equal(degraded.results[0].transport, BACKGROUND_FETCH_TRANSPORT);
   assert.equal(degraded.results[0].handoff_status, undefined);
   assert.equal(degraded.results[0].source_metadata.cookie, undefined);
-  assert.doesNotMatch(await fs.readFile(path.join(root, "state.json"), "utf8"), /private-cookie-must-not-persist/);
+  assert.doesNotMatch(JSON.stringify((await readBrowserImportState(root)).value), /private-cookie-must-not-persist/);
   assert.equal(await broker.claimTask("local-background-worker", "terminal-check", { transport: BACKGROUND_FETCH_TRANSPORT }), null);
 
   const warningRequest = await broker.createRequest(["https://warning.test/article"], { source: "test" });
