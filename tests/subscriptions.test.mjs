@@ -277,19 +277,18 @@ test('file monitor waits for stable save then queues once; job identity survives
   const job=await enqueue(f.root,'rss','2026-11-06');assert.equal((await enqueue(f.root,'rss','2026-11-06')).id,job.id);assert.equal((await jobList(f.root)).length,2);
 });
 
-test('simultaneous scheduled triggers wait for the enqueue lock and preserve each job once', async () => {
+test('simultaneous catch-up triggers do not wait for another kind and preserve each job once', async () => {
   const f = await fixture();
   const cycle = 'scheduled-2026-11-24';
   let submissions;
-  await withLock(path.join(f.home, 'enqueue.lock'), async () => {
-    const jobs = ['rss', 'zhihu', 'bilibili', 'rss'].map(kind => enqueue(f.root, kind, cycle));
-    submissions = Promise.allSettled(jobs);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    assert.equal((await jobList(f.root)).length, 0);
+  await withLock(path.join(f.home, 'enqueue-zhihu.lock'), async () => {
+    submissions = Promise.allSettled([enqueue(f.root, 'zhihu', cycle), enqueue(f.root, 'zhihu', cycle)]);
+    await Promise.all(['rss', 'bilibili'].map(kind => enqueue(f.root, kind, cycle)));
+    assert.deepEqual((await jobList(f.root)).map(job => job.kind).sort(), ['bilibili', 'rss']);
   });
   const results = await submissions;
   assert.ok(results.every(result => result.status === 'fulfilled'));
-  assert.equal(results[0].value.id, results[3].value.id);
+  assert.equal(results[0].value.id, results[1].value.id);
   assert.deepEqual((await jobList(f.root)).map(job => job.kind).sort(), ['bilibili', 'rss', 'zhihu']);
 });
 

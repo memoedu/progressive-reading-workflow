@@ -70,7 +70,7 @@ RSS、知乎和 B 站分别在北京时间每天 06:00、07:00 和 08:00 检查�
 
 Windows 任务计划程序负责定时投递，原本地服务负责执行。原视频任务改为投递统一队列，旧 RSS 五分钟轮询任务继续停用，不另开常驻采集服务。任务运行失败后保留分步回执，程序中断后重启会继续尚未完成的持久任务。每个来源周期对失败项只重试一次，已完成正文不重新生成。
 
-唤醒或登录后多个定时任务同时投递时，各任务短暂等待队列写入锁，并按来源类型和周期保留唯一任务。
+唤醒或登录后，RSS、知乎、B 站和报表可以同时投递。同类任务短暂等待该类型的写入锁，并按类型和周期保留唯一任务。若计划任务投递失败，Windows 每隔一分钟重试，最多三次。现有后台服务继续逐项执行持久队列。
 
 `node subscription-workflow/cli.mjs status` 查询状态；`node subscription-workflow/cli.mjs enqueue --kind rss|bilibili|zhihu|daily|weekly` 投递任务；`node subscription-workflow/cli.mjs drain` 在本地服务不可用时继续现有队列。CLI 与原 RSS 命令共用互斥锁，避免同时修改筛选账本。
 
