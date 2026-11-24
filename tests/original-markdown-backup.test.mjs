@@ -8,13 +8,13 @@ import { createOriginalMarkdownBackup } from '../scripts/original-markdown-backu
 
 const blob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 
-async function fixture(t, run) {
+async function fixture(t, run, config = {}) {
   const workflowRoot = await fs.mkdtemp(path.join(process.env.PROGRESSIVE_READING_TEST_TEMP || os.tmpdir(), 'original-markdown-'));
   t.after(() => fs.rm(workflowRoot, { recursive: true, force: true }));
   const readingRoot = path.join(workflowRoot, '阅读区');
   await fs.mkdir(path.join(workflowRoot, '.local-ir'));
   await fs.writeFile(path.join(workflowRoot, '.local-ir/original-markdown-backup.json'),
-    JSON.stringify({ repository: 'example/private-archive', origins: ['https://example.org'] }));
+    JSON.stringify({ repository: 'example/private-archive', origins: ['https://example.org'], ...config }));
   return {
     backup: createOriginalMarkdownBackup({ workflowRoot, readingRoot, run }),
     file: path.join(readingRoot, '分组', '原始.md'),
@@ -92,4 +92,27 @@ test('keeps links with access token parameters in the local held queue', async t
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'gh');
   assert.ok(calls[0].every(arg => !arg.includes('/contents/')));
+});
+
+test('explicitly targets a public library and holds matching private data', async t => {
+  const privateEmail = 'archive-owner@example.test';
+  const privateEmailHash = createHash('sha256').update(privateEmail).digest('hex');
+  let writes = 0;
+  const { backup, ...source } = await fixture(t, async (program, args, input) => {
+    if (program === 'gitleaks') return { code: 0 };
+    if (args.includes('repos/example/public-library')) return { code: 0, stdout: 'false\tfalse\tmain' };
+    if (!args.includes('PUT')) return { code: 1, missing: true };
+    writes++;
+    return { code: 0, stdout: blob(Buffer.from(JSON.parse(input).content, 'base64')) };
+  }, { repository: 'example/public-library', visibility: 'public', private_email_sha256: [privateEmailHash] });
+  await backup.capture({ ...source, markdown: 'Contact ' + privateEmail.toUpperCase() });
+  await backup.flush();
+  await backup.capture({ ...source, markdown: 'See C:\\Users\\reader\\private.md' });
+  await backup.flush();
+  assert.equal((await backup.status()).held, 2);
+  assert.equal(writes, 0);
+  await backup.capture(source);
+  await backup.flush();
+  assert.equal((await backup.status()).queued, 0);
+  assert.equal(writes, 1);
 });

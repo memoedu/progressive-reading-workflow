@@ -1,4 +1,5 @@
 {
   "repository": "owner/private-markdown-archive",
+  "visibility": "private",
   "origins": ["https://example.org"]
 }
