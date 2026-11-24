@@ -99,6 +99,41 @@ test('all-page scope complements featured links with sitemap pages and reuses in
   assert.equal(hits.includes(attachment),false);
   assert.equal(inventory.articles[1].markdown_sha256,digest(body));
 });
+test('an HTML archive preserves articles with different body layouts',async()=>{
+  const root=await temp(),id=runId('mixed-layout-archive');
+  const first=base+'/entries/usual',second=base+'/entries/older.html';
+  const original='这里是旧版页面完整可读的正文，归档条目应保留这一段内容。';
+  const pages={
+    [base+'/']:'<title>Archive</title><ul class="archive"><li><a href="/entries/usual">Usual</a></li><li><a href="/entries/older.html">Older</a></li></ul>',
+    [base+'/robots.txt']:'', [base+'/sitemap.xml']:'<urlset/>',
+    [first]:'<title>Usual</title><article id="regular"><p>这里是具有站点通用正文选择器的可读内容。</p></article>',
+    [second]:'<title>Older</title><article><p>'+original+'</p></article>'
+  };
+  const fetchPage=async url=>{
+    assert.ok(Object.hasOwn(pages,url),url);
+    return {url,body:pages[url],sha256:digest(pages[url]),content_type:'text/html'};
+  };
+  const plan={include_paths:['/*'],article_source:{type:'html',body_selector:'#regular'},
+    listing:{type:'html',url:base+'/',item_selector:'.archive a'}};
+  const settings=normalizeSiteSource({url:base,scope:'blog',processing_mode:'original_text'});
+  const inventory=await discoverSite(root,settings,id,{planner:async()=>({plan}),fetchPage});
+  assert.equal(inventory.complete,true);
+  assert.deepEqual(inventory.articles.map(row=>row.url),[first,second]);
+  assert.equal(inventory.excluded_count,0);
+  const capture=await captureArticle(second,plan.article_source,{fetchPage,fallbackHtml:true});
+  assert.match(capture.markdown,new RegExp(original,'u'));
+});
+
+test('mixed-layout fallback still rejects login forms and JavaScript shells',async()=>{
+  const url=base+'/other-layout';
+  for(const [body,error]of [
+    ['<title>Login</title><form action="/login"><input type="password"><p>Sign in to continue reading this article.</p></form>',/来源需要登录/u],
+    ['<title>Loading</title><div id="app"></div><script src="/bundle.js"></script><noscript>Please enable JavaScript.</noscript>',/需要浏览器渲染/u]
+  ]){
+    const fetchPage=async()=>({url,body,sha256:digest(body),content_type:'text/html'});
+    await assert.rejects(captureArticle(url,{type:'html',body_selector:'#regular'},{fetchPage,fallbackHtml:true}),error);
+  }
+});
 test('new page preserves source editor, original settings, failures, and existing learning payload',async()=>{
   const html=await fs.readFile(new URL('../site-import/web/index.html',import.meta.url),'utf8');
   const code=(await fs.readFile(new URL('../site-import/web/app.mjs',import.meta.url),'utf8')).replace("'/import/client.mjs'",JSON.stringify(pathToFileURL(path.resolve('scripts/browser-import-web/client.mjs')).href));

@@ -219,7 +219,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
                 source_response:{url:sharedRawUrl(shared.commit,shared.path),sha256:shared.sha256},
                 metadata:{taxonomy:articleTaxonomy({}),shared_original_sha256:shared.sha256}};
             }else{
-              captured=await captureArticle(url,plan.article_source,{fetchPage,fallbackHtml:includeSitemapPages});
+              captured=await captureArticle(url,plan.article_source,{fetchPage,fallbackHtml:htmlListing||includeSitemapPages});
             }
           }
           await writeJson(file,captured);

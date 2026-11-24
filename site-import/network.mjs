@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 import { unzipSync, gunzipSync } from 'node:zlib';
 import { setTimeout as pause } from 'node:timers/promises';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
+import { htmlDetails } from '../scripts/url-background-fetch.mjs';
 import { canonicalUrl, digest } from '../subscription-workflow/config.mjs';
 import {articleTaxonomy,taxonomyFromJson} from './taxonomy.mjs';
 import {pageBookResource} from './book-resources.mjs';
@@ -107,7 +108,17 @@ export async function captureArticle(url,recipe,{fetchPage=fetchSiteText,fallbac
   } else {
     let html=response.body,selectedBody=false;
     if(recipe?.body_selector){
-      const dom=new JSDOM(html,{url});try{const body=dom.window.document.querySelector(recipe.body_selector);if(body){html=body.outerHTML;title=dom.window.document.title;selectedBody=true;}else if(!fallbackHtml)throw new Error('站点指定的正文区域不存在');}finally{dom.window.close();}
+      const dom=new JSDOM(html,{url});
+      try{
+        const body=dom.window.document.querySelector(recipe.body_selector);
+        if(body){html=body.outerHTML;title=dom.window.document.title;selectedBody=true;}
+      }finally{dom.window.close();}
+      if(!selectedBody){
+        if(!fallbackHtml)throw new Error('站点指定的正文区域不存在');
+        const {authReason,jsReason}=htmlDetails(html,response.url);
+        if(authReason)throw new Error('来源需要登录：'+authReason);
+        if(jsReason)throw new Error('来源未返回正文，需要浏览器渲染：'+jsReason);
+      }
     }
     const converted=htmlArticleToMarkdown({html,sourceUrl:url,title,extractArticle:!selectedBody});
     title=title || converted.title;markdown=converted.markdown;
