@@ -116,6 +116,26 @@ test('large HTML retains all text around inline media and hashes the raw respons
   assert.equal(capture.separated_inline_media,2);
   await assert.rejects(fetchSiteText(url,{fetchImpl,maxBytes:512}),/超过完整读取上限/u);
 });
+test('oversized page styling and bootstrap scripts do not count toward the article body limit',async()=>{
+  const url=base+'/archive/reading-table.html';
+  const styles=' .row{color:blue} '.repeat(512),script='document.documentElement;'.repeat(512);
+  const equation='<script type="math/tex">a+b</script>';
+  const structured='<script type="application/ld+json">{"isAccessibleForFree":true}</script>';
+  const html=`<html><head><style>${styles}</style><script>${script}</script>${structured}</head>
+    <body><table><tr><td>Visible reference cell ${equation}</td></tr></table></body></html>`;
+  const raw=Buffer.from(html);
+  const fetchImpl=async()=>new Response(new ReadableStream({start(controller){
+    for(let offset=0;offset<raw.length;offset+=13)controller.enqueue(raw.subarray(offset,offset+13));
+    controller.close();
+  }}),{headers:{'content-type':'text/html'}});
+  const capture=await fetchSiteText(url,{fetchImpl,maxBytes:512,separateEmbeddedMedia:true});
+  assert.doesNotMatch(capture.body,/color:blue|documentElement/u);
+  assert.match(capture.body,/<script><\/script>/u);
+  assert.ok(capture.body.includes(structured));
+  assert.ok(capture.body.includes(equation));
+  assert.match(capture.body,/Visible reference cell/u);
+  assert.equal(capture.sha256,digest(raw));
+});
 test('encoded source decoding, query/path templates and scope are generic',()=>{
   for(const [encoding,value]of [['base64_deflate',deflateSync(body)],['base64_gzip',gzipSync(body)],['base64',Buffer.from(body)]])assert.equal(decodeBody(value.toString('base64'),encoding),body);
   assert.equal(decodeBody(gzipSync(body).toString('base64'),'base64_deflate'),body);
@@ -252,6 +272,17 @@ test('a typed article region inherits its document title during HTML fallback',a
   assert.equal(capture.title,title);
   assert.match(capture.markdown,/complete field report/u);
 });
+test('an explicitly labeled empty site fixture is excluded with source evidence',async()=>{
+  const url=base+'/quality/example',recipe={type:'html',body_selector:'#source'};
+  let html='<html><head><title>Content Unit Test Page</title><meta name="description" content="Renderer testcase page."></head><body><main id="source"></main></body></html>';
+  const fetchPage=async()=>({url,body:html,sha256:digest(html),bytes:Buffer.byteLength(html),content_type:'text/html'});
+  const fixture=await captureArticle(url,recipe,{fetchPage,fallbackHtml:true});
+  assert.equal(fixture.excluded,true);
+  assert.equal(fixture.kind,'test_fixture');
+  assert.equal(fixture.response_sha256,digest(html));
+  html=html.replace('<main id="source"></main>','<main id="source"><p>Actual published documentation about the test harness.</p></main>');
+  assert.match((await captureArticle(url,recipe,{fetchPage,fallbackHtml:true})).markdown,/published documentation/u);
+});
 test('an archive form with an authentication-like hostname is not a login form',async()=>{
   const url=base+'/archive/civic-article.html';
   const html=`<html><head><title>Archive notes</title></head><body>
@@ -293,6 +324,16 @@ test('an article publicly visible beside a navigation sign-in form retains the f
   const photoEssay=await capture();
   assert.match(photoEssay.markdown,/north view/u);
   assert.doesNotMatch(photoEssay.markdown,/Password/u);
+
+  html=`<html><head><title>${title}</title></head><body><nav>${login}</nav><div>
+    <h1>${title}</h1><div>${paragraph('Archived chapter')}${paragraph('Earlier sections')}${paragraph('Closing commentary')}</div>
+    </div></body></html>`;
+  assert.match((await capture()).markdown,/Closing commentary/u);
+
+  const posts=lines.map(line=>`<div class="post">${line}</div>`);
+  html=`<html><head><title>Public discussion archive</title></head><body><nav>${login}</nav>
+    <div><h3>Recorded conservation topic and responses</h3>${posts.join('')}</div></body></html>`;
+  assert.match((await capture()).markdown,/Line 3/u);
 });
 test('mixed-layout fallback still rejects login forms and JavaScript shells',async()=>{
   const url=base+'/other-layout';

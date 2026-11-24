@@ -4,6 +4,8 @@ import {StringDecoder} from 'node:string_decoder';
 const HTML_MEDIA_LIMIT=512*1024*1024;
 const MEDIA_SEPARATION_THRESHOLD=16*1024*1024;
 const MEDIA_PREFIX=/(\b(?:src|href)\s*=\s*)(["']?)data:(?:image|audio|video)\/[a-z0-9.+-]+;base64,/iu;
+const PRESENTATION_PREFIX=/<(script|style)\b(?:[^>"']|"[^"]*"|'[^']*')*>/iu;
+const RETAINED_SCRIPT_TYPE=/\btype\s*=\s*["']?(?:application\/ld\+json\b|math\/tex\b)/iu;
 const PREFIX_TAIL=128;
 
 export async function readSiteResponse(response,maxBytes,{separateEmbeddedMedia=false}={}){
@@ -11,6 +13,7 @@ export async function readSiteResponse(response,maxBytes,{separateEmbeddedMedia=
   const canSeparate=separateEmbeddedMedia&&/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/iu.test(type);
   const chunks=[],html=[],hash=canSeparate?createHash('sha256'):null,decoder=new StringDecoder('utf8');
   let rawSize=0,textSize=0,buffer='',mediaEnd=null,separated=0,separating=false;
+  let rawBlock=null;
   const fail=reason=>Object.assign(new Error('站点响应超过完整读取上限'),
     {code:'site_response_size',reason,received_bytes:rawSize,retained_bytes:textSize,separated_inline_media:separated});
   const retain=text=>{
@@ -22,6 +25,12 @@ export async function readSiteResponse(response,maxBytes,{separateEmbeddedMedia=
   const decode=(text,final=false)=>{
     buffer+=text;
     while(buffer){
+      if(rawBlock){
+        const end=rawBlock.exec(buffer);
+        if(!end){buffer=buffer.slice(-PREFIX_TAIL);return;}
+        buffer=buffer.slice(end.index+end[0].length);
+        rawBlock=null;
+      }
       if(mediaEnd!==null){
         const close=mediaEnd?buffer.indexOf(mediaEnd):buffer.search(/[\s>]/u);
         if(/[<>]/u.test(close<0?buffer:buffer.slice(0,close)))throw fail('unsupported_inline_media');
@@ -31,6 +40,19 @@ export async function readSiteResponse(response,maxBytes,{separateEmbeddedMedia=
         mediaEnd=null;
       }
       const media=MEDIA_PREFIX.exec(buffer);
+      const block=PRESENTATION_PREFIX.exec(buffer);
+      if(block&&(!media||block.index<media.index)){
+        const name=block[1].toLowerCase();
+        if(name==='script'&&RETAINED_SCRIPT_TYPE.test(block[0])){
+          retain(buffer.slice(0,block.index+block[0].length));
+        }else{
+          // Preserve evidence that an application script existed for the shell detector.
+          retain(buffer.slice(0,block.index)+(name==='script'?'<script></script>':''));
+          rawBlock=name==='style'?/<\/style\s*>/iu:/<\/script\s*>/iu;
+        }
+        buffer=buffer.slice(block.index+block[0].length);
+        continue;
+      }
       if(!media){
         const boundary=final?buffer.length:Math.max(0,buffer.length-PREFIX_TAIL);
         retain(buffer.slice(0,boundary));
@@ -59,7 +81,7 @@ export async function readSiteResponse(response,maxBytes,{separateEmbeddedMedia=
   }
   if(separating){
     decode(decoder.end(),true);
-    if(mediaEnd!==null)throw fail('unterminated_inline_media');
+    if(mediaEnd!==null||rawBlock)throw fail('unterminated_archive_markup');
     return {body:html.join(''),sha256:hash.digest('hex'),bytes:rawSize,
       ...(separated?{separated_inline_media:separated}:{})};
   }
