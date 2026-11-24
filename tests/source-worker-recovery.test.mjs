@@ -4,32 +4,32 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {BrowserImportBroker} from '../scripts/browser-import-broker.mjs';
+import {countActiveBrowserImports,IMPORT_STATE_SCHEMA,readBrowserImportState,saveBrowserImportState} from '../scripts/browser-import-state.mjs';
 
-test('a locked broker state keeps the previous snapshot until atomic replacement succeeds', async t => {
+test('legacy broker history migrates once and later updates leave its bytes unchanged', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'browser-import-state-lock-'));
   t.after(() => fs.rm(root, {recursive:true, force:true}));
+  const stateFile = path.join(root, 'state.json');
+  const former = {id:'old-request', source:'obsidian_local_ir', transport:'background_fetch', createdAt:new Date(0).toISOString()};
+  const failed = {id:'old-task', requestId:former.id, source:former.source, transport:former.transport,
+    status:'failed', error:'synthetic_failure', updatedAt:new Date(0).toISOString()};
+  const previous = JSON.stringify({schema:IMPORT_STATE_SCHEMA,requests:[former],tasks:[failed]});
+  await fs.writeFile(stateFile,previous);
   const broker = new BrowserImportBroker({stateRoot:root});
-  const first = await broker.createRequest(['https://example.org/before']);
-  const previous = await fs.readFile(broker.statePath, 'utf8');
-  const replace = fs.rename;
-  let replacements = 0;
-  const rename = t.mock.method(fs, 'rename', async (source, destination) => {
-    assert.equal(destination, broker.statePath);
-    assert.equal(await fs.readFile(destination, 'utf8'), previous);
-    const code = ['EPERM', 'EBUSY'][replacements++];
-    if (code) throw Object.assign(new Error('fixture lock'), {code});
-    await replace(source, destination);
-  });
-  const second = await broker.createRequest(['https://example.org/after']);
-  rename.mock.restore();
-  assert.equal(replacements, 3);
+  assert.equal((await broker.getRequest(former.id)).results[0].error,failed.error);
+  const second = await broker.createRequest(['https://example.org/after'],{clientRequestId:'after-migration'});
+  const claimed = await broker.claimTask('worker','claim',{requestId:second.request_id});
+  assert.equal(await countActiveBrowserImports(root),1);
+  await broker.completeTask(claimed.id,{ok:true,leaseToken:claimed.lease_token});
   const reader = new BrowserImportBroker({stateRoot:root});
-  for (const request of [first, second]) assert.equal((await reader.getRequest(request.request_id)).queued, 1);
-  const accepted = await fs.readFile(broker.statePath, 'utf8');
-  t.mock.method(fs, 'rename', async () => { throw Object.assign(new Error('fixture write failure'), {code:'EIO'}); });
-  await assert.rejects(broker.createRequest(['https://example.org/unwritten']), {code:'EIO'});
-  assert.equal(await fs.readFile(broker.statePath, 'utf8'), accepted);
-  assert.deepEqual(await fs.readdir(root), ['state.json']);
+  assert.equal((await reader.getRequest(second.request_id)).status,'completed');
+  assert.equal((await reader.createRequest(['https://example.org/after'],{clientRequestId:'after-migration'})).request_id,second.request_id);
+  assert.equal(await countActiveBrowserImports(root),0);
+  assert.equal(await fs.readFile(stateFile,'utf8'),previous);
+  assert.throws(()=>saveBrowserImportState(root,{requests:[{id:'uncommitted'}],tasks:[{id:'rejected',requestId:'missing',status:'queued'}]}),/FOREIGN KEY/u);
+  const {value: accepted,migrated} = await readBrowserImportState(root);
+  assert.equal(migrated,true);
+  assert.deepEqual(accepted.requests.map(request=>request.id),[former.id,second.request_id]);
 });
 
 test('an exited singleton source worker resumes frozen work without discarding its collection',async t=>{
@@ -44,7 +44,7 @@ test('an exited singleton source worker resumes frozen work without discarding i
   assert.equal((await broker.recoverExitedSourceWorkers(12345,{before:now,isAlive:()=>false})).recovered,1);
   const next=await broker.claimTask('local-background-url-fetcher-1','claim2',{requestId:request.request_id});
   assert.deepEqual(next.collection,collection);
-  const saved=JSON.parse(await fs.readFile(path.join(root,'state.json'),'utf8'));assert.equal(saved.tasks[0].interruptedClaims.length,1);assert.equal(saved.tasks[0].attempts,1);
+  const {value:saved}=await readBrowserImportState(root);assert.equal(saved.tasks[0].interruptedClaims.length,1);assert.equal(saved.tasks[0].attempts,1);
 });
 test('model work, external workers and newly claimed work are never reclaimed by source recovery',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'source-worker-model-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));

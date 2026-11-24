@@ -13,11 +13,11 @@ if ($oldId) {
     $entryToken = '(?:^|\s)(?:"' + [regex]::Escape($entry) + '"|' + [regex]::Escape($entry) + ')(?:\s|$)'
     if ($processInfo.Name -ne 'node.exe' -or $processInfo.CommandLine -notmatch $entryToken) { throw 'Listener does not match the exact progressive-reading entry point' }
 }
-$statePath = Join-Path $projectRoot '.local-ir\browser-import-broker\state.json'
-if (Test-Path -LiteralPath $statePath) {
-    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-    if (@($state.tasks | Where-Object { $_.status -in @('queued','claimed') }).Count) { throw 'Import tasks are active; reload deferred' }
-}
+$stateRoot = Join-Path $projectRoot '.local-ir\browser-import-broker'
+$stateReader = Join-Path $PSScriptRoot 'browser-import-state.mjs'
+$active = & node --input-type=module -e 'import {pathToFileURL} from "node:url"; const {countActiveBrowserImports}=await import(pathToFileURL(process.argv[1])); console.log(await countActiveBrowserImports(process.argv[2]));' $stateReader $stateRoot
+if ($LASTEXITCODE -ne 0 -or "$active" -notmatch '^\d+$') { throw 'Unable to inspect durable import state' }
+if ([int]$active -ne 0) { throw 'Import tasks are active; reload deferred' }
 if (-not $Apply) {
     [pscustomobject]@{status='ready_for_reload'; project=$projectRoot; old_pid=$oldId; port=$port; snapshot_mode='durable_live_sync_with_legacy_pointer_fallback'} | ConvertTo-Json
     return

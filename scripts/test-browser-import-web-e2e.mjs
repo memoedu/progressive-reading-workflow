@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 import { startFixture } from "./browser-import-web/fixture.mjs";
 import { mountImportPage } from "./browser-import-web/app.mjs";
 import { resultView } from "./browser-import-web/client.mjs";
+import { readBrowserImportState } from "./browser-import-state.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate) {
@@ -77,8 +78,7 @@ for (const producer of ["synthetic", "synthetic-invalid"]) {
     assert.equal(mounted.session.current.error, "");
     assert.equal(observed[0].client_request_id, observed[1].client_request_id);
     assert.equal(mounted.session.current.id, idBefore);
-    const brokerPath = path.join(fixture.workflowRoot, ".local-ir/browser-import-broker/state.json");
-    let broker = JSON.parse(await fs.readFile(brokerPath, "utf8"));
+    const { value: broker } = await readBrowserImportState(path.join(fixture.workflowRoot, ".local-ir/browser-import-broker"));
     assert.equal(broker.requests.length, 1, "lost 202 response must not duplicate broker requests");
     assert.equal(observed[0].entry_route, "obsidian");
     evidence.checks.push("page_POST_GET_shared_interface", "uncertain_POST_same_id_one_broker_request");

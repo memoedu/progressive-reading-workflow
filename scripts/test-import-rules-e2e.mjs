@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 import { startFixture } from "./browser-import-web/fixture.mjs";
 import { mountImportPage } from "./browser-import-web/app.mjs";
 import { resultView } from "./browser-import-web/client.mjs";
+import { readBrowserImportState } from "./browser-import-state.mjs";
 
 const fixture = await startFixture({ columnFixture: true });
 const evidence = { source: "local_synthetic_only", external_requests: false, checks: [], root: fixture.root };
@@ -59,7 +60,7 @@ try {
   }
   const files = await fs.readdir(path.join(fixture.workflowRoot, "阅读区/zhuanlan.zhihu.com"));
   assert.equal(files.filter(file => file.endsWith(".md")).length, 54);
-  const broker = JSON.parse(await fs.readFile(path.join(fixture.workflowRoot, ".local-ir/browser-import-broker/state.json"), "utf8"));
+  const { value: broker } = await readBrowserImportState(path.join(fixture.workflowRoot, ".local-ir/browser-import-broker"));
   const childSizes = broker.requests.filter(request => request.clientRequestId?.includes(":articles:")).map(request => broker.tasks.filter(task => task.requestId === request.id).length);
   assert.deepEqual(childSizes, [50, 4, 50, 4]);
   evidence.checks.push("automatic_50_4_batches", "retry_reuses_53_unchanged_articles", "54_formal_files_with_hash_readback", "previous_failure_preserved");
