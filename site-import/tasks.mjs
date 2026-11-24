@@ -4,7 +4,7 @@ import { readJson, writeJson, withLock, digest } from '../subscription-workflow/
 import { findSourcePublications, sourceReuseResult } from '../scripts/reading-source-library.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { processCollectionTask } from '../scripts/collection-import.mjs';
-import { discoverSite,inventoryCurrent } from './discovery.mjs';
+import { discoverSite,inventoryCurrent,retrySiteUrls } from './discovery.mjs';
 import { discoverSiteInWorker } from './discovery-worker.mjs';
 import { readSources, readRun, saveRun, listRuns, runPath, runId, siteCounts, now } from './store.mjs';
 import {organizeSiteFiles} from './organization.mjs';
@@ -97,7 +97,24 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   const {run_id:id,settings,retry_run_id:retry}=task.site_import;
   const run=await readRun(root,id);if(!run)throw new Error('整站任务记录不存在');
   const previous=retry?await readRun(root,retry):null;
-  if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection){
+  let retryInventory=null;
+  const attempts=new Set();
+  for(let earlier=previous;earlier&&earlier.source_id===run.source_id&&!attempts.has(earlier.id);earlier=earlier.retry_of?await readRun(root,earlier.retry_of):null){
+    attempts.add(earlier.id);
+    if(earlier.collection?.inventory?.plan)retryInventory=earlier.collection.inventory;
+  }
+  const frozenUrls=retrySiteUrls(retryInventory);
+  const allowed=new Set(frozenUrls?.map(urlImportDedupeKey));
+  const matchesFrozenScope=inventory=>{
+    if(!frozenUrls)return true;
+    const urls=retrySiteUrls(inventory);
+    return urls?.length===allowed.size&&urls.every(url=>allowed.has(urlImportDedupeKey(url)));
+  };
+  if(task.collection?.inventory?.complete&&!matchesFrozenScope(task.collection.inventory)){
+    if(task.collection.batches?.length||task.collection.results?.length)throw Error('现有批次已偏离原任务候选快照，需核对落盘结果');
+    task.collection=null;
+  }
+  if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection && matchesFrozenScope(previous.collection.inventory)){
     const inventory=structuredClone(previous.collection.inventory);
     const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
     const historic=previous.collection.results.filter(row=>SUCCESS.has(row.status)&&!existing.has(urlImportDedupeKey(row.requested_url)));
@@ -125,7 +142,8 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
         await onProgress(detail);
       };
       const discover=planner||fetchPage?discoverSite:discoverSiteInWorker;
-      const inventory=await discover(root,settings,previous?.id || id,{planner,fetchPage,onProgress:reportProgress});
+      const captureRun=retryInventory?.article_source?.run_id||previous?.id||id;
+      const inventory=await discover(root,settings,captureRun,{planner,fetchPage,onProgress:reportProgress,retryInventory});
       const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
       initial.results=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url))).map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
       return inventory;

@@ -90,11 +90,20 @@ function validatePlan(plan,evidence) {
   return plan;
 }
 
-export async function discoverSite(root,settings,runId,{onProgress=async()=>{},planner=codexSitePlan,fetchPage=fetchSiteText,topicProducer,
+export function retrySiteUrls(inventory){
+  if(!inventory?.plan)return null;
+  const rows=[...(inventory.articles||[]),...(inventory.excluded||[]),...(inventory.failures||[])];
+  const urls=[...new Map(rows.filter(row=>row?.url).map(({url})=>[urlImportDedupeKey(url),url])).values()];
+  if(!urls.length||urls.length!==inventory.candidate_count)throw Error('原任务候选清单与回执数量不一致，未扩大重试范围');
+  return urls;
+}
+
+export async function discoverSite(root,settings,runId,{onProgress=async()=>{},planner=codexSitePlan,fetchPage=fetchSiteText,topicProducer,retryInventory=null,
   lookupSharedIndex=fetchPage===fetchSiteText?readSharedArticleIndex:null, lookupSharedArticle=resolveSharedSubscription}={}) {
   const directory=runPath(root,runId),manifestFile=path.join(directory,'inventory.json');
+  const retryUrls=retrySiteUrls(retryInventory);
   const saved=await readJson(manifestFile);
-  if(inventoryCurrent(saved,settings))return saved;
+  if(!retryUrls&&inventoryCurrent(saved,settings))return saved;
   if(settings.repository){
     const inventory=await discoverRepository(root,settings,directory,{onProgress});
     inventory.article_source={run_id:runId};
@@ -138,7 +147,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     await writeJson(evidenceFile,evidence);
   }
   const planFile=path.join(directory,'plan-v11-with-taxonomy.json');
-  let planned=await readJson(planFile);
+  let planned=retryUrls?{plan:retryInventory.plan,producer:retryInventory.planner}:await readJson(planFile);
   if(!planned){
     const sitemapPages=evidence.urls.filter(sitePageUrl);
     await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',candidate_urls:sitemapPages.length});
@@ -152,7 +161,13 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   const includes=settings.include_paths.length?settings.include_paths:htmlListing?['/*']:plan.include_paths;
   const excludes=[...(htmlListing?[]:plan.exclude_paths||[]),...settings.exclude_paths];
   let listedUrls=null,declared=null,listingTaxonomies={},taxonomyEvidence={};const privateUrls=new Set();
-  if(plan.listing?.type==='html'){
+  if(retryUrls){
+    declared=retryInventory.declared_total??retryUrls.length;
+    for(const article of retryInventory.articles||[]){
+      listingTaxonomies[article.url]=article.taxonomy;
+      taxonomyEvidence[article.url]=article.taxonomy_evidence;
+    }
+  }else if(plan.listing?.type==='html'){
     const archive=await enumerateHtmlArchive(plan.listing,evidence.url,fetchPage);listedUrls=archive.urls;declared=listedUrls.length;listingTaxonomies=archive.taxonomies;taxonomyEvidence=archive.taxonomy_evidence;
     await writeJson(path.join(directory,'listing-evidence.json'),{type:'html',...archive,declared_total:declared});
   }else if(plan.listing?.url){
@@ -191,23 +206,26 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   const sitemapPages=evidence.urls.filter(url=>sitePageUrl(url)&&(!plan.exclude_paths?.length||!matchesPath(url,plan.exclude_paths)));
   const supplemental=htmlListing&&includeSitemapPages?sitemapPages.filter(url=>!listedKeys.has(urlImportDedupeKey(url))):[];
   const available=listedUrls?[...listedUrls,...supplemental]:evidence.urls.length?(includeSitemapPages?sitemapPages:evidence.urls):evidence.links.map(item=>item.url);
-  const candidates=[...new Map(available.filter(url=>matchesPath(url,includes)&&!(excludes.length&&matchesPath(url,excludes))).map(url=>[urlImportDedupeKey(url),url])).values()];
+  const candidates=retryUrls?retryUrls.map(url=>scopedUrl(url,evidence.url)):
+    [...new Map(available.filter(url=>matchesPath(url,includes)&&!(excludes.length&&matchesPath(url,excludes))).map(url=>[urlImportDedupeKey(url),url])).values()];
   const candidateKeys=new Set(candidates.map(urlImportDedupeKey));
   const parents=new Map();
   if(!candidates.length)throw new Error('没有发现符合范围的文章；请编辑来源范围后重新运行');
-  if(!evidence.sitemaps.length&&!listedUrls)throw new Error('站点未提供可完整枚举的目录，当前未开始批量导入。请指定具有文章目录的链接或收窄路径范围。');
+  if(!retryUrls&&!evidence.sitemaps.length&&!listedUrls)throw new Error('站点未提供可完整枚举的目录，当前未开始批量导入。请指定具有文章目录的链接或收窄路径范围。');
   const deferred=[...(evidence.books||[]),...evidence.archives.flatMap(page=>page.books||[])];
   const books=new Map(deferred.map(item=>[urlImportDedupeKey(item.url),item]));
   const articles=[],excluded=[],failures=[];let next=0,completed=0;
   await onProgress({phase:'discovering',stage:'逐篇核对文章来源',discovered:candidates.length,total:candidates.length,checked:0});
-  const sharedIndex=lookupSharedIndex ? await lookupSharedIndex(root).catch(()=>null) : null;
+  const sharedIndex=!retryUrls&&lookupSharedIndex ? await lookupSharedIndex(root).catch(()=>null) : null;
+  const frozenExclusions=new Map((retryUrls?retryInventory.excluded||[]:[]).map(row=>[row.url,row]));
   await Promise.all(Array.from({length:Math.min(4,candidates.length)},async()=>{
     while(next<candidates.length){
       const url=candidates[next++],file=path.join(directory,'sources',digest(url)+'.json');
       try{
         const book=books.get(urlImportDedupeKey(url));
         if(book){excluded.push({url,reason:book.reason,kind:'book'});completed++;continue;}
-        let captured=await readJson(file);
+        const previousExclusion=frozenExclusions.get(url);
+        let captured=previousExclusion?{...previousExclusion,excluded:true}:await readJson(file);
         const canonical=sharedIndex&&sharedArticleUrl(url);
         const sharedHit=canonical&&sharedIndex.keys.has(sharedDigest(canonical));
         if(!captured || captured.kind==='collection'&&!captured.title || (!captured.excluded&&(!captured.metadata?.taxonomy||captured.capture_version!==CAPTURE_VERSION||sharedHit&&!captured.metadata?.shared_original_sha256))){
@@ -230,6 +248,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
             if(settings.include_paths.length&&!matchesPath(child,settings.include_paths)||excludes.length&&matchesPath(child,excludes))continue;
             const contexts=parents.get(child)||[];if(!contexts.some(parent=>parent.url===url))contexts.push({url,name:captured.title,order});parents.set(child,contexts);
             const key=urlImportDedupeKey(child);if(candidateKeys.has(key))continue;
+            if(retryUrls)throw Error('重试发现原快照之外的分篇链接，未扩大原任务范围');
             if(candidates.length>=20000)throw Error('分篇目录超过完整核验上限，未将部分目录视为完整');candidateKeys.add(key);candidates.push(child);
           }
         }else articles.push({url,title:captured.title,taxonomy:mergeTaxonomies(captured.metadata.taxonomy,listingTaxonomies[url]),taxonomy_evidence:taxonomyEvidence[url]||[],published_at:captured.metadata?.published_at || null,source_sha256:captured.source_response.sha256,markdown_sha256:digest(captured.markdown)});
@@ -252,12 +271,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   await registerCandidates(root,deferred_resources,{source_id:settings.id,run_id:runId});
   const inventory={discovery_version:PLANNER_VERSION,taxonomy_version:'source-taxonomy/v1',tag_classification:null,taxonomy_indexes,complete:failures.length===0,articles,excluded,excluded_count:excluded.length,deferred_resources,failures,candidate_count:candidates.length,declared_total:declared,sitemaps:evidence.sitemaps,planner:planned.producer,plan,settings_sha256:digest(JSON.stringify(settings)),article_source:{run_id:runId}};
   if(sharedIndex)inventory.shared_library={tree:sharedIndex.tree};
-  const expected=listedUrls||excluded.some(item=>item.subpages?.length) ? candidates.length : declared;
+  const expected=retryUrls||listedUrls||excluded.some(item=>item.subpages?.length) ? candidates.length : declared;
   if(expected!==null && articles.length+excluded.length!==expected){inventory.complete=false;inventory.count_error=`范围内应有 ${expected} 篇，已核实 ${articles.length} 篇，排除 ${excluded.length} 项。`;}
-  if(plan.listing?.type==='html'){
+  if(!retryUrls&&plan.listing?.type==='html'){
     const check=await enumerateHtmlArchive(plan.listing,evidence.url,fetchPage);
     if(JSON.stringify(check.urls)!==JSON.stringify(listedUrls)){inventory.complete=false;inventory.count_error='采集期间文章归档发生变化，请重试核对。';}
-  }else if(plan.listing?.url){const check=await fetchPage(new URL(plan.listing.url,evidence.url).href,{base:evidence.url});if(Number(field(JSON.parse(check.body),plan.listing.total_path))!==declared){inventory.complete=false;inventory.count_error='采集期间站点文章总数发生变化，请重试核对。';}}
+  }else if(!retryUrls&&plan.listing?.url){const check=await fetchPage(new URL(plan.listing.url,evidence.url).href,{base:evidence.url});if(Number(field(JSON.parse(check.body),plan.listing.total_path))!==declared){inventory.complete=false;inventory.count_error='采集期间站点文章总数发生变化，请重试核对。';}}
   if(inventory.complete)inventory.tag_classification=classifyExclusiveTags(articles);
   if(inventory.complete&&settings.infer_topics)inventory.topic_classification=await classifySiteTopics(root,settings,inventory,{producer:topicProducer,onProgress:async detail=>onProgress({phase:'discovering',stage:'按文章主题补全缺失分类',discovered:candidates.length,total:candidates.length,checked:completed,...detail})});
   await writeJson(manifestFile,inventory);
