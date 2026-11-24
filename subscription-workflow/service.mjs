@@ -384,7 +384,7 @@ export async function status(root = codeRoot,{broker}={}) {
   const text=await readJson(path.join(config.rss_home,'state.json'),{items:{}}),video=await readJson(path.join(config.video_home,'state.json'),{entries:{}});
   const ledger=await readJson(path.join(root,'imports','rss-reading','review-ledger.v1.json'),{items:{}});
   const zhihu=await readJson(path.join(p.home,'zhihu-state.json'),{sources:{},entries:{}});
-  const entries=[...Object.values(text.items).map(i=>({id:i.id,title:i.title,url:i.url,status:i.status,error:i.error})),
+  const entries=[...Object.values(text.items).map(i=>({id:i.id,title:i.title,url:i.url,status:i.status,error:i.error,shared_library:i.shared_library})),
     ...Object.values(video.entries).map(i=>({id:i.key,title:i.video_title,url:i.url,status:i.status,error:i.reason})),
     ...Object.values(zhihu.entries).map(i=>({id:i.key||digest(i.url),title:i.title,url:i.url,status:i.status,error:i.error}))];
   const reportRows=Object.values(ledger.items).filter(i=>!i.canonical_material_id);
@@ -405,7 +405,7 @@ export async function status(root = codeRoot,{broker}={}) {
     pending_job_count:jobs.filter(j=>['running','queued'].includes(j.status)).length,
     jobs:[...jobs.filter(j=>j.status==='running'),...jobs.filter(j=>j.status==='queued'),...jobs.filter(j=>!['running','queued'].includes(j.status)).reverse()].slice(0,25)
       .map(({steps,...job})=>({...job,steps:Object.entries(steps||{}).map(([name,s])=>({name,done:s.done}))})),
-    conflicts:entries.filter(i=>i.status==='route_conflict'), pending:entries.filter(i=>['pending','processing','running','waiting_source','blocked','source_blocked','verification_failed','retry_wait'].includes(i.status)).map(i=>({...i,error:i.error?readableImportError(i.error):null,severity:['blocked','source_blocked','verification_failed','waiting_source'].includes(i.status)?'blocking':undefined})),
+    conflicts:entries.filter(i=>i.status==='route_conflict'), pending:entries.filter(i=>['pending','processing','shared_pending_review','running','waiting_source','blocked','source_blocked','verification_failed','retry_wait'].includes(i.status)).map(i=>({...i,error:i.error?readableImportError(i.error):null,severity:['blocked','source_blocked','verification_failed','waiting_source'].includes(i.status)?'blocking':undefined})),
     failures,import_issues:failures, zhihu_sources:zhihu.sources, zhihu_validation:await readJson(path.join(p.home,'zhihu-validation.json')), reports, updates:reportRows.filter(i=>i.available_revision).map(i=>({title:i.title,url:i.item_url})),
     counts:entries.reduce((a,i)=>{a[i.status]=(a[i.status]||0)+1;return a;},{}), config_path:p.config};
 }

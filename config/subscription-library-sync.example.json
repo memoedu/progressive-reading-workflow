@@ -1,0 +1,4 @@
+{
+  "endpoint": "https://sync.example.org/progressive-reading-sync/",
+  "enabled": true
+}
