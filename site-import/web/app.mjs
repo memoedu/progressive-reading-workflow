@@ -14,7 +14,12 @@ export function mountImportCenter(doc=document,{fetchImpl=globalThis.fetch.bind(
   const button=(text,handler,secondary=true)=>{const b=node('button',text,secondary?'secondary':'');b.type='button';b.onclick=()=>busy(b,handler);return b;};
   const link=(text,url)=>{const a=node('a',text);a.href=url;return a;};
   const readingLink=(text,file)=>link(text,'obsidian://open?path='+encodeURIComponent(file).replaceAll('(','%28').replaceAll(')','%29')+'&paneType=tab');
-  const counts=run=>{const c=run?.counts||{};return `发现 ${c.discovered||0} 篇 · 新增 ${c.imported||0} · 复用 ${c.reused||0} · 失败 ${c.failed||0}${c.warnings?' · 警告 '+c.warnings:''}${c.deferred?' · 书籍待选择 '+c.deferred:''}`;};
+  const counts=run=>{
+    const c=run?.counts||{},d=run?.discovery;
+    if(run?.phase==='planning')return d?.candidate_urls?`待核对 ${d.candidate_urls} 个可能的正文页面`:'正在读取站点目录';
+    if(run?.phase==='discovering'&&d?.total)return `已核对 ${d.checked||0}/${d.total} 个候选页面 · 失败 ${d.failed||0}`;
+    return `发现 ${c.discovered||0} 篇 · 新增 ${c.imported||0} · 复用 ${c.reused||0} · 失败 ${c.failed||0}${c.warnings?' · 警告 '+c.warnings:''}${c.deferred?' · 书籍待选择 '+c.deferred:''}`;
+  };
   async function api(route,body){const response=await fetchImpl(route,{cache:'no-store',signal:AbortSignal.timeout(30000),...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'本地服务未受理请求');return data;}
   async function busy(b,operation){if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await operation();b.dataset.state='success';}catch(error){b.dataset.state='error';el('site-message').textContent=error.message;el('site-message').className='error';}finally{b.disabled=false;b.removeAttribute('aria-busy');}}
   function modeFields(){const original=el('site-mode').value==='original_text';doc.querySelectorAll('[data-site-standard]').forEach(n=>n.hidden=original);el('site-mode-hint').textContent=original?'只提取完整正文并转为 Markdown，不翻译、不生成导读、不调用模型改写正文；已有文章保持原样。':'保留正文与原有结构；英文等外语翻译为中文，不做结构改写或口语整理。导读卡默认关闭，只有明确选择时生成。';}

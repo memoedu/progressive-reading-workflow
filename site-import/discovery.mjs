@@ -140,8 +140,8 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
   const planFile=path.join(directory,'plan-v11-with-taxonomy.json');
   let planned=await readJson(planFile);
   if(!planned){
-    await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',discovered:evidence.urls.length});
     const sitemapPages=evidence.urls.filter(sitePageUrl);
+    await onProgress({phase:'planning',stage:'Codex 分析文章范围与正文来源',candidate_urls:sitemapPages.length});
     const input={...evidence,books:evidence.books.slice(0,12),book_count:evidence.books.length,urls:undefined,sitemap_urls_sample:sitemapPages.slice(0,2000),sitemap_url_count:evidence.urls.length,sitemap_page_count:sitemapPages.length,settings};
     planned=await planner(input);await writeJson(path.join(directory,'plan-v11-candidate.json'),planned);validatePlan(planned.plan,evidence);await writeJson(planFile,planned);
   }
