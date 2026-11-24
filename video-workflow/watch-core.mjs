@@ -96,7 +96,13 @@ export async function processPending(state,{processItem,save,now=()=>new Date().
   const events=[];
   for(const item of Object.values(state.entries)){
     if(!eligible(item))continue;
-    if(retryCycle&&item.attempt_cycle===retryCycle)continue;
+    if(retryCycle&&item.attempt_cycle===retryCycle){
+      if(item.status!=='running')continue;
+      // The caller owns the video state lock. A retained running item belongs
+      // to the interrupted attempt, so one recovery may resume its artifacts.
+      if(item.recovery_cycle!==retryCycle){item.status='pending';item.recovery_cycle=retryCycle;}
+      item.retry_cycle=retryCycle;
+    }
     if(retryCycle&&['blocked','running'].includes(item.status)&&item.retry_cycle!==retryCycle){
       item.status='pending'; item.retry_cycle=retryCycle;
     }

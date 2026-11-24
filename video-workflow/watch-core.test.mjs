@@ -51,3 +51,21 @@ test('explicit resume requires verified existing output and cannot authorize new
  await resumePublishedItem(state,'one',async item=>assert.equal(item.key,'one'));
  assert.equal(state.entries.one.status,'pending');assert.equal(state.entries.one.resume_mode,'verification_only');
 });
+
+test('a restarted scheduled scan resumes a running video once in the same cycle',async()=>{
+ const cycle='scheduled-2026-06-20';
+ const recovered={key:'recovered',status:'running',attempt_cycle:cycle};
+ const interruptedAgain={key:'twice',status:'running',attempt_cycle:cycle,recovery_cycle:cycle};
+ const state={entries:{recovered,interruptedAgain}},calls=[];
+ const options={retryCycle:cycle,save:async()=>{},processItem:async item=>{
+  calls.push(item.key);
+  assert.equal(item.recovery_cycle,cycle);
+  return {status:'completed',publication:'recovered.md'};
+ }};
+ const events=await processPending(state,options);
+ assert.deepEqual(calls,['recovered']);
+ assert.deepEqual(events.map(event=>event.status),['completed','blocked']);
+ assert.equal(recovered.publication,'recovered.md');
+ assert.equal(interruptedAgain.reason,'previous_execution_interrupted_no_automatic_resend');
+ assert.deepEqual(await processPending(state,options),[]);
+});

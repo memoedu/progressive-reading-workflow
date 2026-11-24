@@ -72,6 +72,8 @@ Windows 任务计划程序负责定时投递，原本地服务负责执行。原
 
 唤醒或登录后，RSS、知乎、B 站和报表可以同时投递。同类任务短暂等待该类型的写入锁，并按类型和周期保留唯一任务。若计划任务投递失败，Windows 每隔一分钟重试，最多三次。现有后台服务继续逐项执行持久队列。
 
+后台在 B 站处理期间中断时，同一周期可续跑一次，复用已有材料和处理回执。再次中断会进入异常记录，保留后续重试入口。
+
 `node subscription-workflow/cli.mjs status` 查询状态；`node subscription-workflow/cli.mjs enqueue --kind rss|bilibili|zhihu|daily|weekly` 投递任务；`node subscription-workflow/cli.mjs drain` 在本地服务不可用时继续现有队列。CLI 与原 RSS 命令共用互斥锁，避免同时修改筛选账本。
 
 切换前的原配置、运行账本、报告及任务 XML 保存在 `D:/Artifacts/ProgressiveReading/subscriptions-20261106/`。恢复时先停用统一来源与报表任务，暂停统一注册表，再核对正在运行的导入并恢复原任务 XML。不要把旧账本覆盖到已经新增内容的运行目录；应按切换前后回执合并，以免丢失新决定。
