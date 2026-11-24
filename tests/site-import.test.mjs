@@ -68,6 +68,36 @@ test('article discovery can read large HTML archives within a separate bounded b
   assert.match(captured.markdown,/complete evidence/u);
   assert.equal(captured.source_response.bytes,size);
 });
+test('an advertised same-origin Markdown source preserves its bytes and the article URL',async()=>{
+  const url=base+'/author/article',markdownUrl=url+'.md';
+  const html=`<html><head><title>Author article</title>
+    <link rel="alternate" type="text/markdown" href="https://external.example/unrelated.md">
+    <link rel="alternate" type="text/markdown" href="./article.md"></head>
+    <body><article><h1>Public page</h1><p>The rendered HTML body remains available if the original source is unavailable.</p></article></body></html>`;
+  const original='---\r\ntitle: Author article\r\n---\r\n\r\n'+body;
+  const calls=[];
+  let native=true;
+  const fetchPage=async(requested,{base:origin})=>{
+    calls.push(requested);
+    assert.equal(origin,url);
+    if(requested===url)return {url,body:html,sha256:digest(html),bytes:Buffer.byteLength(html),content_type:'text/html'};
+    assert.equal(requested,markdownUrl);
+    return {url:markdownUrl,body:original,sha256:digest(original),bytes:Buffer.byteLength(original),
+      content_type:native?'text/markdown; charset=utf-8':'text/html'};
+  };
+  const recipe={type:'html',body_selector:'article'};
+  const captured=await captureArticle(url,recipe,{fetchPage});
+  assert.deepEqual(calls,[url,markdownUrl]);
+  assert.equal(captured.url,url);
+  assert.equal(captured.title,'Author article');
+  assert.equal(captured.markdown,original);
+  assert.equal(captured.source_response.url,markdownUrl);
+  assert.equal(captured.source_response.sha256,digest(original));
+  native=false;
+  const fallback=await captureArticle(url,recipe,{fetchPage});
+  assert.equal(fallback.source_response.url,url);
+  assert.match(fallback.markdown,/rendered HTML body remains available/u);
+});
 test('encoded source decoding, query/path templates and scope are generic',()=>{
   for(const [encoding,value]of [['base64_deflate',deflateSync(body)],['base64_gzip',gzipSync(body)],['base64',Buffer.from(body)]])assert.equal(decodeBody(value.toString('base64'),encoding),body);
   assert.equal(decodeBody(gzipSync(body).toString('base64'),'base64_deflate'),body);
