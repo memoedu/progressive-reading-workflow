@@ -13,6 +13,7 @@ import {bindRepositoryRelations} from '../scripts/source-relations.mjs';
 import {writeRepositoryIndexes} from './repository-indexes.mjs';
 import {ensureSiteRss} from './rss.mjs';
 import {capturedArticle} from './article-capture.mjs';
+import {recoverTruncatedOriginal} from './original-publication-recovery.mjs';
 
 export {capturedArticle} from './article-capture.mjs';
 
@@ -99,10 +100,32 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
   const previous=retry?await readRun(root,retry):null;
   let retryInventory=null;
   const attempts=new Set();
+  const earlierPublications=new Map();
+  const retainEarlierPublications=rows=>{
+    for(const row of rows || []){
+      if(row.status==='imported'&&!earlierPublications.has(row.requested_url))earlierPublications.set(row.requested_url,row);
+    }
+  };
   for(let earlier=previous;earlier&&earlier.source_id===run.source_id&&!attempts.has(earlier.id);earlier=earlier.retry_of?await readRun(root,earlier.retry_of):null){
     attempts.add(earlier.id);
     if(earlier.collection?.inventory?.plan)retryInventory=earlier.collection.inventory;
+    if(settings.processing_mode==='original_text'){
+      for(const batch of earlier.collection?.batches || []){
+        if(batch.request_id)retainEarlierPublications((await broker.getRequest(batch.request_id))?.results);
+      }
+      retainEarlierPublications(earlier.collection?.results);
+    }
   }
+  const previouslyPublished=async(inventory,existing)=>{
+    const results=[];
+    for(const article of inventory.articles){
+      const current=existing.get(urlImportDedupeKey(article.url));
+      if(!current)continue;
+      const repaired=await recoverTruncatedOriginal(root,article,inventory.article_source,current,earlierPublications.get(article.url));
+      results.push(repaired || sourceReuseResult(article.url,current));
+    }
+    return results;
+  };
   const frozenUrls=retrySiteUrls(retryInventory);
   const allowed=new Set(frozenUrls?.map(urlImportDedupeKey));
   const matchesFrozenScope=inventory=>{
@@ -114,18 +137,8 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
     if(task.collection.batches?.length||task.collection.results?.length)throw Error('现有批次已偏离原任务候选快照，需核对落盘结果');
     task.collection=null;
   }
-  if(inventoryCurrent(previous?.collection?.inventory,settings) && !task.collection && matchesFrozenScope(previous.collection.inventory)){
-    const inventory=structuredClone(previous.collection.inventory);
-    const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
-    const historic=previous.collection.results.filter(row=>SUCCESS.has(row.status)&&!existing.has(urlImportDedupeKey(row.requested_url)));
-    inventory.article_source={...inventory.article_source, missing_publications:Object.fromEntries(historic.flatMap(row=>{
-      const artifact=row.artifacts?.find(item=>item.kind==='markdown');
-      return artifact?.sha256?[[row.requested_url,artifact.sha256]]:[];
-    }))};
-    const retained=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url)))
-      .map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
-    task.collection={rule_id:'site-all-articles',phase:'importing',inventory,batches:[],results:retained};
-  }
+  const previousInventory=previous?.collection?.inventory;
+  const reuseInventory=inventoryCurrent(previousInventory,settings)&&matchesFrozenScope(previousInventory);
   const initial=task.collection || {rule_id:'site-all-articles',phase:'planning',inventory:null,batches:[],results:[]};
   const update=async collection=>{
     run.collection=structuredClone(collection);run.phase=collection.phase;
@@ -143,9 +156,17 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
       };
       const discover=planner||fetchPage?discoverSite:discoverSiteInWorker;
       const captureRun=retryInventory?.article_source?.run_id||previous?.id||id;
-      const inventory=await discover(root,settings,captureRun,{planner,fetchPage,onProgress:reportProgress,retryInventory});
+      const inventory=reuseInventory?structuredClone(previousInventory)
+        :await discover(root,settings,captureRun,{planner,fetchPage,onProgress:reportProgress,retryInventory});
       const existing=await findSourcePublications(root,inventory.articles.map(article=>article.url));
-      initial.results=inventory.articles.filter(article=>existing.has(urlImportDedupeKey(article.url))).map(article=>sourceReuseResult(article.url,existing.get(urlImportDedupeKey(article.url))));
+      if(reuseInventory){
+        const historic=previous.collection.results.filter(row=>SUCCESS.has(row.status)&&!existing.has(urlImportDedupeKey(row.requested_url)));
+        inventory.article_source={...inventory.article_source,missing_publications:Object.fromEntries(historic.flatMap(row=>{
+          const artifact=row.artifacts?.find(item=>item.kind==='markdown');
+          return artifact?.sha256?[[row.requested_url,artifact.sha256]]:[];
+        }))};
+      }
+      initial.results=await previouslyPublished(inventory,existing);
       return inventory;
     },
     verify:async collection=>{

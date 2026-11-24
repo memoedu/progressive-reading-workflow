@@ -5,6 +5,33 @@ import os from 'node:os';
 import path from 'node:path';
 import {BrowserImportBroker} from '../scripts/browser-import-broker.mjs';
 
+test('a locked broker state keeps the previous snapshot until atomic replacement succeeds', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'browser-import-state-lock-'));
+  t.after(() => fs.rm(root, {recursive:true, force:true}));
+  const broker = new BrowserImportBroker({stateRoot:root});
+  const first = await broker.createRequest(['https://example.org/before']);
+  const previous = await fs.readFile(broker.statePath, 'utf8');
+  const replace = fs.rename;
+  let replacements = 0;
+  const rename = t.mock.method(fs, 'rename', async (source, destination) => {
+    assert.equal(destination, broker.statePath);
+    assert.equal(await fs.readFile(destination, 'utf8'), previous);
+    const code = ['EPERM', 'EBUSY'][replacements++];
+    if (code) throw Object.assign(new Error('fixture lock'), {code});
+    await replace(source, destination);
+  });
+  const second = await broker.createRequest(['https://example.org/after']);
+  rename.mock.restore();
+  assert.equal(replacements, 3);
+  const reader = new BrowserImportBroker({stateRoot:root});
+  for (const request of [first, second]) assert.equal((await reader.getRequest(request.request_id)).queued, 1);
+  const accepted = await fs.readFile(broker.statePath, 'utf8');
+  t.mock.method(fs, 'rename', async () => { throw Object.assign(new Error('fixture write failure'), {code:'EIO'}); });
+  await assert.rejects(broker.createRequest(['https://example.org/unwritten']), {code:'EIO'});
+  assert.equal(await fs.readFile(broker.statePath, 'utf8'), accepted);
+  assert.deepEqual(await fs.readdir(root), ['state.json']);
+});
+
 test('an exited singleton source worker resumes frozen work without discarding its collection',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'source-worker-recovery-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
   let now=100000;const broker=new BrowserImportBroker({stateRoot:root,now:()=>now});

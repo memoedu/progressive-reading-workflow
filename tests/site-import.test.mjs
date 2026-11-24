@@ -7,13 +7,52 @@ import { JSDOM } from 'jsdom';
 import { pathToFileURL } from 'node:url';
 import { decodeBody,templateUrl,captureArticle } from '../site-import/network.mjs';
 import { discoverSite,matchesPath,scriptEvidence } from '../site-import/discovery.mjs';
-import { normalizeSiteSource,saveSiteSource,runId,readSources } from '../site-import/store.mjs';
-import { digest } from '../subscription-workflow/config.mjs';
+import { normalizeSiteSource,saveSiteSource,runId,runPath,readSources } from '../site-import/store.mjs';
+import { digest,writeJson } from '../subscription-workflow/config.mjs';
 import { processCollectionTask } from '../scripts/collection-import.mjs';
+import { recoverTruncatedOriginal } from '../site-import/original-publication-recovery.mjs';
+import { BROWSER_DRAFT_BODY_LIMIT, normalizeMarkdownText } from '../scripts/markdown-text.mjs';
 
 const base='https://independent.example';
 const body='# 原始材料\n\n保留中文、公式 $a^2+b^2$、链接与代码。\n\n```js\nconst source = 1;\n```\n';
 const temp=()=>fs.mkdtemp('D:/Artifacts/ProgressiveReading/site-test-');
+
+test('a retry extends only an unchanged truncated original, retaining its reading state and previous version',async()=>{
+  const root=await temp();
+  const url=base+'/long-original',source={run_id:runId('legacy-long-original')};
+  const original='Synthetic paragraph with intact source text.\n\n'.repeat(7500)+'Final source paragraph.\n';
+  const rawHash=digest(original);
+  await writeJson(path.join(runPath(root,source.run_id),'sources',digest(url)+'.json'),{url,markdown:original});
+  const file=path.join(root,'阅读区','long-original.md');
+  const stateFile=path.join(root,'.local-ir','browser-document-state','long-original.md.browser-ir.json');
+  const head='---\nsource_url: '+url+'\n---\n\n';
+  const before=head+normalizeMarkdownText(original,BROWSER_DRAFT_BODY_LIMIT)+'\n';
+  const bodyHash=digest(before);
+  const state={schema:'local-ir.document-state',schemaVersion:1,document:{sourceUrl:url,id:'legacy-draft',status:'inbox',revision:0},
+    content:{rawMarkdownSha256:rawHash,markdownSha256:bodyHash},annotations:[],qaCards:[],articleMusing:null};
+  await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,before);
+  const edited={...state,annotations:[{id:'reader-note'}]};
+  await writeJson(stateFile,edited);
+  const publication={path:file,zone:'阅读区',sha256:bodyHash};
+  const row={status:'imported',receipt:{processing_mode:'original_text',source_reused:'verified_site_capture',raw_markdown_sha256:rawHash,draft_id:'legacy-draft'},
+    artifacts:[{kind:'markdown',path:file,sha256:bodyHash}]};
+  await assert.rejects(recoverTruncatedOriginal(root,{url},source,publication,row),/阅读状态发生变化/u);
+  assert.equal(await fs.readFile(file,'utf8'),before);
+  assert.deepEqual(JSON.parse(await fs.readFile(stateFile,'utf8')),edited);
+
+  await writeJson(stateFile,state);
+  const firstState=await fs.readFile(stateFile,'utf8');
+  const result=await recoverTruncatedOriginal(root,{url},source,publication,row);
+  assert.equal(result.receipt.restored_truncated_publication,true);
+  const after=head+original+'\n';
+  assert.equal(await fs.readFile(file,'utf8'),after);
+  assert.deepEqual(JSON.parse(await fs.readFile(stateFile,'utf8')),{...state,content:{...state.content,markdownSha256:digest(after)}});
+  assert.equal(await fs.readFile(path.join(result.receipt.recovery_dir,'previous.md'),'utf8'),before);
+  assert.equal(await fs.readFile(path.join(result.receipt.recovery_dir,'previous.state.json'),'utf8'),firstState);
+  await fs.writeFile(stateFile,firstState);
+  assert.equal((await recoverTruncatedOriginal(root,{url},source,publication,row)).receipt.restored_truncated_publication,true);
+  assert.equal(await recoverTruncatedOriginal(root,{url},source,publication,row),null);
+});
 
 test('article discovery can read large HTML archives within a separate bounded body limit',async()=>{
   const html='<html><head><title>Long archive</title></head><body><article><h1>Original</h1><p>This document contains the complete evidence for the independently published historical article.</p></article></body></html>';

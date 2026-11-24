@@ -25,7 +25,13 @@ function collectionResult(task, collection) {
 // are ordinary broker requests, with stable ids and the existing worker/receipts.
 export async function processCollectionTask(task, { broker, discover, runRequest, pollMs = 1000, initialCollection, onProgress, verify } = {}) {
   const collection = task.collection || initialCollection || { rule_id: "zhihu-column-all-articles", phase: "discovering", inventory: null, batches: [], results: [] };
-  const progress = async () => { await broker.updateTaskProgress(task.id, { collection }, task.lease_token); await onProgress?.(collection); };
+  const heartbeatMs = Math.min(45000, broker.leaseMs / 3);
+  let lastWriteAt = 0;
+  const writeProgress = async result => {
+    await broker.updateTaskProgress(task.id, result, task.lease_token);
+    lastWriteAt = Date.now();
+  };
+  const progress = async () => { await writeProgress({ collection }); await onProgress?.(collection); };
   try {
     if (!collection.inventory?.complete) {
       collection.phase = "discovering";
@@ -65,13 +71,15 @@ export async function processCollectionTask(task, { broker, discover, runRequest
         if (executionError) throw executionError;
         latest = await broker.getRequest(request.request_id);
         if (!latest) throw new Error("collection_child_request_missing");
-        const revision = JSON.stringify([latest.updated_at, latest.status, latest.results.map(row => row.status)]);
+        const revision = JSON.stringify([latest.updated_at, latest.status, latest.results.map(row => [row.status, row.stage])]);
         if (revision !== previousRevision) {
           const retained = new Map(collection.results.map(row => [row.requested_url, row]));
           for (const row of latest.results) retained.set(row.requested_url, row);
           collection.results = [...retained.values()];
           await progress();
           previousRevision = revision;
+        } else if (!latest.terminal && Date.now() - lastWriteAt >= heartbeatMs) {
+          await writeProgress({});
         }
         if (!latest.terminal) await wait(pollMs);
       } while (!latest.terminal);
