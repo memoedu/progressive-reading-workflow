@@ -221,7 +221,7 @@ function jsRenderReason(document, visibleText, { scriptCount, noscript }) {
   return visibleText.length < 40 && scriptCount >= 2 ? "script_only_page_shell" : null;
 }
 
-function htmlDetails(html, finalUrl) {
+export function htmlDetails(html, finalUrl) {
   const dom = new JSDOM(html, { url: finalUrl });
   const document = dom.window.document;
   const scriptCount = document.querySelectorAll("script").length;
