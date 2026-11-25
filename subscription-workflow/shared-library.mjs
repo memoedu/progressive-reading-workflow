@@ -46,6 +46,17 @@ export function sharedVariantPath(url, kind, sha256) {
 }
 
 export const variantKind = value => value === 'translation' || value === 'reading_guide';
+export const sharedReadingPath = (url, sha) => sharedVariantPath(url, 'reading', sha);
+export const sharedOriginalRevisionPath = (url, sha) => '原稿/' + sharedDigest(url).slice(0, 24) + '/' + sha + '.md';
+
+export function sharedReadingSource(url) {
+  const canonical = sharedArticleUrl(url);
+  if (!canonical) return null;
+  const parsed = new URL(canonical);
+  if (parsed.hostname === 'mp.weixin.qq.com' && /^\/s\/[\w-]+$/u.test(parsed.pathname)) return 'wechat';
+  if (parsed.hostname === 'www.bilibili.com' && /^\/video\/BV[0-9A-Za-z]{10}$/u.test(parsed.pathname)) return 'bilibili';
+  return null;
+}
 export const materialExtension = value => ['pdf', 'epub', 'docx', 'txt'].includes(value);
 export const sharedMaterialIndexPath = hash => 'index/materials/' + hash + '.json';
 
@@ -59,6 +70,15 @@ export function sharedRecord(value, url) {
   if (value.versions !== undefined && (!Array.isArray(value.versions) || value.versions.length > 40 ||
       value.versions.some(item => !variantKind(item?.kind) || !sha256Pattern.test(item.sha256 || '') ||
         item.path !== sharedVariantPath(url, item.kind, item.sha256)))) throw new Error('shared_library_invalid_index');
+  const revisions = value.original_revisions ?? [];
+  const readingFiles = value.reading_files ?? [];
+  if (!Array.isArray(revisions) || !Array.isArray(readingFiles) ||
+      revisions.some(item => !sha256Pattern.test(item?.sha256 || '') || item.path !== sharedOriginalRevisionPath(url, item.sha256)) ||
+      readingFiles.some(item => !sha256Pattern.test(item?.sha256 || '') || !sha256Pattern.test(item?.processing_sha256 || '') ||
+        item.path !== sharedReadingPath(url, item.sha256) ||
+        (item.original_sha256 !== original.sha256 && !revisions.some(revision => revision.sha256 === item.original_sha256)))) {
+    throw new Error('shared_library_invalid_index');
+  }
   return value;
 }
 

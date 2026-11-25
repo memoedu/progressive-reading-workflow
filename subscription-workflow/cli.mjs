@@ -3,12 +3,34 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { codeRoot, initialize, paths, loadConfig, writeJson, withLock } from './config.mjs';
 import { JOB_KINDS, enqueue, enqueueVideoRequest, launchWorker, drain, status, initializeActivity, localDate } from './service.mjs';
-import { downloadSharedVersion, resolveSharedMaterial } from './shared-library-client.mjs';
+import { downloadSharedReading, downloadSharedVersion, resolveSharedMaterial, syncSharedReading } from './shared-library-client.mjs';
+import { sharedDigest, sharedReadingSource } from './shared-library.mjs';
 
 export async function main(argv=process.argv.slice(2)) {
   const command=argv[0],options={};
   for(let i=1;i<argv.length;i+=2)options[argv[i].replace(/^--/u,'')]=argv[i+1];
   const root=options.root?path.resolve(options.root):codeRoot;
+  if(command==='publish-shared-reading') {
+    if(!options.request||!options.markdown||!options.sha256)throw new Error('需要 --request、--markdown 和 --sha256');
+    const request=JSON.parse(await fs.readFile(options.request,'utf8'));
+    const bytes=await fs.readFile(options.markdown);
+    if(sharedDigest(bytes)!==options.sha256||request.user_instruction?.trim()||typeof request.material?.markdown!=='string') {
+      throw new Error('shared_publication_source_or_hash_mismatch');
+    }
+    const url=request.source_metadata?.source_url;
+    const kind=sharedReadingSource(url)==='bilibili'?'bilibili':'web';
+    return syncSharedReading(root,{url,kind,original:request.material.markdown,markdown:bytes.toString('utf8'),processingOptions:request.processing_options});
+  }
+  if(command==='download-shared-reading') {
+    if(!options.output)throw new Error('需要 --output 指定新文件位置');
+    const processingOptions=options.options?JSON.parse(await fs.readFile(options.options,'utf8')):{};
+    const kind=sharedReadingSource(options.url)==='bilibili'?'bilibili':'web';
+    const result=await downloadSharedReading(root,{url:options.url,kind,processingOptions});
+    if(!result)return {status:'unavailable'};
+    const {readingBytes,originalBytes,...receipt}=result;
+    await fs.writeFile(options.output,readingBytes,{flag:'wx'});
+    return {...receipt,output:path.resolve(options.output)};
+  }
   if(command==='download-shared-version'||command==='sync-shared-material') {
     if (!options.output) throw new Error('需要 --output 指定新文件位置');
     const result=command==='download-shared-version'

@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { groupTranscriptSegments } from '../scripts/import-youtube-subtitle-canary.mjs';
 import { preprocessNetworkMarkdown } from '../standard-preprocessing/integrations/network-import.mjs';
 import { publishReadingArtifact } from '../standard-preprocessing/index.mjs';
-import { libraryRootForPath, sourceIdentityUrl, findSourcePublication } from '../scripts/reading-source-library.mjs';
+import { libraryRootForPath, sourceIdentityUrl, findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
+import { downloadSharedReading, syncSharedReading } from '../subscription-workflow/shared-library-client.mjs';
+import { sharedReadingSource } from '../subscription-workflow/shared-library.mjs';
 import { layoutInlineAttachments } from './attachment-layout.mjs';
 import { captionMediaSource, extractBookMedia, verifyBookMedia, imageEmbed } from './book-media.mjs';
 import { withCachedMediaRestoration } from './generated-media-projection.mjs';
@@ -150,6 +152,30 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
   await writeExact(path.join(outputDir,'media-source.md'),sourceMedia.markdown);
   const {markdown: _mediaText, ...mediaReceipt} = sourceMedia;
   await writeExact(path.join(outputDir,'media-source.json'),JSON.stringify(mediaReceipt,null,2)+'\n');
+  const canShare = libraryRoot && !producer && !bodyRefiner && files.every(name => name === subtitleFile) &&
+    sharedReadingSource(metadata.source_url) === 'bilibili';
+  const shareRequest = { url: metadata.source_url, kind: 'bilibili', processingOptions };
+  if (canShare) {
+    const shared = await downloadSharedReading(libraryRoot, { ...shareRequest, originalSha256: hash(sourceMedia.markdown) }).catch(() => null);
+    if (shared) {
+      const publication = await withSourcePublication(libraryRoot, metadata.source_url, async () => {
+        const existing = await findSourcePublication(libraryRoot, metadata.source_url);
+        if (existing) return { status:'published', preserved_existing:true, markdown:existing, assets:[] };
+        const local = `---\nsource_url: ${JSON.stringify(metadata.source_url)}\nimport_method: shared_standard_reading\n---\n\n${shared.readingBytes.toString('utf8')}\n`;
+        const asset = path.join(path.dirname(publishPath), publishedAssetRelative(subtitleFile));
+        await writeExact(asset, raw);
+        await writeExact(publishPath, local);
+        return { status:'published', markdown:{ path:publishPath, sha256:hash(local) },
+          assets:[{ published_path:asset, sha256:hash(raw) }] };
+      });
+      const receipt = { status:'completed', processing_status:'idempotent_replay', quality_status:'ready', publication,
+        model:{ calls:0 }, attachments:inventory, attachments_verified:publication.assets.length,
+        shared_reading:{ status:'available', commit:shared.commit, original:shared.original, reading:shared.reading, reused:true } };
+      await writeExact(path.join(outputDir,'publication.json'),JSON.stringify(publication,null,2)+'\n');
+      await writeExact(path.join(outputDir,'video-receipt.json'),JSON.stringify(receipt,null,2)+'\n');
+      return receipt;
+    }
+  }
   // The single-pass adapter owns speech editing. The standard workflow receives
   // its completed written text and may only add the requested reading guide.
   const refinement = bodyRefiner ? await bodyRefiner({markdown:sourceMedia.markdown, outputDir, sourceMetadata:requestMetadata}) : null;
@@ -231,6 +257,9 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     refinement:refinement?.receipt || sharedRefinement || null,
     attachment_layout:layout.version,used_attachments:layout.used_attachments,attachment_placements:layout.placements,
     book_media:{...mediaReceipt,counts:mediaCounts,restoration_stage:'before_full_text_refinement',verified_after_publication:true} };
+  if (canShare && publication.quality_status === 'ready') {
+    receipt.shared_reading = await syncSharedReading(libraryRoot, { ...shareRequest, original:sourceMedia.markdown, markdown:final });
+  }
   await fs.writeFile(path.join(outputDir, 'video-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   return receipt;
 }
@@ -247,6 +276,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const receipt = await importTranscript({ inputDir: args.input, outputDir: args.output, publishPath: args.publish,
       processingOptions: args.options ? JSON.parse(await fs.readFile(args.options, 'utf8')) : {} });
     console.log(JSON.stringify({ ok: true, status: receipt.status, publication: receipt.publication.markdown,
-      quality_status: receipt.quality_status, attachments_verified: receipt.attachments_verified }));
+      quality_status: receipt.quality_status, attachments_verified: receipt.attachments_verified, shared_reading: receipt.shared_reading }));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

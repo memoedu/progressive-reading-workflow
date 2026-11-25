@@ -7,14 +7,76 @@ import { createSharedAccount, createSharedLibraryServer } from '../subscription-
 import { createSharedGitHub } from '../subscription-workflow/shared-library-github.mjs';
 import { createPublicRssSources } from '../subscription-workflow/shared-library-sources.mjs';
 import { syncFeedDocument } from '../rss-source/core.mjs';
-import { resolveSharedSubscription, sharedLibrarySettings, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
-import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
+import { downloadSharedReading, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
+import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedOriginalRevisionPath, sharedReadingPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
 
 const existingUrl = 'https://www.benkuhn.net/existing';
 const commit = '1'.repeat(40);
 const markdown = '# Public fixture\n\n' + 'An independently sourced paragraph. '.repeat(10);
 const record = { schema: sharedSchema, title: 'Public fixture', url: existingUrl,
   original: { path: 'Test folder/Original.md', sha256: sharedDigest(markdown) } };
+
+test('a verified publication separates original and reading files and reuses only matching processing settings', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'public-reading-files-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const url = 'https://mp.weixin.qq.com/s/fixture-public-article';
+  const title = 'Fixture public article';
+  const reading = markdown + '\n\n## 阅读前置卡\n\nA guide with source links.';
+  let indexed, verificationCalls = 0;
+  const blobs = new Map();
+  const password = 'fixture-account-only';
+  const server = createSharedLibraryServer({
+    config: { accounts: { owner: await createSharedAccount(password) }, gitleaks: 'fixture' },
+    verifyReadingSource: async source => { verificationCalls++; return source === url ? { title, markdown } : null; },
+    scan: async () => true,
+    github: {
+      ready: true, lookup: async () => ({ commit, record: indexed }), lookupArticleHash: async () => ({ commit, record: indexed }),
+      publishReading: async ({ url: source, original, reading: body, processingSha256 }) => {
+        const sha = sharedDigest(original);
+        const originalEntry = { path: sharedOriginalRevisionPath(source, sha), sha256: sha };
+        blobs.set(originalEntry.path, original);
+        indexed ??= { schema: sharedSchema, url: source, title, original: originalEntry };
+        if (body) {
+          const version = { path: sharedReadingPath(source, sharedDigest(body)), sha256: sharedDigest(body),
+            original_sha256: sha, processing_sha256: processingSha256 };
+          blobs.set(version.path, body);
+          indexed.reading_files = [version];
+        }
+        return { status: 'available', commit, record: indexed };
+      }
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const endpoint = 'https://library.example/progressive-reading-sync/';
+  let corrupt = false;
+  const fetchImpl = async (target, options) => {
+    const request = String(target);
+    if (request.startsWith(endpoint)) return fetch(request.replace('https://library.example', `http://127.0.0.1:${server.address().port}`), options);
+    for (const [file, body] of blobs) if (request === sharedRawUrl(commit, file)) return new Response(corrupt ? body + '!' : body);
+    return new Response(null, { status: 404 });
+  };
+  await updateSharedLibrarySettings(root, { enabled: true });
+  const config = path.join(root, '.local-ir', 'subscription-library-sync.json');
+  await fs.writeFile(config, JSON.stringify({ endpoint }));
+  await updateSharedLibrarySettings(root, { action: 'login', account: 'owner', password }, fetchImpl);
+
+  assert.equal((await syncSharedReading(root, { url, original: markdown }, { fetchImpl })).status, 'available');
+  const supplied = { url, original: markdown, markdown: '---\nbrowser_draft_id: private-state\n---\n\n' + reading,
+    processingOptions: { translate: true, include_reading_guide: true } };
+  const receipt = await syncSharedReading(root, supplied, { fetchImpl });
+  assert.equal(receipt.status, 'available');
+  assert.notEqual(receipt.original.path, receipt.reading.path);
+  assert.equal(blobs.get(receipt.reading.path), reading);
+  assert.equal(verificationCalls, 1);
+  await updateSharedLibrarySettings(root, { action: 'logout' });
+  const same = await downloadSharedReading(root, { url, processingOptions: { include_reading_guide: true, translate: true } }, { fetchImpl });
+  assert.equal(same.readingBytes.toString(), reading);
+  assert.equal(same.originalBytes.toString(), markdown);
+  assert.equal(await downloadSharedReading(root, { url, processingOptions: { include_reading_guide: false, translate: true } }, { fetchImpl }), null);
+  corrupt = true;
+  await assert.rejects(downloadSharedReading(root, supplied, { fetchImpl }), /shared_download_hash_mismatch/u);
+});
 
 test('public-source acquisition checks feed membership and ignores credential-bearing URLs', async () => {
   const feed = 'https://news.example.com/feed.xml';

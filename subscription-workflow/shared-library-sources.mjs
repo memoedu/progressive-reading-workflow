@@ -1,4 +1,4 @@
-import { sharedArticleUrl } from './shared-library.mjs';
+import { sharedArticleUrl, sharedReadingSource } from './shared-library.mjs';
 import { parseFeedDocument } from '../rss-source/core.mjs';
 import { fetchArticleContent, originalArticleTarget } from '../rss-source/article-fetch.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
@@ -8,6 +8,35 @@ const maxDocumentBytes = 2 * 1024 * 1024;
 const cacheAge = 5 * 60_000;
 
 export const localOnly = reason => ({ status: 'local_only', reason });
+
+export async function verifyPublicReadingSource(url, fetchImpl = fetch) {
+  const source = sharedReadingSource(url);
+  if (source === 'wechat') {
+    const page = await fetchUrlWithoutBrowser(url, { timeoutMs: 15_000, fetchImpl: (target, options) => {
+      if (sharedArticleUrl(target) !== url) throw new Error('shared_source_redirect_not_allowed');
+      return fetchImpl(target, options);
+    } });
+    if (!page.articleHtml || !page.title || page.fetchReceipt.authenticated_fetch !== false) return null;
+    return htmlArticleToMarkdown({ html: page.articleHtml, sourceUrl: url, title: page.title });
+  }
+  if (source !== 'bilibili') return null;
+  const canonical = new URL(url);
+  const bvid = canonical.pathname.split('/').at(-1);
+  const part = Number(canonical.searchParams.get('p') || 1);
+  const get = async (pathname, parameters) => {
+    const target = new URL(pathname, 'https://api.bilibili.com/');
+    target.search = new URLSearchParams(parameters).toString();
+    const { text } = await anonymousText(target.href, new Set([target.origin]), (request, options) =>
+      fetchImpl(request, { ...options, headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.bilibili.com/' } }));
+    const result = JSON.parse(text);
+    return result.code === 0 ? result.data : null;
+  };
+  const view = await get('/x/web-interface/view', { bvid });
+  const cid = view?.pages?.find(page => page.page === part)?.cid;
+  if (view?.bvid !== bvid || view.state !== 0 || !Number.isSafeInteger(cid) || view.rights?.pay || view.rights?.arc_pay || view.rights?.ugc_pay) return null;
+  const media = await get('/x/player/playurl', { bvid, cid: String(cid), qn: '16', fnval: '0' });
+  return media?.durl?.length && typeof view.title === 'string' ? { title: view.title } : null;
+}
 
 async function anonymousText(url, allowed, fetchImpl) {
   const parsed = new URL(url);

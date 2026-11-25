@@ -19,7 +19,8 @@ import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
 import { BROWSER_DRAFT_BODY_LIMIT, normalizeMarkdownText } from "./markdown-text.mjs";
 import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
-import { generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
+import { downloadSharedReading, generatedSharedVersions, publicReadingLookupCandidate, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
+import { sharedReadingSource } from '../subscription-workflow/shared-library.mjs';
 import { sharedRepository } from '../subscription-workflow/shared-library.mjs';
 import { extractUrls, urlImportDedupeKey } from "./url-import-input.mjs";
 import { findSourcePublication, withSourcePublication, sourceReuseResult,sourceAliasEvidence,sourceIdentityUrl } from './reading-source-library.mjs';
@@ -1241,7 +1242,8 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     throw new Error("invalid_url");
   }
   if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported_url_protocol");
-  const cachedRssMarkdown = options.cachedRssMarkdown;
+  const sharedReading = options.sharedReading;
+  const cachedRssMarkdown = options.cachedRssMarkdown ?? sharedReading?.originalBytes.toString('utf8');
   if (!draft.html && !draft.pageText && !cachedRssMarkdown) throw new Error("empty_page_content");
 
   const converted = cachedRssMarkdown
@@ -1253,7 +1255,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     title: draft.title
   });
   if (!cachedRssMarkdown) assertUrlImportBodyIntegrity(draft, converted);
-  const standardize = options.standardize !== false;
+  const standardize = options.standardize !== false && !sharedReading;
   const resolvedDestination = destination;
   const completed = resolvedDestination === "completed";
   const root = completed
@@ -1304,14 +1306,16 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
     : null;
-  const originalImport = !standardize && draft.sourceType === 'url_import';
+  const originalImport = !standardize && !sharedReading && draft.sourceType === 'url_import';
   const originalMarkdown = browserDraftDocument({
     draft: { ...draft, url: parsed.href },
     converted,
     documentStatus,
     preserveCapturedBody: originalImport && Boolean(cachedRssMarkdown)
   });
-  const markdown = preprocessing ? updateFrontmatterFields(preprocessing.markdown, { status: completed ? 'done' : 'imported' }) : (originalImport ? updateFrontmatterFields(originalMarkdown, {
+  const markdown = sharedReading ? ["---", `source_url: ${yamlString(parsed.href)}`,
+    `source_title: ${yamlString(draft.title)}`, 'import_method: shared_standard_reading', 'status: imported', '---', '',
+    sharedReading.readingBytes.toString('utf8'), ''].join('\n') : preprocessing ? updateFrontmatterFields(preprocessing.markdown, { status: completed ? 'done' : 'imported' }) : (originalImport ? updateFrontmatterFields(originalMarkdown, {
     import_method:'url_original_text',processing_mode:'original_text',processing_status:'original',llm_used:false
   }) : originalMarkdown);
   const rawMarkdownSha256 = createHash("sha256").update(converted.markdown).digest("hex");
@@ -1378,6 +1382,14 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
   const sharedVersions = draft.sourceMetadata.shared_original_sha256 === rawMarkdownSha256
     ? await syncSharedVersions(workflowRoot, parsed.href, rawMarkdownSha256, preprocessing?.shareableVersions || []) : [];
+  const sharedPublication = sharedReading ? { status: 'available', commit: sharedReading.commit,
+    original: sharedReading.original, reading: sharedReading.reading, reused: true } :
+    ((preprocessing?.qualityStatus === 'ready' || (originalImport && !draft.sourceMetadata.accepted_import_warnings?.length)) &&
+     draft.sourceType === 'url_import' && !draft.userInstruction &&
+     !draft.annotations.length && !draft.qaCards.length && !draft.articleMusing && process.env.NODE_ENV !== 'test' &&
+      (sharedReadingSource(parsed.href) === 'wechat' || draft.sourceMetadata.shared_original_sha256 === rawMarkdownSha256))
+      ? await syncSharedReading(workflowRoot, { url: parsed.href, original: converted.markdown,
+        markdown: originalImport ? undefined : markdown, processingOptions: draft.processingOptions }) : null;
   return {
     status: completed ? "completed_pending_archive" : "saved_locked",
     artifacts: [
@@ -1394,6 +1406,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       ...(orphanState ? {restored_missing_publication: true} : {}),
       conversion_fidelity: converted.fidelity || null,
       ...(sharedVersions.length ? { shared_versions: sharedVersions } : {}),
+      ...(sharedPublication ? { shared_reading: sharedPublication } : {}),
       ...(guardedReimport && reimportSnapshot ? { supersedes_publication: {
         markdown_sha256: reimportSnapshot.body, metadata_sha256: reimportSnapshot.metadata,
         document_id: previousPublication.document.id, revision: previousPublication.document.revision,
@@ -1413,7 +1426,8 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
         quality_status: preprocessing.qualityStatus,
         readable_with_warnings: preprocessing.readableWithWarnings,
         warning_codes: preprocessing.warningCodes
-      } : originalImport ? {processing_mode:'original_text',llm_used:false,
+      } : sharedReading ? { processing_mode: 'standard_preprocess', preprocess_status: 'idempotent_replay',
+        quality_status: 'ready', model_calls: 0 } : originalImport ? {processing_mode:'original_text',llm_used:false,
         quality_status:draft.sourceMetadata.accepted_import_warnings?.length?'warning':'ready',
         warning_codes:(draft.sourceMetadata.accepted_import_warnings||[]).map(w=>w.code)} : {}),
       raw_markdown_sha256: rawMarkdownSha256,
@@ -1532,6 +1546,17 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
 
 async function importUrlThroughStandardWorkflow(url, { userInstruction = "", destinationFolder = "", processingMode = 'standard_preprocess', processingOptions = {}, pendingInputPath = null, cachedRssDraft = null, articleSource = null, onProgress } = {}) {
   if (!['standard_preprocess','original_text'].includes(processingMode)) throw new Error('unsupported_url_processing_mode');
+  if (processingMode === 'standard_preprocess' && !userInstruction && !pendingInputPath && !cachedRssDraft && !articleSource &&
+      process.env.NODE_ENV !== 'test' && publicReadingLookupCandidate(url) && sharedReadingSource(url) !== 'bilibili') {
+    const shared = await downloadSharedReading(workflowRoot, { url, processingOptions }).catch(() => null);
+    if (shared) {
+      const result = await writeBrowserDraftCommit({ draft: { id: `local-ir-url-${shortHash(url, 16)}`,
+        url, title: shared.title, sourceType: 'url_import', destinationFolder,
+        sourceMetadata: { source_url: url, canonical_url: url, shared_original_sha256: shared.original.sha256 }
+      } }, 'reading', { sharedReading: shared });
+      return { ...result, requested_url: url, final_url: url, redirect_chain: [], status: 'idempotent_replay' };
+    }
+  }
   let fetched;
   if (pendingInputPath) {
     const savedPath = path.resolve(pendingInputPath);
