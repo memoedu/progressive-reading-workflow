@@ -2,7 +2,7 @@ import { resultView } from '/import/client.mjs';
 
 export function mountImportCenter(doc=document,{fetchImpl=globalThis.fetch.bind(globalThis),pollMs=2500,storage}={}) {
   const el=id=>doc.getElementById(id),win=doc.defaultView;
-  let current={revision:0,sources:[],runs:[]},editing=null,selectedRun=null,timer,legacyTimer,stopped=false,refreshing=false;
+  let current={revision:0,sources:[],runs:[]},editing=null,selectedRun=null,timer,stopped=false,refreshing=false;
   try{storage ||= win.localStorage;}catch{}
   const pendingKey='progressive-reading.site-actions/v1';
   let pending={};try{pending=JSON.parse(storage?.getItem(pendingKey)||'{}');}catch{}
@@ -56,8 +56,7 @@ export function mountImportCenter(doc=document,{fetchImpl=globalThis.fetch.bind(
   el('site-detail-close').onclick=()=>{el('site-detail').hidden=true;selectedRun=null;};el('history-refresh').onclick=()=>busy(el('history-refresh'),history);
   el('parseIntent').onclick=()=>busy(el('parseIntent'),async()=>{const data=await api('/api/intent',{text:el('input').value});if(!el('instruction').value.trim())el('instruction').value=data.instruction||'';el('instruction').dispatchEvent(new win.Event('input'));el('intent-feedback').textContent=data.instruction?'已识别加工要求；明确选择仍优先，已有独立要求已保留。':'未发现额外加工要求，按当前设置导入。';});
   el('learningCreate').onclick=()=>busy(el('learningCreate'),()=>learning());el('learningRefresh').onclick=()=>busy(el('learningRefresh'),()=>learning(true));
-  el('legacy-run').onclick=()=>busy(el('legacy-run'),async()=>{if(el('link-mode').value==='original_text')throw new Error('原文直接入库请使用上方普通链接导入。');const processing_options=Object.fromEntries([...doc.querySelectorAll('#processing-options select')].filter(n=>n.value!=='').map(n=>[n.id.replace('processing-',''),n.value==='true'?true:n.value==='false'?false:n.value]));const job=await api('/api/import',{text:el('input').value+'\n'+el('instruction').value,processing_options});const poll=async()=>{try{const latest=await api('/api/jobs/'+job.id);el('legacy-feedback').textContent='专用流程：'+latest.status+' · 已入库 '+(latest.outputs?.length||0)+' · 失败 '+(latest.failures?.length||0);if(!stopped&&!['completed','failed','partial','completed_with_failures','succeeded','done'].includes(latest.status))legacyTimer=setTimeout(poll,2500);else await history();}catch(error){el('legacy-feedback').textContent=error.message;}};await poll();});
   void refresh();void history().catch(error=>{el('saved-history').textContent=error.message;});
-  return {refresh,editor,start,detail,stop(){stopped=true;clearTimeout(timer);clearTimeout(legacyTimer);}};
+  return {refresh,editor,start,detail,stop(){stopped=true;clearTimeout(timer);}};
 }
 if(typeof document!=='undefined')mountImportCenter();

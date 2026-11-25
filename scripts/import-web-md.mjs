@@ -12,15 +12,13 @@ import { preprocessNetworkMarkdown } from "../standard-preprocessing/integration
 import { publishReadingArtifact } from "../standard-preprocessing/index.mjs";
 import { sha256 } from "../standard-preprocessing/lib/core.mjs";
 import { findSourcePublication, sourceReuseResult } from './reading-source-library.mjs';
+import { isWechatArticleUrl } from './wechat-article.mjs';
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const workflowRoot = path.resolve(__dirname, "..");
 const defaultOutDir = path.join(workflowRoot, "imports", "Web Markdown Import Experiments");
-const guidedRunName = `${new Date().toISOString().slice(0, 10)}-guided-wechat`;
-const defaultGuidedOutDir = path.join(workflowRoot, "阅读区", "微信", guidedRunName);
-const defaultGuidedStagingDir = path.join(workflowRoot, "imports", "wechat", guidedRunName);
 const csdiyRepoUrl = "https://github.com/PKUFlyingPig/cs-self-learning.git";
 const csdiyRawBase = "https://raw.githubusercontent.com/PKUFlyingPig/cs-self-learning/master/";
 const csPlanRepoUrl = "https://github.com/MingLLuo/CS-Plan.git";
@@ -44,10 +42,9 @@ const githubExcludedFileNames = new Set(["AGENTS.md", "CLAUDE.md"]);
 const args = process.argv.slice(2);
 const urls = [];
 let outDir = defaultOutDir;
-let stagingDir = defaultGuidedStagingDir;
+let stagingDir = path.join(workflowRoot, "imports", "web");
 let importCsdiyFull = false;
 let importCsPlanFull = false;
-let guidedWechat = false;
 let importInstruction = "";
 let browserContentPath = "";
 let receiptPath = "";
@@ -75,24 +72,18 @@ for (let i = 0; i < args.length; i += 1) {
     importCsdiyFull = true;
   } else if (args[i] === "--cs-plan-full") {
     importCsPlanFull = true;
-  } else if (args[i] === "--guided-wechat") {
-    guidedWechat = true;
   } else {
     urls.push(args[i]);
   }
 }
 
-if (guidedWechat && (importCsdiyFull || importCsPlanFull)) {
-  console.error("--guided-wechat cannot be combined with full-site imports");
+if (urls.includes("--guided-wechat") || urls.some(isWechatArticleUrl)) {
+  console.error("微信公众号文章请通过 /imports 或 POST /api/browser-import/requests 导入。");
   process.exit(1);
 }
 
-if (guidedWechat && outDir === defaultOutDir) {
-  outDir = defaultGuidedOutDir;
-}
-
 if (urls.length === 0 && !importCsdiyFull && !importCsPlanFull && !browserContentPath) {
-  console.error("Usage: npm run import -- <url...> [--out <dir>] [--instruction <text>] [--receipt <path>]\n       npm run import -- --browser-content <capture.json> [--out <dir>] [--instruction <text>] [--receipt <path>]\n       npm run import:guided -- <wechat-url...> [--out <dir>] [--staging <dir>] [--instruction <text>]\n       npm run import:csdiy -- [--out <dir>]\n       npm run import:cs-plan -- [--out <dir>]");
+  console.error("Usage: npm run import -- <url...> [--out <dir>] [--instruction <text>] [--receipt <path>]\n       npm run import -- --browser-content <capture.json> [--out <dir>] [--instruction <text>] [--receipt <path>]\n       npm run import:csdiy -- [--out <dir>]\n       npm run import:cs-plan -- [--out <dir>]");
   process.exit(1);
 }
 
@@ -191,11 +182,6 @@ async function fetchTextWithCurl(url, headers, originalError) {
   } catch (curlError) {
     throw new Error(`fetch failed; curl fallback failed: ${curlError.message}; original: ${originalError.message}`);
   }
-}
-
-function isWechatMpUrl(url) {
-  const parsed = new URL(url);
-  return parsed.hostname === "mp.weixin.qq.com" || parsed.hostname.endsWith(".mp.weixin.qq.com");
 }
 
 function csdiyRawMarkdownUrl(url) {
@@ -369,77 +355,6 @@ function browserExtractedHtmlToMarkdown(record) {
   };
 }
 
-function firstMetaContent(document, selectors) {
-  for (const selector of selectors) {
-    const element = document.querySelector(selector);
-    const value = element?.getAttribute("content") || element?.textContent;
-    if (value?.trim()) return value.trim();
-  }
-  return "";
-}
-
-function cleanWechatContent(contentElement) {
-  contentElement.querySelectorAll("script, style, iframe, mp-common-profile, wx-open-launch-app").forEach(element => element.remove());
-  contentElement.querySelectorAll("img").forEach(img => {
-    const src = img.getAttribute("data-src") || img.getAttribute("src");
-    if (src) img.setAttribute("src", src);
-    const alt = img.getAttribute("alt") || img.getAttribute("data-w");
-    if (alt) img.setAttribute("alt", alt);
-  });
-  contentElement.querySelectorAll("a").forEach(link => {
-    const href = link.getAttribute("data-linktype") === "2"
-      ? link.getAttribute("href")
-      : link.getAttribute("href");
-    if (href) link.setAttribute("href", href);
-  });
-  return contentElement;
-}
-
-function wechatHtmlToMarkdown(html, url) {
-  if (/wappoc_appmsgcaptcha|environment abnormal|captcha/i.test(html) || /环境异常|当前环境异常/.test(html)) {
-    throw new Error("wechat_captcha_or_environment_check");
-  }
-
-  const dom = new JSDOM(html, { url });
-  const { document } = dom.window;
-  const contentElement = document.querySelector("#js_content") || document.querySelector(".rich_media_content");
-  if (!contentElement) {
-    throw new Error("wechat_article_body_not_found");
-  }
-
-  const textLength = contentElement.textContent.replace(/\s+/g, "").length;
-  if (textLength < 500) {
-    throw new Error(`wechat_article_body_too_short_${textLength}`);
-  }
-
-  const title = firstMetaContent(document, [
-    'meta[property="og:title"]',
-    'meta[name="twitter:title"]',
-    "#activity-name",
-    "title"
-  ]).replace(/\s+/g, " ");
-  const author = firstMetaContent(document, ["#js_name", 'meta[property="og:article:author"]']).replace(/\s+/g, " ");
-  const publishedAt = firstMetaContent(document, ["#publish_time", 'meta[property="article:published_time"]']).replace(/\s+/g, " ");
-
-  cleanWechatContent(contentElement);
-  let markdown = absolutizeMarkdownLinks(turndown.turndown(contentElement.innerHTML).trim(), url);
-  const headerLines = [
-    title ? `# ${title}` : null,
-    [author, publishedAt].filter(Boolean).join(" | ") || null
-  ].filter(Boolean);
-  if (headerLines.length) {
-    markdown = `${headerLines.join("\n\n")}\n\n${markdown}`;
-  }
-
-  return {
-    method: "wechat_mp_html",
-    title,
-    author,
-    publishedAt,
-    markdown
-  };
-}
-
 async function writeMarkdown(url, result, options = processingOptions) {
   const existingSource = await findSourcePublication(workflowRoot, url);
   if (existingSource) return { ...sourceReuseResult(url, existingSource), target: existingSource.path };
@@ -481,158 +396,6 @@ async function writeMarkdown(url, result, options = processingOptions) {
   return { target: publication.markdown.path, status: publication.preserved_existing ? 'idempotent_replay' : publication.quality_status === "warning" ? "imported_with_warnings" : "imported",
     artifacts: [{ kind: "markdown", ...publication.markdown }],
     receipt: { ...receipt, quality_status: publication.quality_status, final_markdown_sha256: publication.markdown.sha256 } };
-}
-
-async function writeGuidedFailure(url, stage, reason, detail = "") {
-  await fs.mkdir(stagingDir, { recursive: true });
-  const parsed = new URL(url);
-  const target = path.join(stagingDir, `FAILED ${slugFromUrl(url)}.md`);
-  const now = new Date().toISOString();
-  const body = [
-    "---",
-    `source_url: ${yamlString(url)}`,
-    `source_title: ${yamlString(parsed.hostname)}`,
-    `imported_at: ${yamlString(now)}`,
-    "import_method: guided_wechat_failed",
-    "status: failed",
-    `failure_stage: ${yamlString(stage)}`,
-    `failure_reason: ${yamlString(reason)}`,
-    "---",
-    "",
-    `# Guided import failed: ${parsed.hostname}`,
-    "",
-    `- URL: ${url}`,
-    `- Stage: ${stage}`,
-    `- Reason: ${reason}`,
-    detail ? `- Detail: ${detail}` : "",
-    ""
-  ].filter(Boolean).join("\n");
-  await fs.writeFile(target, body, "utf8");
-  return target;
-}
-
-async function findCachedGuidedRaw(url) {
-  const searchRoots = [
-    stagingDir,
-    path.join(workflowRoot, "imports", "wechat")
-  ];
-  const seen = new Set();
-
-  for (const root of searchRoots) {
-    const metaFiles = await listFilesBySuffix(root, ".meta.json");
-    for (const metaPath of metaFiles) {
-      if (seen.has(metaPath)) continue;
-      seen.add(metaPath);
-      const cached = await readCachedGuidedRaw(url, metaPath);
-      if (cached) return cached;
-    }
-  }
-
-  return null;
-}
-
-async function listFilesBySuffix(root, suffix) {
-  const results = [];
-  async function walk(current) {
-    let entries = [];
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) await walk(fullPath);
-      else if (entry.isFile() && entry.name.endsWith(suffix)) results.push(fullPath);
-    }
-  }
-  await walk(root);
-  return results;
-}
-
-async function readCachedGuidedRaw(url, metaPath) {
-  try {
-    const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-    if (meta.url !== url || !meta.rawMarkdown) return null;
-
-    const rawMarkdownPath = path.resolve(meta.rawMarkdown);
-    const markdown = await fs.readFile(rawMarkdownPath, "utf8");
-    return {
-      rawMarkdownPath,
-      converted: {
-        method: `${meta.method || "wechat_mp_html"}_cached_raw`,
-        title: meta.title || titleFromMarkdown(markdown, slugFromUrl(url)),
-        author: meta.author || "",
-        publishedAt: meta.publishedAt || "",
-        markdown
-      }
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function finishGuidedWechatImport(url, converted, { rawMarkdownPath = "", cachedRaw = false } = {}) {
-  await fs.mkdir(stagingDir, { recursive: true });
-  const slug = slugFromTitle(converted.title, slugFromUrl(url));
-  const resolvedRawMarkdownPath = rawMarkdownPath || path.join(stagingDir, `${slug}.raw.md`);
-
-  if (!rawMarkdownPath) {
-    await fs.writeFile(resolvedRawMarkdownPath, `${converted.markdown.trim()}\n`, "utf8");
-  }
-
-  const processed = await writeMarkdown(url, converted);
-  const metaPath = path.join(stagingDir, `${slug}.meta.json`);
-  await fs.writeFile(metaPath, `${JSON.stringify({
-    url, title: converted.title, method: converted.method, output: processed.target,
-    rawMarkdown: resolvedRawMarkdownPath, cachedRaw, status: processed.status,
-    preprocess: processed.receipt, instruction: importInstruction.trim() || undefined,
-    importedAt: new Date().toISOString()
-  }, null, 2)}\n`, "utf8");
-  return { url, ...processed, method: cachedRaw ? "guided_wechat_cached_raw" : "guided_wechat", raw: resolvedRawMarkdownPath };
-}
-
-async function importGuidedWechatUrl(url) {
-  let html = "";
-  let converted = null;
-  try {
-    if (!isWechatMpUrl(url)) {
-      const target = await writeGuidedFailure(url, "fetch", "guided_wechat_requires_mp_weixin_url");
-      return { url, status: "failed", stage: "fetch", reason: "guided_wechat_requires_mp_weixin_url", target };
-    }
-
-    const { response, text } = await fetchText(url, {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36 MicroMessenger/8.0"
-    });
-    html = text;
-    await fs.mkdir(stagingDir, { recursive: true });
-    const htmlPath = path.join(stagingDir, `${slugFromUrl(url)}.html`);
-    await fs.writeFile(htmlPath, html, "utf8");
-
-    if (!response.ok) {
-      const target = await writeGuidedFailure(url, "fetch", `http_${response.status}`, `HTML: ${htmlPath}`);
-      return { url, status: "failed", stage: "fetch", reason: `http_${response.status}`, target };
-    }
-
-    try {
-      converted = wechatHtmlToMarkdown(html, url);
-    } catch (error) {
-      const cached = await findCachedGuidedRaw(url);
-      if (cached) {
-        return finishGuidedWechatImport(url, cached.converted, {
-          rawMarkdownPath: cached.rawMarkdownPath,
-          cachedRaw: true
-        });
-      }
-      const target = await writeGuidedFailure(url, "convert", error.message, `HTML: ${htmlPath}`);
-      return { url, status: "failed", stage: "convert", reason: error.message, target };
-    }
-
-    return finishGuidedWechatImport(url, converted);
-  } catch (error) {
-    const target = await writeGuidedFailure(url, converted ? "write" : "fetch", error.message);
-    return { url, status: "failed", stage: converted ? "write" : "fetch", reason: error.message, target };
-  }
 }
 
 function csdiySourceUrlFromDocsRelative(relativePath) {
@@ -1833,11 +1596,6 @@ if (browserContentPath) {
 
 for (const url of urls) {
   try {
-    if (guidedWechat) {
-      summary.push(await importGuidedWechatUrl(url));
-      continue;
-    }
-
     const easyVibeSite = easyVibeSiteFromUrl(url);
     if (easyVibeSite) {
       summary.push(await importEasyVibeSiteMarkdown(url, easyVibeSite));
@@ -1857,12 +1615,7 @@ for (const url of urls) {
       continue;
     }
 
-    const fetchOptions = isWechatMpUrl(url)
-      ? {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36 MicroMessenger/8.0"
-        }
-      : {};
-    const { response, text } = await fetchText(url, fetchOptions);
+    const { response, text } = await fetchText(url);
     if (hasFeishuLoginShell(text, url)) {
       const target = await writeFailure(url, "login_required_or_no_public_html", `HTTP ${response.status}`);
       summary.push({ url, status: "failed", reason: "login_required_or_no_public_html", target });
@@ -1875,7 +1628,7 @@ for (const url of urls) {
       continue;
     }
 
-    const converted = isWechatMpUrl(url) ? wechatHtmlToMarkdown(text, url) : htmlToMarkdown(text, url);
+    const converted = htmlToMarkdown(text, url);
     const processed = await writeMarkdown(url, converted);
     summary.push({ url, ...processed, method: converted.method });
   } catch (error) {

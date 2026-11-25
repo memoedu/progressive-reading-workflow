@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
+import { isWechatArticleUrl, wechatArticleBody, wechatArticleMetadata } from "./wechat-article.mjs";
 
 export const BACKGROUND_FETCH_TRANSPORT = "background_fetch";
 export const REQUIRES_BROWSER_AUTH = "requires_browser_auth";
@@ -16,6 +17,8 @@ export const URL_COOKIE_SYNC_ALLOWED_HOSTNAMES = Object.freeze([
 ]);
 
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+const WECHAT_ARTICLE_MAX_BYTES = 16 * 1024 * 1024;
+const WECHAT_ARTICLE_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const DEFAULT_MAX_REDIRECTS = 10;
 const DEFAULT_TIMEOUT_MS = 45_000;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -227,16 +230,28 @@ function jsRenderReason(document, visibleText, { scriptCount, noscript }) {
 
 export function htmlDetails(html, finalUrl) {
   const dom = new JSDOM(html, { url: finalUrl });
-  const document = dom.window.document;
-  const scriptCount = document.querySelectorAll("script").length;
-  const noscript = normalizedText([...document.querySelectorAll("noscript")].map((node) => node.textContent).join(" "));
-  const authReason = authPageReason(document, finalUrl);
-  document.querySelectorAll("script, style, template, noscript").forEach((node) => node.remove());
-  const visibleText = normalizedText(document.body?.textContent);
-  const title = normalizedText(document.title);
-  const jsReason = jsRenderReason(document, visibleText, { scriptCount, noscript });
-  dom.window.close();
-  return { title, visibleText, authReason, jsReason };
+  try {
+    const document = dom.window.document;
+    const scriptCount = document.querySelectorAll("script").length;
+    const noscript = normalizedText([...document.querySelectorAll("noscript")].map((node) => node.textContent).join(" "));
+    const authReason = authPageReason(document, finalUrl);
+    document.querySelectorAll("script, style, template, noscript").forEach((node) => node.remove());
+    if (isWechatArticleUrl(finalUrl)) {
+      const article = wechatArticleBody(document);
+      const visibleText = normalizedText(article?.textContent);
+      if (!visibleText && !article?.querySelector("img[data-src],img[src]")) {
+        const gate = normalizedText(document.querySelector(".weui-msg__title,h1,h2")?.textContent);
+        return { visibleText, authReason: authReason || (/环境异常|安全验证|访问验证/u.test(gate)
+          ? "wechat_article_verification_required" : null), jsReason: "wechat_article_body_unavailable" };
+      }
+      return { ...wechatArticleMetadata(document), visibleText, authReason, jsReason: null };
+    }
+    const visibleText = normalizedText(document.body?.textContent);
+    const title = normalizedText(document.title);
+    return { title, visibleText, authReason, jsReason: jsRenderReason(document, visibleText, { scriptCount, noscript }) };
+  } finally {
+    dom.window.close();
+  }
 }
 
 async function readBody(response, maxBytes) {
@@ -269,9 +284,9 @@ function contentKind(contentType) {
   return { plain, html };
 }
 
-function fetchHeaders(cookie) {
+function fetchHeaders(cookie, url) {
   const headers = {
-    "User-Agent": "ProgressiveReading-LocalFetcher/1.0",
+    "User-Agent": isWechatArticleUrl(url) ? WECHAT_ARTICLE_USER_AGENT : "ProgressiveReading-LocalFetcher/1.0",
     "Accept": "text/html,application/xhtml+xml,application/xml,text/markdown,text/plain;q=0.9,*/*;q=0.8"
   };
   if (cookie) headers.Cookie = cookie;
@@ -382,7 +397,7 @@ async function fetchUrlAttempt(requestedUrl, {
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxRedirects = DEFAULT_MAX_REDIRECTS,
-  maxBytes = DEFAULT_MAX_BYTES,
+  maxBytes,
   cookieByHostname = new Map(),
   cookieHeaderForUrl = null
 } = {}) {
@@ -407,7 +422,7 @@ async function fetchUrlAttempt(requestedUrl, {
         method: "GET",
         redirect: "manual",
         credentials: "omit",
-        headers: fetchHeaders(cookie),
+        headers: fetchHeaders(cookie, currentUrl),
         signal: controller.signal
       });
       if (!REDIRECT_STATUSES.has(response.status)) break;
@@ -437,9 +452,13 @@ async function fetchUrlAttempt(requestedUrl, {
       throw new Error(`url_fetch_http_${response.status}`);
     }
 
+    const bodyLimit = maxBytes ?? (isWechatArticleUrl(currentUrl) ? WECHAT_ARTICLE_MAX_BYTES : DEFAULT_MAX_BYTES);
     const declaredLength = Number(response.headers.get("content-length") || 0);
-    if (declaredLength > maxBytes) throw new Error("url_fetch_content_too_large");
-    let bytes = await readBody(response, maxBytes);
+    if (declaredLength > bodyLimit) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error("url_fetch_content_too_large");
+    }
+    let bytes = await readBody(response, bodyLimit);
     if (!bytes.byteLength) throw new Error("url_fetch_empty_body");
     let contentType = String(response.headers.get("content-type") || "").toLowerCase();
     let charset = contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/iu)?.[1] || "utf-8";
@@ -456,7 +475,7 @@ async function fetchUrlAttempt(requestedUrl, {
       cookieHeaderForUrl,
       cookieByHostname,
       signal: controller.signal,
-      maxBytes
+      maxBytes: bodyLimit
     });
     if (zhihuProjectFallback) {
       body = zhihuProjectFallback.body;
@@ -480,14 +499,20 @@ async function fetchUrlAttempt(requestedUrl, {
     if (!integrity.complete) throw new Error("url_fetch_content_length_mismatch");
 
     let title = "";
+    let articleMetadata = {};
     let visibleText = plain ? normalizedText(body) : "";
     if (html) {
       const details = htmlDetails(body, currentUrl);
-      title = details.title;
+      title = details.title || "";
       visibleText = details.visibleText;
       const degradedDetails = { ...fetchBase, content_type: contentType || "unknown", content_integrity: integrity };
       if (details.authReason) throw new UrlImportDegradedError(REQUIRES_BROWSER_AUTH, details.authReason, degradedDetails);
       if (details.jsReason) throw new UrlImportDegradedError(REQUIRES_JS_RENDER, details.jsReason, degradedDetails);
+      articleMetadata = {
+        ...(details.author ? { author: details.author } : {}),
+        ...(details.account ? { publisher: details.account } : {}),
+        ...(details.publishedAt ? { published_at: details.publishedAt } : {})
+      };
     }
 
     return {
@@ -500,6 +525,7 @@ async function fetchUrlAttempt(requestedUrl, {
       title,
       visibleText,
       sourceMetadata: {
+        ...articleMetadata,
         source_url: normalizedUrl,
         canonical_url: currentUrl,
         redirect_chain: redirectChain,

@@ -21,7 +21,7 @@ npm run app
 
 ## 导入与订阅
 
-- 网页链接进入持久后台队列；浏览器捕获的当前页快照也使用同一处理和发布流程。
+- 普通网页和公众号文章通过 `/imports` 或 `POST /api/browser-import/requests` 进入持久后台队列；浏览器捕获的当前页快照也使用同一处理和发布流程。
 - 可将经匿名抓取的网页原始 Markdown 自动备份到指定的 GitHub 仓库。见 [原始 Markdown 备份](docs/ORIGINAL_MARKDOWN_BACKUP.md)。
 - 公开资料库支持原稿复用、登录同步和匿名提 PR。原稿、加工版本和原材料的索引见 [订阅资料库同步](docs/SUBSCRIPTION_LIBRARY_SYNC.md)。
 - 整站来源可编辑范围、处理方式与相对目录；Codex 识别站点后先核全目录和正文，再分批发布。整站、RSS 和单篇导入按来源全局复用，保留现有正文与批注。具体操作见 [导入管理](docs/WEB_IMPORT_PAGE.md)。
@@ -31,7 +31,6 @@ npm run app
 - 知乎发现接口可能受到站点验证或风控限制。同步成功仅表示本机快照可读，不保证网站授予访问权限。
 
 ```powershell
-npm run import -- "https://example.org/article"
 npm run preprocess -- --help
 ```
 
