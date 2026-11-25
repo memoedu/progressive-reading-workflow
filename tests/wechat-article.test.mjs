@@ -31,6 +31,11 @@ test("WeChat article requests accept a bounded response over the ordinary limit"
   assert.ok(fetched.sourceMetadata.content_integrity.received_body_bytes > 8 * 1024 * 1024);
   assert.equal(fetched.sourceMetadata.content_integrity.complete, true);
   assert.doesNotMatch(fetched.visibleText, /页面导航|底部操作/u);
+  assert.ok(fetched.body.length > 4_000_000);
+  assert.ok(fetched.articleHtml.length < 4_000_000);
+  const draft = htmlArticleToMarkdown({ html: fetched.articleHtml, sourceUrl: articleUrl, title: fetched.title });
+  assert.equal(draft.title, fetched.title);
+  assert.match(draft.markdown, /合成配图[\s\S]*正文末尾。/u);
 
   for (const [url, length] of [[articleUrl, 16 * 1024 * 1024 + 1], ["https://fixture.example/", 8 * 1024 * 1024 + 1]]) {
     await assert.rejects(fetchUrlWithoutBrowser(url, {
