@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { isWechatArticleUrl, wechatArticleBody, wechatArticleMetadata } from "./wechat-article.mjs";
+import { publisherArticleBody } from "./publisher-article-body.mjs";
 
 export const BACKGROUND_FETCH_TRANSPORT = "background_fetch";
 export const REQUIRES_BROWSER_AUTH = "requires_browser_auth";
@@ -237,8 +238,9 @@ export function htmlDetails(html, finalUrl) {
     const authReason = authPageReason(document, finalUrl);
     const wechat = isWechatArticleUrl(finalUrl);
     const wechatBody = wechat ? wechatArticleBody(document) : null;
+    const declaredBody = wechat ? null : publisherArticleBody(document);
     // Keep the original article subtree, including any math source scripts.
-    const articleHtml = wechatBody?.outerHTML;
+    const articleHtml = (wechatBody || declaredBody)?.outerHTML;
     document.querySelectorAll("script, style, template, noscript").forEach((node) => node.remove());
     if (wechat) {
       const visibleText = normalizedText(wechatBody?.textContent);
@@ -249,9 +251,10 @@ export function htmlDetails(html, finalUrl) {
       }
       return { ...wechatArticleMetadata(document), articleHtml, visibleText, authReason, jsReason: null };
     }
-    const visibleText = normalizedText(document.body?.textContent);
+    const visibleText = normalizedText((declaredBody || document.body)?.textContent);
     const title = normalizedText(document.title);
-    return { title, visibleText, authReason, jsReason: jsRenderReason(document, visibleText, { scriptCount, noscript }) };
+    return { title, visibleText, authReason, articleHtml,
+      jsReason: jsRenderReason(document, visibleText, { scriptCount, noscript }) };
   } finally {
     dom.window.close();
   }

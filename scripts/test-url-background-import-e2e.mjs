@@ -152,7 +152,11 @@ const sourceServer = http.createServer((req, res) => {
   }
   if (req.url === "/article") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(articleHtml());
+    res.end(articleHtml().replace(/<main><article>([\s\S]*)<\/article><\/main>/u, (_match, content) =>
+      '<main><template id="B:1"></template><p>Loading shell</p></main>'
+      + '<div hidden id="S:1"><div class="instapaper_body">' + content + '</div></div>'
+      + '<script>$RC("B:1","S:1")</script>'
+      + '<div hidden><p>' + 'Unrelated comment '.repeat(900) + '</p></div>'));
     return;
   }
   if (req.url === "/auth") {
@@ -306,6 +310,9 @@ try {
   assert.equal(completed.results[0].source_metadata.canonical_url, `${sourceBase}/article`);
   assert.match(await fs.readFile(completed.results[0].artifacts[0].path, "utf8"), new RegExp(`^source_url: ${JSON.stringify(`${sourceBase}/redirect`).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "mu"));
   assert.equal(completed.results[0].source_metadata.content_integrity.complete, true);
+  const streamedMarkdown = await fs.readFile(completed.results[0].artifacts[0].path, "utf8");
+  assert.match(streamedMarkdown, /第 10 节/u);
+  assert.doesNotMatch(streamedMarkdown, /Loading shell|Unrelated comment/u);
   assert.equal(completed.results[0].receipt.browser_tab_created, false);
   assert.equal(completed.results[0].receipt.cookie_policy, "versioned_snapshot_cookie_matching_no_store");
   assert.equal(completed.results[1].receipt.authenticated_fetch, true);

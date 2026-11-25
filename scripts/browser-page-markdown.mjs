@@ -4,6 +4,8 @@ import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { randomUUID } from "node:crypto";
 import { isWechatArticleUrl, prepareWechatArticleBody, wechatArticleBody, wechatArticleMetadata } from "./wechat-article.mjs";
+import { publisherArticleBody } from "./publisher-article-body.mjs";
+import { equationTableTex, standAloneTableHtml } from "./equation-table.mjs";
 
 function cleanMathHtml(node) {
   const clone = node.cloneNode(true);
@@ -31,6 +33,8 @@ export function htmlArticleToMarkdown({ html, sourceUrl, title = "", extractArti
       doc.body.replaceChildren(wechatBody);
       prepareWechatArticleBody(wechatBody, sourceUrl);
     }
+    const declaredBody = extractArticle && !wechatBody ? publisherArticleBody(doc) : null;
+    if (declaredBody) doc.body.replaceChildren(declaredBody);
     doc.querySelectorAll("#local-ir-browser-toast,#local-ir-browser-workbench").forEach(node => node.remove());
     doc.querySelectorAll("mark.local-ir-browser-highlight").forEach(node => node.replaceWith(...node.childNodes));
     const prefix = `IRFORMULA${randomUUID().replaceAll("-", "")}X`;
@@ -57,6 +61,10 @@ export function htmlArticleToMarkdown({ html, sourceUrl, title = "", extractArti
       placeholder.textContent = token;
       node.replaceWith(placeholder);
       formulas.set(token, markdown);
+    }
+    for (const table of [...doc.querySelectorAll("table.equation")]) {
+      const tex = equationTableTex(table);
+      if (tex) protect(table, tex, true);
     }
     for (const script of [...doc.querySelectorAll('script[type^="math/tex"]')]) {
       const display = /mode\s*=\s*display/iu.test(script.type);
@@ -108,12 +116,23 @@ export function htmlArticleToMarkdown({ html, sourceUrl, title = "", extractArti
       try { node.setAttribute(attr, new URL(node.getAttribute(attr), sourceUrl).href); } catch { /* Preserve original. */ }
     }
     const explicitBodies = extractArticle ? doc.querySelectorAll('[itemprop~="articleBody"], .h-entry .e-content') : [];
-    const explicitBody = wechatBody || (explicitBodies.length === 1 ? explicitBodies[0] : null);
+    const explicitBody = wechatBody || declaredBody || (explicitBodies.length === 1 ? explicitBodies[0] : null);
     const fallback = (extractArticle ? explicitBody || doc.querySelector("article,main,[role=main]") || doc.body : doc.body).innerHTML;
     // Turndown uses language-* classes to preserve fenced-code languages.
     const article = extractArticle && !explicitBody ? new Readability(doc, { keepClasses: true }).parse() : null;
     const converter = new TurndownService({ headingStyle: "atx", bulletListMarker: "-", codeBlockStyle: "fenced" });
     converter.use(gfm);
+    converter.addRule("standAloneTable", {
+      filter: node => node.nodeName === "TABLE" && (!node.rows.length
+        || node.matches(".equation") || node.querySelector("caption, [colspan], [rowspan], table")
+        || ![...node.rows[0].cells].every(cell => cell.tagName === "TH")),
+      replacement: (_content, node) => standAloneTableHtml(node)
+    });
+    converter.addRule("tableCellWithLiteralPipes", {
+      filter: ["td", "th"],
+      replacement: (content, node) => (node === node.parentElement.firstElementChild ? "| " : " ")
+        + content.replace(/(?<!\\)\|/gu, "\\|") + " |"
+    });
     const content = article?.content || fallback;
     let markdown = converter.turndown(content).trim();
     let preserved = 0;

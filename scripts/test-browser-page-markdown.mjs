@@ -2,6 +2,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
 
+test("explicit fraction rows become Obsidian math and complex equation tables keep their layout", () => {
+  const result = convert(`<table class="equation"><tbody>
+    <tr><td rowspan="2"><em>Q</em>(red|square)</td><td rowspan="2">=</td>
+      <td class="numerator" colspan="2">Q(square|red) × Q(red)</td></tr>
+    <tr><td class="denominator" colspan="2">Q(square)</td></tr>
+    <tr><td rowspan="2"><em>R</em></td><td rowspan="2">=</td>
+      <td class="numerator">A</td><td rowspan="2">&nbsp;</td></tr>
+    <tr><td class="denominator">B</td></tr></tbody></table>
+    <table class="equation"><tr><td class="numerator" colspan="2">A</td></tr>
+    <tr><td rowspan="2"><img src="/left.svg" alt="(" onerror="alert(0)"></td><td>B</td></tr>
+    <tr><td>C</td></tr></table>
+    <table><caption>Values</caption><tr><th colspan="2">Symbol and value</th></tr>
+    <tr><td>C<sub>1</sub></td><td>7</td></tr></table>`);
+  assert.equal(result.fidelity.formulas, 1);
+  assert.match(result.markdown, /\\begin\{aligned\}/u);
+  assert.match(result.markdown, /Q\(\\mathrm\{red\}\s*\\mid\s*\\mathrm\{square\}\) &= \\frac\{/u);
+  assert.match(result.markdown, /\nR &= \\frac\{A\}\{B\}\n\\end\{aligned\}\n\$\$/u);
+  assert.match(result.markdown, /<td class="numerator" colspan="2" style="border-bottom: 1px solid currentcolor; text-align: center;">A<\/td>/iu);
+  assert.match(result.markdown, /<img src="https?:\/\/[^"]+\/left\.svg" alt="\(">/u);
+  assert.doesNotMatch(result.markdown, /onerror|alert\(/u);
+  assert.match(result.markdown, /<caption>Values<\/caption>[\s\S]*<th colspan="2">Symbol and value<\/th>[\s\S]*C<sub>1<\/sub>/u);
+});
+
+test("regular Markdown table cells escape literal column separators", () => {
+  const result = convert("<table><tr><th>Expression</th><th>Value</th></tr><tr><td>Q(A|B)</td><td>2</td></tr></table>");
+  assert.match(result.markdown, /^\| Q\(A\\\|B\) \| 2 \|$/mu);
+});
+
 const convert = content => htmlArticleToMarkdown({ sourceUrl: "https://example.org/lesson/intro", html: `<html><head><title>格式验收</title></head><body><article><h1>格式验收</h1><p>${"这是一篇包含数学、代码和引用的完整正文。".repeat(20)}</p>${content}</article></body></html>` });
 test("explicit article body retains short link sections and excludes surrounding navigation", () => {
   const result = htmlArticleToMarkdown({ sourceUrl: "https://example.org/post", html: `<nav>Outside navigation</nav><article><header>Outside metadata</header><div itemprop="articleBody"><p>${"The research result is interesting. ".repeat(20)}</p><div><p>Further details:</p><ul><li><a href="/details">Technical write-up</a></li><li><a href="/code">Notebook</a></li></ul></div></div></article><footer>Outside footer</footer>` });
