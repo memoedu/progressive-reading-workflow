@@ -75,6 +75,7 @@ export function sharedRecord(value, url) {
   if (!Array.isArray(revisions) || !Array.isArray(readingFiles) ||
       revisions.some(item => !sha256Pattern.test(item?.sha256 || '') || item.path !== sharedOriginalRevisionPath(url, item.sha256)) ||
       readingFiles.some(item => !sha256Pattern.test(item?.sha256 || '') || !sha256Pattern.test(item?.processing_sha256 || '') ||
+        (item.options_sha256 !== undefined && !sha256Pattern.test(item.options_sha256)) ||
         item.path !== sharedReadingPath(url, item.sha256) ||
         (item.original_sha256 !== original.sha256 && !revisions.some(revision => revision.sha256 === item.original_sha256)))) {
     throw new Error('shared_library_invalid_index');

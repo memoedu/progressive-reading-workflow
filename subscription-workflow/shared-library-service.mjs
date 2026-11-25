@@ -165,9 +165,10 @@ export function createSharedLibraryServer({
 
   async function saveReading(input) {
     const url = sharedArticleUrl(input.url);
-    const { original, reading, processing_sha256: processingSha256 } = input;
+    const { original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256 } = input;
     const inputs = reading === undefined ? [original] : [original, reading];
-    if (!url || (reading !== undefined && !sha256Pattern.test(processingSha256 || '')) || inputs.some(markdown =>
+    if (!url || (reading !== undefined && !sha256Pattern.test(processingSha256 || '')) ||
+      (optionsSha256 !== undefined && (reading === undefined || !sha256Pattern.test(optionsSha256))) || inputs.some(markdown =>
       typeof markdown !== 'string' || markdown.trim().length < 80 || markdown.startsWith('---') || Buffer.byteLength(markdown) > 700000)) {
       throw new Error('shared_invalid_reading');
     }
@@ -180,7 +181,7 @@ export function createSharedLibraryServer({
     const title = String(proof.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);
     if (inputs.some(body => publicArchiveContainsPrivateData(url, body, config.private_email_sha256)) ||
         !await scan([title, ...inputs].join('\n'))) throw new Error('shared_material_not_publication_ready');
-    return github.publishReading({ url, title, original, reading, processingSha256 });
+    return github.publishReading({ url, title, original, reading, processingSha256, optionsSha256 });
   }
 
   async function saveMaterial(record, direct) {

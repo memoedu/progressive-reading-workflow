@@ -154,7 +154,7 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
         return { record, entries: [{ path: version.path, content: markdown }, indexEntry(sharedIndexPath(url), record)] };
       } });
     },
-    publishReading({ url, title, original, reading, processingSha256 }) {
+    publishReading({ url, title, original, reading, processingSha256, optionsSha256 }) {
       const originalSha256 = sharedDigest(original);
       const readingSha256 = reading ? sharedDigest(reading) : null;
       return publish({ url, direct: true, read: () => lookup(url), build: current => {
@@ -168,12 +168,17 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
           entries.push({ path: originalEntry.path, content: original });
           changed = true;
         }
-        if (readingSha256 && !record.reading_files?.some(item => item.sha256 === readingSha256 && item.original_sha256 === originalSha256 &&
-            item.processing_sha256 === processingSha256)) {
+        const existingReading = readingSha256 && record.reading_files?.find(item => item.sha256 === readingSha256 &&
+          item.original_sha256 === originalSha256 && item.processing_sha256 === processingSha256);
+        if (readingSha256 && !existingReading) {
           const entry = { path: sharedReadingPath(url, readingSha256), sha256: readingSha256,
-            original_sha256: originalSha256, processing_sha256: processingSha256 };
+            original_sha256: originalSha256, processing_sha256: processingSha256,
+            ...(optionsSha256 && { options_sha256: optionsSha256 }) };
           record.reading_files = [...(record.reading_files || []), entry];
           if (!current?.reading_files?.some(item => item.sha256 === readingSha256)) entries.push({ path: entry.path, content: reading });
+          changed = true;
+        } else if (existingReading && optionsSha256 && !existingReading.options_sha256) {
+          existingReading.options_sha256 = optionsSha256;
           changed = true;
         }
         if (changed) entries.push(indexEntry(sharedIndexPath(url), sharedRecord(record, url)));

@@ -1,7 +1,8 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
-import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedRepository, commitPattern, sha256Pattern, variantKind, sharedReadingSource } from './shared-library.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 import { standardWorkflowOptions } from '../standard-preprocessing/index.mjs';
 import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-preprocessing/lib/core.mjs';
@@ -9,11 +10,6 @@ import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-prepr
 const statePath = root => path.join(root, '.local-ir', 'subscription-library-sync.json');
 const defaultEndpoint = 'https://124.221.144.155/progressive-reading-sync/';
 const defaultArticleOrigins = new Set(defaultSources.public_rss.flatMap(source => source.article_origins));
-
-export function publicReadingLookupCandidate(url) {
-  const canonical = sharedArticleUrl(url);
-  return canonical && (Boolean(sharedReadingSource(canonical)) || defaultArticleOrigins.has(new URL(canonical).origin));
-}
 
 function serverEndpoint(value) {
   try {
@@ -190,18 +186,29 @@ export async function downloadSharedVersion(root, { url, kind, sha256 }, { fetch
   return { status: 'available', commit: result.commit, version, bytes };
 }
 
-export function sharedReadingProcessingKey({ kind = 'web', processingOptions = {} } = {}) {
+function sharedReadingOptions(kind, processingOptions) {
+  return standardWorkflowOptions({ ...(kind === 'bilibili' ? { input_form: 'spoken_transcript' } : {}), ...processingOptions });
+}
+
+export function sharedReadingOptionsKey({ kind = 'web', processingOptions } = {}) {
+  return sharedDigest(stableJson({ kind, options: sharedReadingOptions(kind, processingOptions) }));
+}
+
+export function sharedReadingProcessingKey({ kind = 'web', processingOptions } = {}) {
   return sharedDigest(stableJson({ kind, processor: PROCESSOR_VERSION, prompt: PROMPT_VERSION,
-    options: standardWorkflowOptions({ ...(kind === 'bilibili' ? { input_form: 'spoken_transcript' } : {}), ...processingOptions }) }));
+    options: sharedReadingOptions(kind, processingOptions) }));
 }
 
 function publicReadingBody(markdown) {
   return markdown.replace(/^\uFEFF/u, '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '').trim();
 }
 
-function readingEntry(record, processingSha256, originalSha256) {
-  return record.reading_files?.findLast(item => item.processing_sha256 === processingSha256 &&
-    (!originalSha256 || item.original_sha256 === originalSha256));
+function readingEntry(record, request, originalSha256) {
+  const candidates = record.reading_files?.filter(item => !originalSha256 || item.original_sha256 === originalSha256) ?? [];
+  const processingSha256 = sharedReadingProcessingKey(request);
+  const optionsSha256 = sharedReadingOptionsKey(request);
+  return candidates.findLast(item => item.processing_sha256 === processingSha256) ??
+    candidates.findLast(item => item.options_sha256 === optionsSha256);
 }
 
 async function verifiedReadingPair(commit, record, entry, fetchImpl) {
@@ -223,7 +230,7 @@ export async function downloadSharedReading(root, { url, kind, processingOptions
   const response = await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl);
   if (response.status !== 'available') return null;
   const record = sharedRecord(response.record, canonical);
-  const entry = readingEntry(record, sharedReadingProcessingKey({ kind, processingOptions }), originalSha256);
+  const entry = readingEntry(record, { kind, processingOptions }, originalSha256);
   return entry ? verifiedReadingPair(response.commit, record, entry, fetchImpl) : null;
 }
 
@@ -235,12 +242,15 @@ export async function syncSharedReading(root, { url, kind, original, markdown, p
   }
   const reading = markdown === undefined ? undefined : publicReadingBody(markdown);
   const processingSha256 = reading === undefined ? undefined : sharedReadingProcessingKey({ kind, processingOptions });
+  const optionsSha256 = reading === undefined ? undefined : sharedReadingOptionsKey({ kind, processingOptions });
   const backup = await readJson(path.join(root, '.local-ir', 'original-markdown-backup.json'), {});
   if ([original, reading].filter(Boolean).some(text => publicArchiveContainsPrivateData(canonical, text, backup.private_email_sha256 || []))) {
     return { status: 'local_only', reason: 'shared_material_not_publication_ready' };
   }
   try {
-    const result = await request(state, 'publication', { url: canonical, original, reading, processing_sha256: processingSha256 }, fetchImpl);
+    const result = await request(state, 'publication', {
+      url: canonical, original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256
+    }, fetchImpl);
     if (result.status === 'local_only') return result;
     if (result.status !== 'available') throw new Error('shared_sync_invalid_receipt');
     const record = sharedRecord(result.record, canonical);
@@ -258,6 +268,14 @@ export async function syncSharedReading(root, { url, kind, original, markdown, p
   } catch (error) {
     return { status: 'retry_wait', error: /^shared_[a-z0-9_]+$/u.test(error.message) ? error.message : 'shared_sync_unavailable' };
   }
+}
+
+export async function syncSharedReadingFile(root, { file, sha256, originalOnly = false, ...request }, dependencies) {
+  const bytes = await fs.readFile(file).catch(() => null);
+  if (!bytes || sharedDigest(bytes) !== sha256) {
+    return { status: 'local_only', reason: 'local_file_missing_or_changed' };
+  }
+  return syncSharedReading(root, { ...request, markdown: originalOnly ? undefined : bytes.toString('utf8') }, dependencies);
 }
 
 export async function resolveSharedMaterial(root, hash, { lookupOnly = false, fetchImpl = fetch } = {}) {

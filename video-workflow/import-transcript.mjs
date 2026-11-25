@@ -6,7 +6,7 @@ import { groupTranscriptSegments } from '../scripts/import-youtube-subtitle-cana
 import { preprocessNetworkMarkdown } from '../standard-preprocessing/integrations/network-import.mjs';
 import { publishReadingArtifact } from '../standard-preprocessing/index.mjs';
 import { libraryRootForPath, sourceIdentityUrl, findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
-import { downloadSharedReading, syncSharedReading } from '../subscription-workflow/shared-library-client.mjs';
+import { downloadSharedReading, syncSharedReadingFile } from '../subscription-workflow/shared-library-client.mjs';
 import { sharedReadingSource } from '../subscription-workflow/shared-library.mjs';
 import { layoutInlineAttachments } from './attachment-layout.mjs';
 import { captionMediaSource, extractBookMedia, verifyBookMedia, imageEmbed } from './book-media.mjs';
@@ -257,8 +257,9 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     refinement:refinement?.receipt || sharedRefinement || null,
     attachment_layout:layout.version,used_attachments:layout.used_attachments,attachment_placements:layout.placements,
     book_media:{...mediaReceipt,counts:mediaCounts,restoration_stage:'before_full_text_refinement',verified_after_publication:true} };
-  if (canShare && publication.quality_status === 'ready') {
-    receipt.shared_reading = await syncSharedReading(libraryRoot, { ...shareRequest, original:sourceMedia.markdown, markdown:final });
+  if (canShare && publication.quality_status === 'ready' && !publication.preserved_existing) {
+    receipt.shared_reading = await syncSharedReadingFile(libraryRoot, { ...shareRequest, original:sourceMedia.markdown,
+      file:publication.markdown.path, sha256:publication.markdown.sha256 });
   }
   await fs.writeFile(path.join(outputDir, 'video-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   return receipt;

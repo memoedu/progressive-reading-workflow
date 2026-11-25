@@ -10,7 +10,7 @@ import { dataPath } from '../scripts/runtime-paths.mjs';
 import { auditVisibleReadingAnchors } from '../standard-preprocessing/lib/core.mjs';
 import { readingDestination } from './reading-options.mjs';
 import { ExternalProducer, loadBatchProducerConfig } from '../standard-preprocessing/lib/producer.mjs';
-import { downloadSharedReading, generatedSharedVersions, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
+import { downloadSharedReading, generatedSharedVersions, syncSharedReadingFile, syncSharedVersions } from './shared-library-client.mjs';
 import { findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
 
 export async function subscriptionProducer(config = null) {
@@ -127,8 +127,8 @@ export async function deliverArticle(paths, item, name, options = {}) {
       source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
   }
   if (shareable && !run.publication.preserved_existing && !options.readingRunner) {
-    item.publication.shared_reading = await syncSharedReading(paths.workflowRoot, { ...sharedRequest, original,
-      markdown:await fs.readFile(run.publication.markdown.path,'utf8') });
+    const { path:file, sha256 } = run.publication.markdown;
+    item.publication.shared_reading = await syncSharedReadingFile(paths.workflowRoot, { ...sharedRequest, original, file, sha256 });
   }
   if (item.reading_options.generate_guide) item.reading_guide = {status:'ready',result_path:item.publication.result_path};
   return item.review_preview = {status:'ready',direct_reading:true,result_path:item.publication.result_path,
@@ -184,8 +184,8 @@ export async function addReadingGuide(paths,item,options = {}) {
       source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
     const original = source.material?.markdown;
     if (!options.guideRunner && typeof original === 'string' && digest(original) === source.source_metadata.shared_original_sha256) {
-      item.reading_guide.shared_reading = await syncSharedReading(paths.workflowRoot, { url:item.item_url, original,
-        markdown:after, processingOptions:readingRequest(source,item,true).processing_options });
+      item.reading_guide.shared_reading = await syncSharedReadingFile(paths.workflowRoot, { url:item.item_url, original,
+        file, sha256:digest(after), processingOptions:readingRequest(source,item,true).processing_options });
     }
   }
 }

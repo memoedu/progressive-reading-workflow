@@ -19,7 +19,7 @@ import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
 import { BROWSER_DRAFT_BODY_LIMIT, normalizeMarkdownText } from "./markdown-text.mjs";
 import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
-import { downloadSharedReading, generatedSharedVersions, publicReadingLookupCandidate, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
+import { downloadSharedReading, generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings, syncSharedReadingFile, syncSharedVersions } from '../subscription-workflow/shared-library-client.mjs';
 import { sharedReadingSource } from '../subscription-workflow/shared-library.mjs';
 import { sharedRepository } from '../subscription-workflow/shared-library.mjs';
 import { extractUrls, urlImportDedupeKey } from "./url-import-input.mjs";
@@ -1388,8 +1388,8 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
      draft.sourceType === 'url_import' && !draft.userInstruction &&
      !draft.annotations.length && !draft.qaCards.length && !draft.articleMusing && process.env.NODE_ENV !== 'test' &&
       (sharedReadingSource(parsed.href) === 'wechat' || draft.sourceMetadata.shared_original_sha256 === rawMarkdownSha256))
-      ? await syncSharedReading(workflowRoot, { url: parsed.href, original: converted.markdown,
-        markdown: originalImport ? undefined : markdown, processingOptions: draft.processingOptions }) : null;
+      ? await syncSharedReadingFile(workflowRoot, { url: parsed.href, original: converted.markdown,
+        file: target, sha256: finalMarkdownSha256, originalOnly: originalImport, processingOptions: draft.processingOptions }) : null;
   return {
     status: completed ? "completed_pending_archive" : "saved_locked",
     artifacts: [
@@ -1547,7 +1547,7 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
 async function importUrlThroughStandardWorkflow(url, { userInstruction = "", destinationFolder = "", processingMode = 'standard_preprocess', processingOptions = {}, pendingInputPath = null, cachedRssDraft = null, articleSource = null, onProgress } = {}) {
   if (!['standard_preprocess','original_text'].includes(processingMode)) throw new Error('unsupported_url_processing_mode');
   if (processingMode === 'standard_preprocess' && !userInstruction && !pendingInputPath && !cachedRssDraft && !articleSource &&
-      process.env.NODE_ENV !== 'test' && publicReadingLookupCandidate(url) && sharedReadingSource(url) !== 'bilibili') {
+      process.env.NODE_ENV !== 'test' && sharedReadingSource(url) !== 'bilibili') {
     const shared = await downloadSharedReading(workflowRoot, { url, processingOptions }).catch(() => null);
     if (shared) {
       const result = await writeBrowserDraftCommit({ draft: { id: `local-ir-url-${shortHash(url, 16)}`,

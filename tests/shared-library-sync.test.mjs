@@ -7,7 +7,7 @@ import { createSharedAccount, createSharedLibraryServer } from '../subscription-
 import { createSharedGitHub } from '../subscription-workflow/shared-library-github.mjs';
 import { createPublicRssSources } from '../subscription-workflow/shared-library-sources.mjs';
 import { syncFeedDocument } from '../rss-source/core.mjs';
-import { downloadSharedReading, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
+import { downloadSharedReading, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedReadingFile, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
 import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedOriginalRevisionPath, sharedReadingPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
 
 const existingUrl = 'https://www.benkuhn.net/existing';
@@ -31,14 +31,14 @@ test('a verified publication separates original and reading files and reuses onl
     scan: async () => true,
     github: {
       ready: true, lookup: async () => ({ commit, record: indexed }), lookupArticleHash: async () => ({ commit, record: indexed }),
-      publishReading: async ({ url: source, original, reading: body, processingSha256 }) => {
+      publishReading: async ({ url: source, original, reading: body, processingSha256, optionsSha256 }) => {
         const sha = sharedDigest(original);
         const originalEntry = { path: sharedOriginalRevisionPath(source, sha), sha256: sha };
         blobs.set(originalEntry.path, original);
         indexed ??= { schema: sharedSchema, url: source, title, original: originalEntry };
         if (body) {
           const version = { path: sharedReadingPath(source, sharedDigest(body)), sha256: sharedDigest(body),
-            original_sha256: sha, processing_sha256: processingSha256 };
+            original_sha256: sha, processing_sha256: processingSha256, options_sha256: optionsSha256 };
           blobs.set(version.path, body);
           indexed.reading_files = [version];
         }
@@ -64,7 +64,16 @@ test('a verified publication separates original and reading files and reuses onl
   assert.equal((await syncSharedReading(root, { url, original: markdown }, { fetchImpl })).status, 'available');
   const supplied = { url, original: markdown, markdown: '---\nbrowser_draft_id: private-state\n---\n\n' + reading,
     processingOptions: { translate: true, include_reading_guide: true } };
-  const receipt = await syncSharedReading(root, supplied, { fetchImpl });
+  const file = path.join(root, 'reading.md');
+  const { markdown: generated, ...request } = supplied;
+  const publication = { ...request, file, sha256: sharedDigest(generated) };
+  await fs.writeFile(file, generated + '\nReader edit.');
+  const unexpectedFetch = { fetchImpl: async () => assert.fail('edited reading material reached the network') };
+  assert.deepEqual(await syncSharedReadingFile(root, publication, unexpectedFetch), {
+    status: 'local_only', reason: 'local_file_missing_or_changed'
+  });
+  await fs.writeFile(file, generated);
+  const receipt = await syncSharedReadingFile(root, publication, { fetchImpl });
   assert.equal(receipt.status, 'available');
   assert.notEqual(receipt.original.path, receipt.reading.path);
   assert.equal(blobs.get(receipt.reading.path), reading);
@@ -73,6 +82,17 @@ test('a verified publication separates original and reading files and reuses onl
   const same = await downloadSharedReading(root, { url, processingOptions: { include_reading_guide: true, translate: true } }, { fetchImpl });
   assert.equal(same.readingBytes.toString(), reading);
   assert.equal(same.originalBytes.toString(), markdown);
+  const [currentVersion] = indexed.reading_files;
+  const historicalReading = reading + ' Earlier rendering.';
+  const historicalSha256 = sharedDigest(historicalReading);
+  const historical = { ...currentVersion, path: sharedReadingPath(url, historicalSha256), sha256: historicalSha256,
+    processing_sha256: sharedDigest('earlier processor') };
+  blobs.set(historical.path, historicalReading);
+  indexed.reading_files.push(historical);
+  assert.equal((await downloadSharedReading(root, request, { fetchImpl })).readingBytes.toString(), reading);
+  indexed.reading_files = [historical];
+  assert.equal((await downloadSharedReading(root, request, { fetchImpl })).readingBytes.toString(), historicalReading);
+  assert.equal(await downloadSharedReading(root, { ...request, originalSha256: sharedDigest('other original') }, { fetchImpl }), null);
   assert.equal(await downloadSharedReading(root, { url, processingOptions: { include_reading_guide: false, translate: true } }, { fetchImpl }), null);
   corrupt = true;
   await assert.rejects(downloadSharedReading(root, supplied, { fetchImpl }), /shared_download_hash_mismatch/u);
