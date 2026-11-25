@@ -1,12 +1,18 @@
 # 订阅共享资料库
 
-链接导入、RSS 自动导入、RSS 日报周报和知乎文本在获取正文前按规范化来源地址查公开资料库。命中时从固定 Git 提交下载正文并核对 SHA-256，再交给既有阅读加工流程。新增公开 RSS 原稿须由同步服务在当前公开 feed 中确认条目，再独立读取正文。仅能通过登录取得或无法独立核验的条目继续本机处理，回执保留 `local_only` 和原因。B 站的字幕与视频处理仍沿用本机入口。
+链接导入、RSS 自动导入、RSS 日报周报和知乎文本在获取正文前按规范化来源地址查公开资料库。命中时从固定 Git 提交下载并核对 SHA-256。新增公开 RSS 原稿由同步服务在当前公开 feed 中确认后独立读取。公众号文章须通过匿名正文复查。B 站标准纯文稿须关联可匿名播放的精确分 P。
 
 订阅页的「共享资料库」默认开启。关闭后，新材料走本机导入，已有的公开原稿备份队列暂停写入。已登录的订阅用户由服务器代写主分支，匿名投稿由同一服务器代提 PR。已发表材料可以直接匿名复用。待合并的订阅条目有 PR 链接，队列会继续检查主分支。手工链接导入也会尝试同步公开 RSS 目录内的条目，投稿待审时可继续本机导入并保留 PR 回执。
 
 `index/articles/` 按来源地址索引原稿和加工版本。同步服务通过 GitHub Contents API 按选定的提交读取。快进写入遇到并发时重新核对索引。匿名投稿分支按来源生成，重复投稿复用同一 PR。[公开订阅索引](https://github.com/memoedu/progressive-reading-library/blob/main/index/subscriptions.json)只记录公开来源地址。Thoughts Memo 译文的索引保留上游许可证、固定提交、目录及 Git blob 哈希。
 
-完成导入且可关联公开原稿时，已登录的客户端可同步本次生成的译文和带导图卡的 Markdown。读取区正文、批注和本机运行包保留在本机。可选择加工类型和文件哈希下载固定版本。省略 `--sha256` 时选择该类型最后登记的版本。
+标准导入将可公开的原稿与加工 Markdown 分开存储。来源索引为每份加工稿记录原稿 SHA-256、处理选项指纹和成品 SHA-256。指纹包括正文工作流、整理、翻译、导读等选项，以及处理器和提示版本。匹配时直接下载审核通过的加工稿，无需重新生成。配图模式、个人批注、自由文本加工要求与本机运行包沿用本机路径。仓库写入回执区分已回读、待重试及来源不适用。
+
+通过 `download-shared-reading` 指定来源与当时的处理选项文件即可直接复用完整加工稿。原有 `download-shared-version` 可继续下载此前单独登记的译文或导读。
+
+```powershell
+node subscription-workflow/cli.mjs download-shared-reading --url '<来源链接>' --options '<处理选项.json>' --output '<新文件.md>'
+```
 
 ```powershell
 node subscription-workflow/cli.mjs download-shared-version --url '<原稿链接>' --kind translation --output '<新文件.md>'

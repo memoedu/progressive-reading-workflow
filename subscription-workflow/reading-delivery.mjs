@@ -10,7 +10,8 @@ import { dataPath } from '../scripts/runtime-paths.mjs';
 import { auditVisibleReadingAnchors } from '../standard-preprocessing/lib/core.mjs';
 import { readingDestination } from './reading-options.mjs';
 import { ExternalProducer, loadBatchProducerConfig } from '../standard-preprocessing/lib/producer.mjs';
-import { generatedSharedVersions, syncSharedVersions } from './shared-library-client.mjs';
+import { downloadSharedReading, generatedSharedVersions, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
+import { findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
 
 export async function subscriptionProducer(config = null) {
   return new ExternalProducer({...config || await loadBatchProducerConfig(),AI_PRODUCER_PROVIDER:'codex_exec'});
@@ -86,6 +87,29 @@ export async function deliverArticle(paths, item, name, options = {}) {
   if (await fs.access(target).then(()=>true,()=>false)) throw new Error(`reading_destination_collision:${target}`);
   const source = await readJson(item.preprocess_request_path);
   const request = await readingRequest(source,item,undefined,options);
+  const original = source.material?.markdown;
+  const originalSha256 = source.source_metadata?.shared_original_sha256;
+  const shareable = !source.user_instruction && originalSha256 && typeof original === 'string' && digest(original) === originalSha256;
+  const sharedRequest = { url: item.item_url, originalSha256, processingOptions: request.processing_options };
+  if (shareable && !options.readingRunner) {
+    const shared = await downloadSharedReading(paths.workflowRoot, sharedRequest).catch(() => null);
+    if (shared) {
+      item.publication = await withSourcePublication(paths.workflowRoot, item.item_url, async () => {
+        const existing = await findSourcePublication(paths.workflowRoot, item.item_url);
+        if (existing) return { ...existing, status:'published', preserved_existing:true };
+        const markdown = `---\nsource_url: ${JSON.stringify(item.item_url)}\nimport_method: shared_standard_reading\n---\n\n${shared.readingBytes.toString('utf8')}\n`;
+        await fs.mkdir(path.dirname(target), { recursive:true });
+        await fs.writeFile(target, markdown, { flag:'wx' });
+        return { status:'published', path:target, sha256:digest(markdown), published_at:new Date().toISOString(), direct_reading:true,
+          shared_reading:{ status:'available', commit:shared.commit, original:shared.original, reading:shared.reading, reused:true } };
+      });
+      if (item.reading_options.generate_guide) {
+        if (item.publication.preserved_existing) await addReadingGuide(paths,item,options);
+        else item.reading_guide = { status:'ready', shared_reading:item.publication.shared_reading };
+      }
+      return item.review_preview = { status:'ready', direct_reading:true, source_request_sha256:item.preprocess_request_sha256 };
+    }
+  }
   const outputDir = path.join(paths.preprocessRoot,'direct-reading',item.material_id,digest(JSON.stringify(request)).slice(0,20));
   const runner = options.readingRunner || runPreprocessingRequest;
   const run = await runner(request,{outputDir,publishPath:target,assetSourceDir:item.source_package_path,cacheDir:readingCache,
@@ -101,6 +125,10 @@ export async function deliverArticle(paths, item, name, options = {}) {
   if (source.source_metadata?.shared_original_sha256 && !source.user_instruction && !run.publication.preserved_existing) {
     item.publication.shared_versions = await syncSharedVersions(paths.workflowRoot, item.item_url,
       source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
+  }
+  if (shareable && !run.publication.preserved_existing && !options.readingRunner) {
+    item.publication.shared_reading = await syncSharedReading(paths.workflowRoot, { ...sharedRequest, original,
+      markdown:await fs.readFile(run.publication.markdown.path,'utf8') });
   }
   if (item.reading_options.generate_guide) item.reading_guide = {status:'ready',result_path:item.publication.result_path};
   return item.review_preview = {status:'ready',direct_reading:true,result_path:item.publication.result_path,
@@ -154,6 +182,11 @@ export async function addReadingGuide(paths,item,options = {}) {
   if (source.source_metadata?.shared_original_sha256 && !source.user_instruction && originalPublication?.markdown?.sha256 === digest(before)) {
     item.reading_guide.shared_versions = await syncSharedVersions(paths.workflowRoot, item.item_url,
       source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
+    const original = source.material?.markdown;
+    if (!options.guideRunner && typeof original === 'string' && digest(original) === source.source_metadata.shared_original_sha256) {
+      item.reading_guide.shared_reading = await syncSharedReading(paths.workflowRoot, { url:item.item_url, original,
+        markdown:after, processingOptions:readingRequest(source,item,true).processing_options });
+    }
   }
 }
 

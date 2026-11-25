@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { pilotArticleUrl, sharedArticleUrl, sharedDigest, sharedSchema, sharedVariantPath, variantKind,
   sharedIndexPath, sharedMaterialRecord, sha256Pattern } from './shared-library.mjs';
-import { createPublicRssSources, localOnly } from './shared-library-sources.mjs';
+import { createPublicRssSources, localOnly, verifyPublicReadingSource } from './shared-library-sources.mjs';
 import { createSharedGitHub } from './shared-library-github.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
@@ -103,7 +103,8 @@ function checkCredentials(markdown, executable) {
 export function createSharedLibraryServer({
   config, github = createSharedGitHub(config.github), fetchArticle = config.public_rss
     ? createPublicRssSources(config.public_rss) : url => pilotArticleUrl(url) ? fetchPilotArticle(url) : localOnly('source_not_in_public_feed'),
-  scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now, fetchMaterial = fetch
+  scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now, fetchMaterial = fetch,
+  verifyReadingSource = verifyPublicReadingSource
 }) {
   const sessions = sessionProtocol(config, now);
   const limits = new Map();
@@ -162,6 +163,26 @@ export function createSharedLibraryServer({
     return { status: result.status, commit: result.commit, version };
   }
 
+  async function saveReading(input) {
+    const url = sharedArticleUrl(input.url);
+    const { original, reading, processing_sha256: processingSha256 } = input;
+    const inputs = reading === undefined ? [original] : [original, reading];
+    if (!url || (reading !== undefined && !sha256Pattern.test(processingSha256 || '')) || inputs.some(markdown =>
+      typeof markdown !== 'string' || markdown.trim().length < 80 || markdown.startsWith('---') || Buffer.byteLength(markdown) > 700000)) {
+      throw new Error('shared_invalid_reading');
+    }
+    const current = await github.lookup(url);
+    const originalSha256 = sharedDigest(original);
+    const alreadyVerified = [current.record?.original, ...(current.record?.original_revisions || [])].some(item => item?.sha256 === originalSha256);
+    const proof = alreadyVerified ? current.record : await verifyReadingSource(url);
+    if (!proof) return localOnly('source_not_publicly_verified');
+    if (proof.markdown && proof.markdown.trim() !== original.trim()) return localOnly('public_source_body_mismatch');
+    const title = String(proof.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);
+    if (inputs.some(body => publicArchiveContainsPrivateData(url, body, config.private_email_sha256)) ||
+        !await scan([title, ...inputs].join('\n'))) throw new Error('shared_material_not_publication_ready');
+    return github.publishReading({ url, title, original, reading, processingSha256 });
+  }
+
   async function saveMaterial(record, direct) {
     const response = await fetchMaterial(record.url, { redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(20_000) });
     if (!response.ok || (response.url && response.url !== record.url)) throw new Error('shared_material_source_unavailable');
@@ -183,7 +204,7 @@ export function createSharedLibraryServer({
       if (req.method === 'GET' && route.pathname === prefix + 'health') {
         return json(res, 200, { status: 'ok', service: 'progressive-reading-sync', write_available: writeAvailable });
       }
-      const action = ['session', 'resolve', 'status', 'variant', 'material', 'article'].find(name => route.pathname === prefix + name);
+      const action = ['session', 'resolve', 'status', 'variant', 'material', 'article', 'publication'].find(name => route.pathname === prefix + name);
       if (req.method !== 'POST' || !action) {
         return json(res, 404, { error: 'shared_route_not_found' });
       }
@@ -192,6 +213,12 @@ export function createSharedLibraryServer({
         if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
         if (!allowed(req, 'variant', 12)) return json(res, 429, { error: 'shared_submission_rate_limited' });
         return json(res, 200, await saveVersion(await readBody(req, 1024 * 1024)));
+      }
+      if (action === 'publication') {
+        if (!sessions.verify(req.headers.authorization)) return json(res, 401, { error: 'shared_login_required' });
+        if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
+        if (!allowed(req, 'publication', 12)) return json(res, 429, { error: 'shared_submission_rate_limited' });
+        return json(res, 200, await saveReading(await readBody(req, 2 * 1024 * 1024)));
       }
       const input = await readBody(req);
       if (route.pathname === prefix + 'session') {
@@ -249,7 +276,7 @@ export function createSharedLibraryServer({
     } catch (error) {
       const code = error instanceof SyntaxError ? 'shared_invalid_request' : error.message;
       const safe = /^shared_[a-z0-9_]+$/u.test(code || '') ? code : 'shared_service_unavailable';
-      const status = ['shared_json_required', 'shared_invalid_request', 'shared_request_too_large', 'shared_invalid_version'].includes(safe) ? 400 :
+      const status = ['shared_json_required', 'shared_invalid_request', 'shared_request_too_large', 'shared_invalid_version', 'shared_invalid_reading'].includes(safe) ? 400 :
         safe === 'shared_material_not_publication_ready' ? 422 : 503;
       return json(res, status, { error: safe });
     }

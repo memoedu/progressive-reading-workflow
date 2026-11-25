@@ -1,12 +1,19 @@
 import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
-import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedRepository, commitPattern, sha256Pattern, variantKind, sharedReadingSource } from './shared-library.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
+import { standardWorkflowOptions } from '../standard-preprocessing/index.mjs';
+import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-preprocessing/lib/core.mjs';
 
 const statePath = root => path.join(root, '.local-ir', 'subscription-library-sync.json');
 const defaultEndpoint = 'https://124.221.144.155/progressive-reading-sync/';
 const defaultArticleOrigins = new Set(defaultSources.public_rss.flatMap(source => source.article_origins));
+
+export function publicReadingLookupCandidate(url) {
+  const canonical = sharedArticleUrl(url);
+  return canonical && (Boolean(sharedReadingSource(canonical)) || defaultArticleOrigins.has(new URL(canonical).origin));
+}
 
 function serverEndpoint(value) {
   try {
@@ -36,7 +43,7 @@ async function request(state, route, input, fetchImpl = fetch) {
   const response = await fetchImpl(new URL(route, state.endpoint), {
     method: 'POST', headers: { 'Content-Type': 'application/json',
       ...(route !== 'session' && state.token ? { Authorization: 'Bearer ' + state.token } : {}) },
-    body: JSON.stringify(input), signal: AbortSignal.timeout(route === 'article' ? 8000 : 40_000)
+    body: JSON.stringify(input), signal: AbortSignal.timeout(route === 'article' ? 8000 : route === 'publication' ? 60_000 : 40_000)
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'shared_sync_unavailable');
@@ -181,6 +188,76 @@ export async function downloadSharedVersion(root, { url, kind, sha256 }, { fetch
   const bytes = await articleBytes(await fetchImpl(sharedRawUrl(result.commit, version.path), { signal: AbortSignal.timeout(15_000) }));
   if (sharedDigest(bytes) !== version.sha256) throw new Error('shared_download_hash_mismatch');
   return { status: 'available', commit: result.commit, version, bytes };
+}
+
+export function sharedReadingProcessingKey({ kind = 'web', processingOptions = {} } = {}) {
+  return sharedDigest(stableJson({ kind, processor: PROCESSOR_VERSION, prompt: PROMPT_VERSION,
+    options: standardWorkflowOptions({ ...(kind === 'bilibili' ? { input_form: 'spoken_transcript' } : {}), ...processingOptions }) }));
+}
+
+function publicReadingBody(markdown) {
+  return markdown.replace(/^\uFEFF/u, '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '').trim();
+}
+
+function readingEntry(record, processingSha256, originalSha256) {
+  return record.reading_files?.findLast(item => item.processing_sha256 === processingSha256 &&
+    (!originalSha256 || item.original_sha256 === originalSha256));
+}
+
+async function verifiedReadingPair(commit, record, entry, fetchImpl) {
+  const original = [record.original, ...(record.original_revisions || [])].find(item => item.sha256 === entry.original_sha256);
+  const [originalBytes, readingBytes] = await Promise.all([verifiedReadingBytes(commit, original, fetchImpl), verifiedReadingBytes(commit, entry, fetchImpl)]);
+  return { status: 'available', commit, title: record.title, original, reading: entry, originalBytes, readingBytes };
+}
+
+async function verifiedReadingBytes(commit, item, fetchImpl) {
+  const bytes = await articleBytes(await fetchImpl(sharedRawUrl(commit, item.path), { signal: AbortSignal.timeout(15_000) }));
+  if (sharedDigest(bytes) !== item.sha256) throw new Error('shared_download_hash_mismatch');
+  return bytes;
+}
+
+export async function downloadSharedReading(root, { url, kind, processingOptions, originalSha256 }, { fetchImpl = fetch } = {}) {
+  const canonical = sharedArticleUrl(url);
+  const state = await settings(root);
+  if (!canonical || !state.enabled || !state.endpoint) return null;
+  const response = await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl);
+  if (response.status !== 'available') return null;
+  const record = sharedRecord(response.record, canonical);
+  const entry = readingEntry(record, sharedReadingProcessingKey({ kind, processingOptions }), originalSha256);
+  return entry ? verifiedReadingPair(response.commit, record, entry, fetchImpl) : null;
+}
+
+export async function syncSharedReading(root, { url, kind, original, markdown, processingOptions }, { fetchImpl = fetch } = {}) {
+  const canonical = sharedArticleUrl(url);
+  const state = await settings(root);
+  if (!canonical || !state.enabled || !state.endpoint || !state.token) {
+    return { status: 'local_only', reason: !state.enabled ? 'sharing_disabled' : 'shared_account_or_source_missing' };
+  }
+  const reading = markdown === undefined ? undefined : publicReadingBody(markdown);
+  const processingSha256 = reading === undefined ? undefined : sharedReadingProcessingKey({ kind, processingOptions });
+  const backup = await readJson(path.join(root, '.local-ir', 'original-markdown-backup.json'), {});
+  if ([original, reading].filter(Boolean).some(text => publicArchiveContainsPrivateData(canonical, text, backup.private_email_sha256 || []))) {
+    return { status: 'local_only', reason: 'shared_material_not_publication_ready' };
+  }
+  try {
+    const result = await request(state, 'publication', { url: canonical, original, reading, processing_sha256: processingSha256 }, fetchImpl);
+    if (result.status === 'local_only') return result;
+    if (result.status !== 'available') throw new Error('shared_sync_invalid_receipt');
+    const record = sharedRecord(result.record, canonical);
+    if (reading === undefined) {
+      const entry = [record.original, ...(record.original_revisions || [])].find(item => item.sha256 === sharedDigest(original));
+      if (!entry) throw new Error('shared_sync_invalid_receipt');
+      await verifiedReadingBytes(result.commit, entry, fetchImpl);
+      return { status: 'available', commit: result.commit, title: record.title, original: entry };
+    }
+    const entry = record.reading_files?.find(item => item.processing_sha256 === processingSha256 &&
+      item.original_sha256 === sharedDigest(original) && item.sha256 === sharedDigest(reading));
+    if (!entry) throw new Error('shared_sync_invalid_receipt');
+    const { originalBytes, readingBytes, ...receipt } = await verifiedReadingPair(result.commit, record, entry, fetchImpl);
+    return receipt;
+  } catch (error) {
+    return { status: 'retry_wait', error: /^shared_[a-z0-9_]+$/u.test(error.message) ? error.message : 'shared_sync_unavailable' };
+  }
 }
 
 export async function resolveSharedMaterial(root, hash, { lookupOnly = false, fetchImpl = fetch } = {}) {

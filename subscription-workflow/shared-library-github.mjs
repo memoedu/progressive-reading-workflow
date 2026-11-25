@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { createSign } from 'node:crypto';
-import { sharedRepository, sharedIndexPath, sharedRecord, sharedArticleUrl, sharedDigest,
+import { sharedRepository, sharedIndexPath, sharedRecord, sharedArticleUrl, sharedDigest, sharedOriginalRevisionPath, sharedReadingPath,
   commitPattern, sha256Pattern, sharedMaterialIndexPath, sharedMaterialRecord } from './shared-library.mjs';
 
 const account = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
@@ -152,6 +152,32 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
         if (existing.some(item => item.kind === version.kind && item.sha256 === version.sha256)) return { entries: [] };
         const record = sharedRecord({ ...current, versions: [...existing, version] }, url);
         return { record, entries: [{ path: version.path, content: markdown }, indexEntry(sharedIndexPath(url), record)] };
+      } });
+    },
+    publishReading({ url, title, original, reading, processingSha256 }) {
+      const originalSha256 = sharedDigest(original);
+      const readingSha256 = reading ? sharedDigest(reading) : null;
+      return publish({ url, direct: true, read: () => lookup(url), build: current => {
+        const entries = [];
+        let changed = false;
+        const originalEntry = { path: sharedOriginalRevisionPath(url, originalSha256), sha256: originalSha256 };
+        const record = structuredClone(current || { schema: 'progressive-reading.shared-article/v1', url, title, original: originalEntry });
+        if (!current) { entries.push({ path: originalEntry.path, content: original }); changed = true; }
+        else if (current.original.sha256 !== originalSha256 && !current.original_revisions?.some(item => item.sha256 === originalSha256)) {
+          record.original_revisions = [...(current.original_revisions || []), originalEntry];
+          entries.push({ path: originalEntry.path, content: original });
+          changed = true;
+        }
+        if (readingSha256 && !record.reading_files?.some(item => item.sha256 === readingSha256 && item.original_sha256 === originalSha256 &&
+            item.processing_sha256 === processingSha256)) {
+          const entry = { path: sharedReadingPath(url, readingSha256), sha256: readingSha256,
+            original_sha256: originalSha256, processing_sha256: processingSha256 };
+          record.reading_files = [...(record.reading_files || []), entry];
+          if (!current?.reading_files?.some(item => item.sha256 === readingSha256)) entries.push({ path: entry.path, content: reading });
+          changed = true;
+        }
+        if (changed) entries.push(indexEntry(sharedIndexPath(url), sharedRecord(record, url)));
+        return { entries, record };
       } });
     },
     publishMaterial({ record, bytes, direct }) {
