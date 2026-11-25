@@ -3,6 +3,7 @@ import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { randomUUID } from "node:crypto";
+import { isWechatArticleUrl, prepareWechatArticleBody, wechatArticleBody, wechatArticleMetadata } from "./wechat-article.mjs";
 
 function cleanMathHtml(node) {
   const clone = node.cloneNode(true);
@@ -21,6 +22,15 @@ export function htmlArticleToMarkdown({ html, sourceUrl, title = "", extractArti
   const dom = new JSDOM(html, { url: sourceUrl });
   try {
     const doc = dom.window.document;
+    let wechatBody = null;
+    let wechatMetadata = null;
+    if (extractArticle && isWechatArticleUrl(sourceUrl)) {
+      wechatBody = wechatArticleBody(doc);
+      if (!wechatBody) throw new Error("wechat_article_body_unavailable");
+      wechatMetadata = wechatArticleMetadata(doc);
+      doc.body.replaceChildren(wechatBody);
+      prepareWechatArticleBody(wechatBody, sourceUrl);
+    }
     doc.querySelectorAll("#local-ir-browser-toast,#local-ir-browser-workbench").forEach(node => node.remove());
     doc.querySelectorAll("mark.local-ir-browser-highlight").forEach(node => node.replaceWith(...node.childNodes));
     const prefix = `IRFORMULA${randomUUID().replaceAll("-", "")}X`;
@@ -98,7 +108,7 @@ export function htmlArticleToMarkdown({ html, sourceUrl, title = "", extractArti
       try { node.setAttribute(attr, new URL(node.getAttribute(attr), sourceUrl).href); } catch { /* Preserve original. */ }
     }
     const explicitBodies = extractArticle ? doc.querySelectorAll('[itemprop~="articleBody"], .h-entry .e-content') : [];
-    const explicitBody = explicitBodies.length === 1 ? explicitBodies[0] : null;
+    const explicitBody = wechatBody || (explicitBodies.length === 1 ? explicitBodies[0] : null);
     const fallback = (extractArticle ? explicitBody || doc.querySelector("article,main,[role=main]") || doc.body : doc.body).innerHTML;
     // Turndown uses language-* classes to preserve fenced-code languages.
     const article = extractArticle && !explicitBody ? new Readability(doc, { keepClasses: true }).parse() : null;
@@ -113,8 +123,9 @@ export function htmlArticleToMarkdown({ html, sourceUrl, title = "", extractArti
       markdown = markdown.split(token).join(formula);
     }
     if (!markdown) throw new Error("empty_page_content");
-    return { method: explicitBody ? "semantic_article_body" : article?.content ? "readability_html" : "body_html", title: article?.title || title,
-      byline:article?.byline || '',excerpt:article?.excerpt || '',
+    return { method: wechatBody ? "wechat_article_body" : explicitBody ? "semantic_article_body" : article?.content ? "readability_html" : "body_html",
+      title: wechatMetadata?.title || article?.title || title,
+      byline: wechatMetadata?.author || article?.byline || '',excerpt:article?.excerpt || '',
       markdown, fidelity: { formulas: preserved, warnings: [...new Set(warnings)] } };
   } finally { dom.window.close(); }
 }

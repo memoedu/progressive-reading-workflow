@@ -28,7 +28,7 @@
     <p id="site-form-error" class="error helper" role="alert"></p><div class="actions"><button id="site-save" type="submit">保存设置</button><span class="hint">保存后可点击“开始导入”。</span></div></form>
   </section>
   <section class="section" id="site-detail" aria-labelledby="site-detail-title" hidden><div class="section-head"><h2 id="site-detail-title">整站导入结果</h2><button id="site-detail-close" class="secondary" type="button">收起结果</button></div><p id="site-detail-summary" role="status"></p><p id="site-detail-error" class="error"></p><div id="site-detail-results"></div></section>
-  <section class="section" id="links" aria-labelledby="links-title"><div class="section-head"><div><h2 id="links-title">链接批量导入</h2><p class="hint">粘贴文字、Markdown 或多个链接，复用原有分类、去重、断线续查和失败重试。</p></div></div>
+  <section class="section" id="links" aria-labelledby="links-title"><div class="section-head"><div><h2 id="links-title">链接批量导入</h2><p class="hint">可粘贴网页和微信公众号文章链接，也可粘贴含链接的文字或 Markdown。</p></div></div>
     <p id="health" class="hint" role="status">正在连接本地服务…</p>
     <div class="workspace"><section class="panel input-panel" aria-labelledby="input-title">
       <div class="section-title"><h3 id="input-title">添加链接</h3><span class="hint">每批最多 50 个</span></div>
@@ -37,7 +37,6 @@
       <label for="instruction">加工要求（可选）</label><textarea id="instruction" rows="2" placeholder="例如：保留专业术语与代码块。"></textarea>
       <div class="actions"><button id="parseIntent" class="secondary" type="button">识别输入中的要求</button></div><p id="intent-feedback" class="hint helper" role="status"></p>
       <details class="processing-panel"><summary>分类与处理选择（可选）</summary><p class="hint">明确选择优先；原文模式不进行翻译、导读或模型改写。</p><div id="processing-options" class="processing-options"></div></details>
-      <details><summary>视频、微信等来源专用流程</summary><p class="hint">复用原导入台的专用来源识别和处理，后台任务与结果仍在这里查询。文字原文模式请使用普通链接导入。</p><button id="legacy-run" class="secondary" type="button">使用来源专用流程</button><p id="legacy-feedback" class="hint helper" role="status"></p></details>
       <div class="actions"><button id="start" type="button">导入到阅读区</button><button id="clear" class="secondary" type="button">清空输入</button></div><p id="input-message" class="hint helper" role="status"></p>
       <details id="preview"><summary id="preview-count">尚未识别到链接</summary><ol id="preview-list"></ol></details>
     </section><section class="panel results-panel" aria-labelledby="results-title">

@@ -36,7 +36,6 @@
     "import": "node scripts/import-web-md.mjs",
     "import:csdiy": "node scripts/import-web-md.mjs --csdiy-full",
     "import:cs-plan": "node scripts/import-web-md.mjs --cs-plan-full",
-    "import:guided": "node scripts/import-web-md.mjs --guided-wechat",
     "browser-highlight:sync-lib": "node scripts/sync-browser-highlight-extension.mjs",
     "browser-import:repair:test": "node --test scripts/test-browser-page-markdown.mjs standard-preprocessing/test/required-artifacts.test.mjs && node scripts/test-browser-snapshot-import.mjs",
     "browser-highlight:test": "node scripts/test-browser-highlight-workflow.mjs && node scripts/test-browser-save-standard-workflow.mjs",

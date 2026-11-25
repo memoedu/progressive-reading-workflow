@@ -119,7 +119,6 @@ function resolveWorkflowRoot() {
 }
 
 const workflowRoot = resolveWorkflowRoot();
-const importScript = path.join(__dirname, "import-web-md.mjs");
 const rssReadingScript = path.join(workflowRoot, "rss-reading", "cli.mjs");
 const localTranscribeScript = path.join(__dirname, "local-whispercpp-transcribe.py");
 const readingRoot = path.join(workflowRoot, "阅读区");
@@ -597,16 +596,6 @@ function runProcess(command, args, { cwd = workflowRoot, timeoutMs = 600000 } = 
       resolve({ code: -1, stdout, stderr: `${stderr}\n${error.message}` });
     });
   });
-}
-
-function parseSummary(stdout) {
-  const match = String(stdout || "").match(/(\[\s*\{[\s\S]*\}\s*\])\s*$/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1]);
-  } catch {
-    return null;
-  }
 }
 
 function isSuccessfulImportItem(item) {
@@ -1952,40 +1941,7 @@ async function importUrlsThroughStandardWorkflow(rawBody, {maintenanceEligible} 
   });
 }
 
-async function importWechat(job, urls, runName) {
-  const outDir = path.join(readingRoot, "微信", runName);
-  const stagingDir = path.join(job.runDir, "wechat");
-  await log(job, `微信导入开始：${urls.length} 个链接`);
-  const args = [
-    importScript,
-    "--guided-wechat",
-    ...urls,
-    "--out",
-    outDir,
-    "--staging",
-    stagingDir
-  ];
-  const instruction = importerInstruction(job);
-  if (instruction) args.push("--instruction", instruction);
-  await fs.mkdir(stagingDir, { recursive: true });
-  const optionsPath = path.join(stagingDir, "processing-options.json");
-  await fs.writeFile(optionsPath, JSON.stringify(job.processingOptions || {}), "utf8");
-  args.push("--processing-options", optionsPath);
-  const result = await runProcess(process.execPath, args);
-  await fs.writeFile(path.join(stagingDir, "command.stdout.txt"), result.stdout, "utf8").catch(() => {});
-  await fs.writeFile(path.join(stagingDir, "command.stderr.txt"), result.stderr, "utf8").catch(() => {});
-  const summary = parseSummary(result.stdout) || [];
-  for (const item of summary) {
-    if (isSuccessfulImportItem(item)) job.outputs.push(item);
-    else job.failures.push(item);
-  }
-  if (result.code !== 0 && summary.length === 0) {
-    job.failures.push({ status: "failed", stage: "command", reason: result.stderr || `exit_${result.code}` });
-  }
-  await log(job, `微信导入完成：成功 ${summary.filter(isSuccessfulImportItem).length}，失败 ${summary.filter((item) => !isSuccessfulImportItem(item)).length}`);
-}
-
-async function importWeb(job, urls, runName) {
+async function importWeb(job, urls) {
   await log(job, `普通网页后台静默导入开始：${urls.length} 个链接`);
   const summary = await submitSharedUrlImport(urls, {
     source: "production_interaction",
@@ -2536,18 +2492,15 @@ async function runJob(job) {
     await fs.writeFile(path.join(job.runDir, "intent.json"), `${JSON.stringify(job.intent, null, 2)}\n`, "utf8");
     await log(job, `意图解析完成：${job.intent.source} / ${job.intent.processing?.languageMode || ""} / ${job.intent.processing?.linkPolicy || ""}`);
 
-    const wechat = [];
     const web = [];
     const video = [];
     for (const url of job.urls) {
-      if (isWechatUrl(url)) wechat.push(url);
-      else if (isYouTubeUrl(url) || isBilibiliUrl(url)) video.push(url);
+      if (isYouTubeUrl(url) || isBilibiliUrl(url)) video.push(url);
       else web.push(url);
     }
 
-    await log(job, `任务开始：微信 ${wechat.length}，网页 ${web.length}，视频 ${video.length}`);
-    if (wechat.length) await importWechat(job, wechat, runName);
-    if (web.length) await importWeb(job, web, runName);
+    await log(job, `任务开始：网页 ${web.length}，视频 ${video.length}`);
+    if (web.length) await importWeb(job, web);
     if (video.length) await importVideos(job, video, runName);
 
     job.status = job.failures.some(item => item.status === "needs_classification") ? "needs_classification" : job.failures.length ? "completed_with_failures" : "completed";
