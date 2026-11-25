@@ -235,16 +235,19 @@ export function htmlDetails(html, finalUrl) {
     const scriptCount = document.querySelectorAll("script").length;
     const noscript = normalizedText([...document.querySelectorAll("noscript")].map((node) => node.textContent).join(" "));
     const authReason = authPageReason(document, finalUrl);
+    const wechat = isWechatArticleUrl(finalUrl);
+    const wechatBody = wechat ? wechatArticleBody(document) : null;
+    // Keep the original article subtree, including any math source scripts.
+    const articleHtml = wechatBody?.outerHTML;
     document.querySelectorAll("script, style, template, noscript").forEach((node) => node.remove());
-    if (isWechatArticleUrl(finalUrl)) {
-      const article = wechatArticleBody(document);
-      const visibleText = normalizedText(article?.textContent);
-      if (!visibleText && !article?.querySelector("img[data-src],img[src]")) {
+    if (wechat) {
+      const visibleText = normalizedText(wechatBody?.textContent);
+      if (!visibleText && !wechatBody?.querySelector("img[data-src],img[src]")) {
         const gate = normalizedText(document.querySelector(".weui-msg__title,h1,h2")?.textContent);
         return { visibleText, authReason: authReason || (/环境异常|安全验证|访问验证/u.test(gate)
           ? "wechat_article_verification_required" : null), jsReason: "wechat_article_body_unavailable" };
       }
-      return { ...wechatArticleMetadata(document), visibleText, authReason, jsReason: null };
+      return { ...wechatArticleMetadata(document), articleHtml, visibleText, authReason, jsReason: null };
     }
     const visibleText = normalizedText(document.body?.textContent);
     const title = normalizedText(document.title);
@@ -499,11 +502,13 @@ async function fetchUrlAttempt(requestedUrl, {
     if (!integrity.complete) throw new Error("url_fetch_content_length_mismatch");
 
     let title = "";
+    let articleHtml;
     let articleMetadata = {};
     let visibleText = plain ? normalizedText(body) : "";
     if (html) {
       const details = htmlDetails(body, currentUrl);
       title = details.title || "";
+      articleHtml = details.articleHtml;
       visibleText = details.visibleText;
       const degradedDetails = { ...fetchBase, content_type: contentType || "unknown", content_integrity: integrity };
       if (details.authReason) throw new UrlImportDegradedError(REQUIRES_BROWSER_AUTH, details.authReason, degradedDetails);
@@ -520,6 +525,7 @@ async function fetchUrlAttempt(requestedUrl, {
       finalUrl: currentUrl,
       redirectChain,
       body,
+      ...(articleHtml ? { articleHtml } : {}),
       isHtml: html,
       isPlainText: plain,
       title,

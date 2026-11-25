@@ -1474,7 +1474,7 @@ async function fetchUrlImportDraft(requestedUrl) {
       url: fetched.finalUrl,
       title: fetched.title,
       pageText: fetched.isPlainText ? fetched.body : fetched.visibleText,
-      html: fetched.isHtml ? fetched.body : "",
+      html: fetched.isHtml ? fetched.articleHtml || fetched.body : "",
       annotations: [],
       qaCards: [],
       articleMusing: null,
