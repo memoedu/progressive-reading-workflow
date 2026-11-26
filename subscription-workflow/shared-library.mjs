@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
+import { urlImportDedupeKey, youtubeVideoIdentity } from '../scripts/url-import-input.mjs';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 
 export const sharedRepository = 'memoedu/progressive-reading-library';
@@ -16,6 +16,8 @@ export function sharedArticleUrl(value) {
     if (input.protocol !== 'https:' || input.port || input.username || input.password ||
         !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/u.test(input.hostname) || !/[a-z]/u.test(input.hostname.split('.').at(-1)) ||
         /\.(?:local|internal|localhost)$/u.test(input.hostname) || input.pathname.length > 900) return null;
+    const youtube = youtubeVideoIdentity(input.href);
+    if (youtube) return youtube.url;
     const url = new URL(urlImportDedupeKey(input.href));
     const parameters = [...url.searchParams];
     if (parameters.length) {
@@ -53,6 +55,7 @@ export const sharedOriginalRevisionPath = (url, sha) => '原稿/' + sharedDigest
 export function sharedReadingSource(url) {
   const canonical = sharedArticleUrl(url);
   if (!canonical) return null;
+  if (youtubeVideoIdentity(canonical)) return 'youtube';
   const parsed = new URL(canonical);
   if (parsed.hostname === 'mp.weixin.qq.com' && /^\/s\/[\w-]+$/u.test(parsed.pathname)) return 'wechat';
   if (parsed.hostname === 'www.bilibili.com' && /^\/video\/BV[0-9A-Za-z]{10}$/u.test(parsed.pathname)) return 'bilibili';

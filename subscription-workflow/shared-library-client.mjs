@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
-import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedReadingSource, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
+import { verifyPublicYoutubeListing } from './shared-library-sources.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 import { standardWorkflowOptions } from '../standard-preprocessing/index.mjs';
 import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-preprocessing/lib/core.mjs';
@@ -187,7 +188,12 @@ export async function downloadSharedVersion(root, { url, kind, sha256 }, { fetch
 }
 
 function sharedReadingOptions(kind, processingOptions) {
-  return standardWorkflowOptions({ ...(kind === 'bilibili' ? { input_form: 'spoken_transcript' } : {}), ...processingOptions });
+  return standardWorkflowOptions({ ...(['bilibili','youtube'].includes(kind) ? { input_form: 'spoken_transcript' } : {}), ...processingOptions });
+}
+
+function defaultReadingKind(url) {
+  const source = sharedReadingSource(url);
+  return source === 'youtube' || source === 'bilibili' ? source : 'web';
 }
 
 export function sharedReadingOptionsKey({ kind = 'web', processingOptions } = {}) {
@@ -230,17 +236,20 @@ export async function downloadSharedReading(root, { url, kind, processingOptions
   const response = await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl);
   if (response.status !== 'available') return null;
   const record = sharedRecord(response.record, canonical);
-  const entry = readingEntry(record, { kind, processingOptions }, originalSha256);
+  const entry = readingEntry(record, { kind:kind || defaultReadingKind(canonical), processingOptions }, originalSha256);
   return entry ? verifiedReadingPair(response.commit, record, entry, fetchImpl) : null;
 }
 
-export async function syncSharedReading(root, { url, kind, original, markdown, processingOptions }, { fetchImpl = fetch } = {}) {
+export async function syncSharedReading(root, { url, kind, original, markdown, processingOptions }, {
+  fetchImpl = fetch, verifyYoutube = verifyPublicYoutubeListing
+} = {}) {
   const canonical = sharedArticleUrl(url);
   const state = await settings(root);
   if (!canonical || !state.enabled || !state.endpoint || !state.token) {
     return { status: 'local_only', reason: !state.enabled ? 'sharing_disabled' : 'shared_account_or_source_missing' };
   }
   const reading = markdown === undefined ? undefined : publicReadingBody(markdown);
+  kind ||= defaultReadingKind(canonical);
   const processingSha256 = reading === undefined ? undefined : sharedReadingProcessingKey({ kind, processingOptions });
   const optionsSha256 = reading === undefined ? undefined : sharedReadingOptionsKey({ kind, processingOptions });
   const backup = await readJson(path.join(root, '.local-ir', 'original-markdown-backup.json'), {});
@@ -248,8 +257,15 @@ export async function syncSharedReading(root, { url, kind, original, markdown, p
     return { status: 'local_only', reason: 'shared_material_not_publication_ready' };
   }
   try {
+    let publicSourceAttestation;
+    if (sharedReadingSource(canonical) === 'youtube') {
+      const verified = await verifyYoutube(canonical, fetchImpl);
+      if (!verified) return { status:'local_only', reason:'video_source_not_publicly_listed' };
+      publicSourceAttestation = { ...verified, original_sha256:sharedDigest(original) };
+    }
     const result = await request(state, 'publication', {
-      url: canonical, original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256
+      url: canonical, original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256,
+      ...(publicSourceAttestation ? { public_source_attestation: publicSourceAttestation } : {})
     }, fetchImpl);
     if (result.status === 'local_only') return result;
     if (result.status !== 'available') throw new Error('shared_sync_invalid_receipt');

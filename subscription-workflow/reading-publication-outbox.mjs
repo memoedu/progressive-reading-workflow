@@ -25,7 +25,8 @@ export async function queueReadingPublication(root, request, receipt, now = Date
     const previous = await readJson(file);
     if (previous) return previous.receipt;
     const saved = { ...receipt, sync_id: id };
-    await writeJson(file, { attempts: 1, retry_at: now + retryDelay(1), request, receipt: saved });
+    const attempts = receipt.status === 'queued' ? 0 : 1;
+    await writeJson(file, { attempts, retry_at: attempts ? now + retryDelay(attempts) : now, request, receipt: saved });
     return saved;
   }, { waitMs: 2000 });
 }

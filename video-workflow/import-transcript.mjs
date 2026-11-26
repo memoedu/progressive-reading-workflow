@@ -156,10 +156,9 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
   await writeExact(path.join(outputDir,'media-source.md'),sourceMedia.markdown);
   const {markdown: _mediaText, ...mediaReceipt} = sourceMedia;
   await writeExact(path.join(outputDir,'media-source.json'),JSON.stringify(mediaReceipt,null,2)+'\n');
-  const canShare = libraryRoot && !producer && !bodyRefiner && files.every(name => name === subtitleFile) &&
-    sharedReadingSource(metadata.source_url) === 'bilibili';
-  const shareRequest = { url: metadata.source_url, kind: 'bilibili', processingOptions };
-  if (canShare) {
+  const privatePublication = Boolean(producer || bodyRefiner || files.some(name => name !== subtitleFile));
+  const shareRequest = { url: metadata.source_url, kind:sharedReadingSource(metadata.source_url) || undefined, processingOptions };
+  if (libraryRoot && !privatePublication) {
     const shared = await downloadSharedReading(libraryRoot, { ...shareRequest, originalSha256: hash(sourceMedia.markdown) }).catch(() => null);
     if (shared) {
       const publication = await withSourcePublication(libraryRoot, metadata.source_url, async () => {
@@ -180,6 +179,9 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
       return receipt;
     }
   }
+  const sourceSharing = libraryRoot && !privatePublication
+    ? await synchronizeReadingPublication(libraryRoot, { ...shareRequest, original:sourceMedia.markdown, publicCapture:true, defer:true })
+    : {};
   // The single-pass adapter owns speech editing. The standard workflow receives
   // its completed written text and may only add the requested reading guide.
   const refinement = bodyRefiner ? await bodyRefiner({markdown:sourceMedia.markdown, outputDir, sourceMetadata:requestMetadata}) : null;
@@ -233,7 +235,7 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     await writeExact(path.join(attachmentRoot, publishedAssetRelative(record.path)), data);
   }
   const publication = await publishReadingArtifact(result, { publishPath, runDir: outputDir,
-    publicationSource:{...shareRequest, original:sourceMedia.markdown, publicCapture:Boolean(canShare), privateContent:!canShare} });
+    publicationSource:{...shareRequest, original:sourceMedia.markdown, publicCapture:!privatePublication, privateContent:privatePublication} });
   if (publication.preserved_existing && path.resolve(publication.markdown.path) !== path.resolve(publishPath)) {
     const receipt={status:'completed',preserved_existing:true,quality_status:publication.quality_status,publication,model:run.result.receipt.model,attachments:[],attachments_verified:0};
     await fs.writeFile(path.join(outputDir,'video-receipt.json'),JSON.stringify(receipt,null,2)+'\n');
@@ -267,6 +269,7 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     attachment_layout:layout.version,used_attachments:layout.used_attachments,attachment_placements:layout.placements,
     book_media:{...mediaReceipt,counts:mediaCounts,restoration_stage:'before_full_text_refinement',verified_after_publication:true} };
   if (publication.shared_reading) receipt.shared_reading = publication.shared_reading;
+  if (sourceSharing.shared_reading) receipt.shared_original = sourceSharing.shared_reading;
   await fs.writeFile(path.join(outputDir, 'video-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   return receipt;
 }

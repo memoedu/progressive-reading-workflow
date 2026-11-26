@@ -3,11 +3,52 @@ import { parseFeedDocument } from '../rss-source/core.mjs';
 import { fetchArticleContent, originalArticleTarget } from '../rss-source/article-fetch.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
+import { youtubeVideoIdentity } from '../scripts/url-import-input.mjs';
 
 const maxDocumentBytes = 2 * 1024 * 1024;
 const cacheAge = 5 * 60_000;
 
 export const localOnly = reason => ({ status: 'local_only', reason });
+
+export async function verifyPublicYoutubeListing(url, fetchImpl = fetch) {
+  const video = youtubeVideoIdentity(url);
+  if (!video) return null;
+  const origin = 'https://www.youtube.com';
+  const allowed = new Set([origin]);
+  const get = target => anonymousText(target.href, allowed, (value, options) =>
+    fetchImpl(value, { ...options, headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en-US,en;q=0.9' } }));
+  const embed = new URL('/oembed', origin);
+  embed.search = new URLSearchParams({ url: video.url, format: 'json' });
+  let metadata;
+  try { metadata = JSON.parse((await get(embed)).text); }
+  catch (error) {
+    if ([401, 403, 404].includes(error.status)) return null;
+    throw error;
+  }
+  if (typeof metadata?.title !== 'string' || !metadata.title.trim() || metadata.title.length > 300) return null;
+  let channel, channelPath;
+  try {
+    channel = new URL(metadata.author_url);
+    channelPath = decodeURIComponent(channel.pathname);
+  } catch { return null; }
+  if (channel.origin !== origin || channel.username || channel.password || channel.search || channel.hash ||
+      !/^\/(?:@[\p{L}\p{M}\p{N}._-]{1,100}|channel\/UC[a-z0-9_-]{22})\/?$/iu.test(channelPath)) return null;
+  channel.pathname = channel.pathname.replace(/\/?$/u, '/search');
+  channel.search = new URLSearchParams({ query: metadata.title });
+  const { text } = await get(channel);
+  const data = /(?:var\s+ytInitialData\s*=|window\["ytInitialData"\]\s*=)\s*(\{[^\n]*?\})\s*;\s*<\/script>/u.exec(text)?.[1];
+  if (!data) return null;
+  const items = [JSON.parse(data)];
+  while (items.length) {
+    const item = items.pop();
+    if (!item || typeof item !== 'object') continue;
+    if (item.videoRenderer?.videoId === video.id || item.gridVideoRenderer?.videoId === video.id) {
+      return { type: 'youtube_public_channel_listing', video_id: video.id, title: metadata.title };
+    }
+    for (const value of Object.values(item)) items.push(value);
+  }
+  return null;
+}
 
 export async function verifyPublicReadingSource(url, fetchImpl = fetch, publicWebOrigins) {
   const source = sharedReadingSource(url);

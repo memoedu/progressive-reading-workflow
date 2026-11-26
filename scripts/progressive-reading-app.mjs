@@ -1107,7 +1107,7 @@ async function standardizeBrowserDraft(draft, parsedUrl, converted, onProgress) 
   const processorVersion = String(run.result.receipt?.processor_version || "unknown");
   const promptVersion = String(run.result.receipt?.prompt_version || "unknown");
   const conversionMethod = `progressive_reading_preprocess/${processorVersion}`;
-  const shareableVersions = draft.sourceMetadata?.shared_original_sha256 && !draft.userInstruction && quality.quality_status === 'ready'
+  const shareableVersions = draft.sourceMetadata?.shared_original_sha256 && !draft.userInstruction
     ? generatedSharedVersions(run.result) : [];
   const markdown = updateFrontmatterFields(rendered, {
     source_url: String(draft.sourceMetadata?.source_url || parsedUrl.href),
@@ -1307,6 +1307,18 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   if (draft.sourceType === 'url_import' && options.anonymousOriginalCapture === true) {
     await originalMarkdownBackup.capture({ file: target, url: parsed.href, markdown: converted.markdown, authenticated: false });
   }
+  const publicationSource = {
+    url: parsed.href, original: converted.markdown,
+    archivedOriginalSha256: options.archivedOriginalSha256,
+    archiveHintSha256: draft.sourceMetadata.shared_original_sha256,
+    publicCapture: options.anonymousOriginalCapture === true && sharedPublicWebCandidate(parsed.href),
+    privateContent: Boolean(options.authenticatedSource || draft.userInstruction || draft.annotations.length ||
+      draft.qaCards.length || draft.articleMusing || reimportSnapshot || orphanState),
+    processingOptions: draft.processingOptions
+  };
+  const sourceSharing = standardize && process.env.NODE_ENV !== 'test'
+    ? await synchronizeReadingPublication(workflowRoot, { ...publicationSource, defer: true })
+    : {};
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
     : null;
@@ -1374,17 +1386,6 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     if (!(await fs.readFile(metadataTarget)).equals(orphanState.stateBytes)) throw new Error("existing_article_preserved_review_required");
   }
   metadata.annotations = LocalIrDocumentCore.anchorAnnotationsToMarkdown(metadata.annotations, markdown, documentPath);
-  const sharing = process.env.NODE_ENV === 'test' ? {} : await synchronizeReadingPublication(workflowRoot, {
-    url: parsed.href, original: converted.markdown,
-    archivedOriginalSha256: options.archivedOriginalSha256,
-    archiveHintSha256: draft.sourceMetadata.shared_original_sha256,
-    publicCapture: options.anonymousOriginalCapture === true && sharedPublicWebCandidate(parsed.href),
-    privateContent: Boolean(options.authenticatedSource || draft.userInstruction || metadata.annotations.length ||
-      metadata.qaCards.length || metadata.articleMusing || reimportSnapshot || orphanState),
-    markdown, qualityStatus: preprocessing?.qualityStatus,
-    processingOptions: draft.processingOptions, versions: preprocessing?.shareableVersions,
-    reused: sharedReading
-  });
   if(reimportSnapshot){
     const body=await fs.readFile(target),state=await fs.readFile(metadataTarget);
     if(createHash('sha256').update(body).digest('hex')!==reimportSnapshot.body||createHash('sha256').update(state).digest('hex')!==reimportSnapshot.metadata)throw new Error('existing_article_changed_during_processing_preserved:处理期间正文或批注发生变化，已保留现有内容。');
@@ -1395,6 +1396,14 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   }
   await writeFileAtomic(target, markdown, {exclusive: Boolean(orphanState)});
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
+  const written = preprocessing && await fs.readFile(target).catch(() => null);
+  const sharing = process.env.NODE_ENV === 'test' ? {} : await synchronizeReadingPublication(workflowRoot, {
+    ...publicationSource,
+    markdown: written && createHash('sha256').update(written).digest('hex') === finalMarkdownSha256
+      ? written.toString('utf8') : undefined,
+    versions: preprocessing?.shareableVersions,
+    reused: sharedReading
+  });
   return {
     status: completed ? "completed_pending_archive" : "saved_locked",
     artifacts: [
@@ -1411,6 +1420,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       ...(orphanState ? {restored_missing_publication: true} : {}),
       conversion_fidelity: converted.fidelity || null,
       ...sharing,
+      ...(sourceSharing.shared_reading ? { shared_original: sourceSharing.shared_reading } : {}),
       ...(guardedReimport && reimportSnapshot ? { supersedes_publication: {
         markdown_sha256: reimportSnapshot.body, metadata_sha256: reimportSnapshot.metadata,
         document_id: previousPublication.document.id, revision: previousPublication.document.revision,
@@ -3038,9 +3048,11 @@ async function handle(req, res) {
     const request = await browserImportBroker.getRequest(decodeURIComponent(browserImportRequestMatch[1]));
     if (!request) return sendJson(res, 404, { error: "browser_import_request_not_found" });
     for (const item of request.results || []) {
-      const pending = item.receipt?.shared_reading;
-      if (pending?.sync_id) {
-        item.receipt.shared_reading = await readingPublicationReceipt(workflowRoot, pending.sync_id).catch(() => null) || pending;
+      for (const field of ['shared_original', 'shared_reading']) {
+        const pending = item.receipt?.[field];
+        if (pending?.sync_id) {
+          item.receipt[field] = await readingPublicationReceipt(workflowRoot, pending.sync_id).catch(() => null) || pending;
+        }
       }
     }
     return sendJson(res, 200, request);

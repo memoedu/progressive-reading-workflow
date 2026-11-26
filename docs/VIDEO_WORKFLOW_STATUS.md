@@ -6,7 +6,7 @@ YouTube 优先使用原始字幕。平台没有可用字幕轨时，只下载该
 
 需要新版 yt-dlp 时可用 `PROGRESSIVE_READING_YTDLP` 指定已安装的可执行文件。需要配置转写入口时可显式指定 `PROGRESSIVE_READING_ASR_CLI` 和 `PROGRESSIVE_READING_ASR_PYTHON`，默认沿用本机全局转写 CLI。
 
-B 站分 P、视频与合集订阅使用 `video-workflow/`。一次性纯文导入使用已核验的字幕和 `video-workflow/import-transcript.mjs` 的标准入口。可匿名播放的 B 站分 P 将原始字幕正文及加工稿登记到[公开资料库](SUBSCRIPTION_LIBRARY_SYNC.md)，已有同选项、同原稿版本可直接复用。字幕、截图、板书校订与多分 P 的证据规则见 [视频模块](../video-workflow/README.md)。
+B 站分 P、视频与合集订阅使用 `video-workflow/`。一次性纯文导入使用已核验的字幕和 `video-workflow/import-transcript.mjs` 的标准入口。可匿名播放的 B 站分 P 和通过匿名频道核验的 YouTube 视频将原稿及正式加工稿分别提交到[公开资料库](SUBSCRIPTION_LIBRARY_SYNC.md)。原稿可在加工前入队，已有同选项、同原稿版本可直接复用。字幕、截图、板书校订与多分 P 的证据规则见 [视频模块](../video-workflow/README.md)。
 
 普通导入、原文直接导入与报表模式的区别见 [统一订阅](UNIFIED_SUBSCRIPTIONS.md)。视频不支持原文直接导入；报表筛选卡以完整字幕为输入，选中后再加工图文正文。
 

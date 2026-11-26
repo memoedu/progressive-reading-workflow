@@ -108,7 +108,9 @@ export async function processTranscriptItem(item,{sourceDir,jobDir},{importSourc
   const receipt=await importSource({inputDir:sourceDir,outputDir:path.join(jobDir,'run'),publishPath:item.publish_path,
     processingOptions:{structure_body:true,include_reading_guide:true,require_content_headings:true}});
   return {status:receipt.status,publication:receipt.publication.markdown.path,workflow:'transcript',
-    reused:Boolean(receipt.preserved_existing||receipt.publication.preserved_existing)};
+    reused:Boolean(receipt.preserved_existing||receipt.publication.preserved_existing),
+    ...(receipt.shared_original ? {shared_original:receipt.shared_original} : {}),
+    ...(receipt.shared_reading ? {shared_reading:receipt.shared_reading} : {})};
 }
 
 export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,acquire,prepareSource=prepareWatchSource,

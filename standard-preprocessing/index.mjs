@@ -775,9 +775,16 @@ async function publishReadingArtifactUnlocked(result, {
     });
   }
 
+  if (!existingMarkdownHash || (guardedReplacement && existingMarkdownHash !== publishedMarkdownHash)) {
+    if (await existingFileHash(resolvedPublish) !== existingMarkdownHash) {
+      throw new PreprocessInterfaceError("publish_source_changed", `source changed before replacement: ${resolvedPublish}`);
+    }
+    await replaceFileAtomic(resolvedPublish, publishedMarkdown);
+  }
   let sharing = {};
   if (libraryRoot && process.env.NODE_ENV !== 'test') {
     const request = sourceRequest || (runDir && await fs.readFile(path.join(runDir, 'request.json'), 'utf8').then(JSON.parse).catch(() => null));
+    const written = await fs.readFile(resolvedPublish).catch(() => null);
     const { synchronizeReadingPublication } = await import('../subscription-workflow/reading-publication.mjs');
     sharing = await synchronizeReadingPublication(libraryRoot, {
       url: sourceUrl,
@@ -785,18 +792,11 @@ async function publishReadingArtifactUnlocked(result, {
       archiveHintSha256: request?.source_metadata?.shared_original_sha256,
       processingOptions: request?.processing_options,
       ...publicationSource,
-      markdown: publishedMarkdown,
-      qualityStatus: quality.quality_status,
+      markdown: written && sha256(written) === publishedMarkdownHash ? written.toString('utf8') : undefined,
       standardResult: result,
       privateContent: Boolean(publicationSource.privateContent || guardedReplacement || String(request?.user_instruction || '').trim() ||
         assetRecords.size)
     });
-  }
-  if (!existingMarkdownHash || (guardedReplacement && existingMarkdownHash !== publishedMarkdownHash)) {
-    if (await existingFileHash(resolvedPublish) !== existingMarkdownHash) {
-      throw new PreprocessInterfaceError("publish_source_changed", `source changed before replacement: ${resolvedPublish}`);
-    }
-    await replaceFileAtomic(resolvedPublish, publishedMarkdown);
   }
   const publication = {
     interface_version: CALLABLE_INTERFACE_VERSION,
