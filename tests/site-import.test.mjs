@@ -10,6 +10,8 @@ import { discoverSite,matchesPath,scriptEvidence } from '../site-import/discover
 import { normalizeSiteSource,saveSiteSource,runId,runPath,readSources } from '../site-import/store.mjs';
 import { digest,writeJson } from '../subscription-workflow/config.mjs';
 import { processCollectionTask } from '../scripts/collection-import.mjs';
+import { BrowserImportBroker } from '../scripts/browser-import-broker.mjs';
+import { siteRunStatus } from '../site-import/tasks.mjs';
 import { recoverTruncatedOriginal } from '../site-import/original-publication-recovery.mjs';
 import { BROWSER_DRAFT_BODY_LIMIT, normalizeMarkdownText } from '../scripts/markdown-text.mjs';
 
@@ -189,6 +191,56 @@ test('collection resume preserves batch membership after prior results were save
   broker.getRequest=async id=>({request_id:id,terminal:true,results:urls.slice(50).map(row)});
   await processCollectionTask(task,{broker,runRequest:async()=>{},pollMs:1});
   assert.deepEqual(calls,[urls.slice(50)]);assert.equal(collection.results.length,52);
+});
+
+test('paused site tasks retain completed batches and never enter maintenance or start another batch',async()=>{
+  const stateRoot=await temp();
+  const broker=new BrowserImportBroker({stateRoot});
+  const created=await broker.createRequest([base],{source:'site_import_page',clientRequestId:'fixture-paused-site',
+    siteImport:{run_id:runId('fixture-paused-site')}});
+  const task=await broker.claimTask('parent',null,{requestId:created.request_id});
+  const urls=Array.from({length:51},(_,index)=>base+'/article/'+index);
+  const inventory={complete:true,articles:urls.map(url=>({url}))};
+  let started=0;
+  await processCollectionTask(task,{broker,discover:async()=>inventory,pollMs:1,runRequest:async childId=>{
+    assert.equal(++started,1);
+    assert.equal((await broker.pauseSiteTask(task.id,'claimed')).status,'paused');
+    for(let child=await broker.claimTask('child',null,{requestId:childId});child;
+          child=await broker.claimTask('child',null,{requestId:childId})){
+      await broker.completeTask(child.id,{ok:true,leaseToken:child.lease_token,result:{status:'imported'}});
+    }
+  }});
+  const reloaded=new BrowserImportBroker({stateRoot});
+  const paused=await reloaded.getRequest(created.request_id);
+  assert.equal(paused.status,'paused');
+  assert.equal(paused.terminal,true);
+  assert.equal(paused.failed,0);
+  assert.deepEqual(paused.results[0].collection.inventory,inventory);
+  const run=await siteRunStatus({phase:'importing',request_id:created.request_id},reloaded);
+  assert.equal(run.phase,'paused');
+  assert.equal(run.counts.discovered,51);
+  assert.equal(run.counts.imported,50);
+  assert.equal(run.collection.batches[0].terminal,true);
+  await assert.rejects(reloaded.retryMaintenanceTask(task.id,()=>assert.fail('must not retry paused site')),
+    /import_task_not_eligible_for_maintenance_retry/u);
+  assert.deepEqual(await reloaded.listMaintenanceFailures(0),[]);
+  await assert.rejects(reloaded.createRequest([urls.at(-1)],{collectionClaim:{taskId:task.id,leaseToken:task.lease_token}}),
+    /browser_import_task_stale_lease/u);
+});
+
+test('failure text alone does not pause a site and a confirmed historical pause retains its diagnostic',async()=>{
+  const broker=new BrowserImportBroker({stateRoot:await temp()});
+  const created=await broker.createRequest([base],{source:'site_import_page',siteImport:{run_id:runId('fixture-legacy-stop')}});
+  const task=await broker.claimTask('parent',null,{requestId:created.request_id});
+  const error='The operator stopped this import.';
+  await broker.completeTask(task.id,{ok:false,error,leaseToken:task.lease_token});
+  assert.equal((await broker.listMaintenanceFailures(0))[0].task_id,task.id);
+  await assert.rejects(broker.pauseSiteTask(task.id,'claimed'),/site_import_pause_state_conflict/u);
+  const paused=await broker.pauseSiteTask(task.id,'failed');
+  assert.equal(paused.results[0].error,error);
+  assert.equal(paused.results[0].pause.previous_status,'failed');
+  assert.deepEqual(await broker.pauseSiteTask(task.id,'failed'),paused);
+  assert.deepEqual(await broker.listMaintenanceFailures(0),[]);
 });
 test('collection polling checkpoints only when the child request changes',async()=>{
   const url=base+'/article';

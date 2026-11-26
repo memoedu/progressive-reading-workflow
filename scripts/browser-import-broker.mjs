@@ -46,7 +46,7 @@ function nowIso(now) {
 }
 
 function terminalTask(task) {
-  return task.status === "imported" || task.status === "failed" || task.status === INPUT_REQUIRED || DEGRADED_STATUSES.has(task.status);
+  return task.status === "imported" || task.status === "failed" || task.status === "paused" || task.status === INPUT_REQUIRED || DEGRADED_STATUSES.has(task.status);
 }
 
 function normalizeTransport(value) {
@@ -212,7 +212,8 @@ export class BrowserImportBroker {
     articleSource = null,
     subscriptionMaterialId = null,
     maintenanceEligible = true,
-    maintenanceRetryOf = null
+    maintenanceRetryOf = null,
+    collectionClaim = null
   } = {}) {
     const normalizedMode = normalizeProcessingMode(processingMode);
     if(subscriptionMaterialId!==null&&!/^[A-Za-z0-9_.-]{1,120}$/u.test(subscriptionMaterialId))throw new Error('invalid_subscription_material_id');
@@ -222,6 +223,10 @@ export class BrowserImportBroker {
     }
     const normalizedOptions = await checkedProcessingOptions(processingOptions);
     return this.withLock(async () => {
+      if (collectionClaim) this.requireTaskClaim(collectionClaim.taskId, collectionClaim.leaseToken);
+      if (maintenanceRetryOf && this.state.tasks.some(task => task.id === maintenanceRetryOf && task.status === "paused")) {
+        throw new Error("import_task_not_eligible_for_maintenance_retry");
+      }
       const normalized = [...new Set((urls || []).map((value) => String(value || "").trim()).filter(Boolean))];
       if (!normalized.length) throw new Error("browser_import_urls_required");
       if (browserSnapshot && (normalized.length !== 1 || normalizedUrlIdentity(browserSnapshot.draft?.url) !== normalizedUrlIdentity(normalized[0]))) throw new Error("browser_snapshot_url_mismatch");
@@ -405,12 +410,40 @@ export class BrowserImportBroker {
 
   async updateTaskProgress(taskId, result, leaseToken) {
     return this.withLock(async () => {
-      const task = this.state.tasks.find(item => item.id === taskId);
-      if (!task || task.status !== "claimed" || task.leaseToken !== leaseToken) throw new Error("browser_import_task_stale_lease");
+      const task = this.requireTaskClaim(taskId, leaseToken);
       task.result = { ...(task.result || {}), ...sanitizePersistedValue(result) };
       task.claimedAt = nowIso(this.now);
       task.updatedAt = task.claimedAt;
       this.save({ tasks: [task] });
+    });
+  }
+
+  requireTaskClaim(taskId, leaseToken) {
+    const task = this.state.tasks.find(item => item.id === taskId);
+    if (!task || task.status !== "claimed" || task.leaseToken !== leaseToken) throw new Error("browser_import_task_stale_lease");
+    return task;
+  }
+
+  async pauseSiteTask(taskId, expectedStatus) {
+    return this.withLock(() => {
+      const task = this.state.tasks.find(item => item.id === taskId);
+      if (task?.source !== "site_import_page" || !task.siteImport) throw new Error("site_import_task_not_found");
+      if (task.status === "paused") return this.requestSummary(task.requestId);
+      if (!["queued", "claimed", "failed"].includes(expectedStatus) || task.status !== expectedStatus
+          || (task.status === "claimed" && task.result?.collection?.phase === "verifying")
+          || this.state.requests.some(request => request.maintenanceRetryOf === taskId)) {
+        throw new Error("site_import_pause_state_conflict");
+      }
+      const pausedAt = nowIso(this.now);
+      task.pause = { code: "user_paused", at: pausedAt, previous_status: task.status };
+      task.status = "paused";
+      task.workerId = task.claimedAt = task.leaseToken = task.claimRequestId = null;
+      task.updatedAt = pausedAt;
+      const request = this.state.requests.find(item => item.id === task.requestId);
+      request.updatedAt = pausedAt;
+      this.save({ tasks: [task], requests: [request] });
+      this.notifyWaiters();
+      return this.requestSummary(task.requestId);
     });
   }
 
@@ -456,6 +489,7 @@ export class BrowserImportBroker {
     const tasks = this.state.tasks.filter((item) => item.requestId === requestId);
     const imported = tasks.filter((item) => item.status === "imported").length;
     const failed = tasks.filter((item) => item.status === "failed").length;
+    const paused = tasks.filter((item) => item.status === "paused").length;
     const requiresBrowserAuth = tasks.filter((item) => item.status === "requires_browser_auth").length;
     const requiresJsRender = tasks.filter((item) => item.status === "requires_js_render").length;
     const needsClassification = tasks.filter(item => item.status === INPUT_REQUIRED).length;
@@ -463,11 +497,12 @@ export class BrowserImportBroker {
     const active = tasks.filter((item) => item.status === "claimed").length;
     const queued = tasks.filter((item) => item.status === "queued").length;
     const warnings = tasks.filter((item) => item.status === "imported" && item.result?.receipt?.quality_status === "warning").length;
-    const terminal = imported + failed + degraded + needsClassification === tasks.length;
+    const terminal = imported + failed + paused + degraded + needsClassification === tasks.length;
     let status = active > 0 ? "processing" : "queued";
     if (terminal) {
       if (needsClassification > 0) status = INPUT_REQUIRED;
       else if (failed > 0) status = imported + degraded > 0 ? "completed_with_failures" : "failed";
+      else if (paused > 0) status = "paused";
       else if (degraded > 0 && imported > 0) status = "completed_with_degradations";
       else if (requiresBrowserAuth === tasks.length) status = "requires_browser_auth";
       else if (requiresJsRender === tasks.length) status = "requires_js_render";
@@ -491,6 +526,7 @@ export class BrowserImportBroker {
       requested: tasks.length,
       imported,
       failed,
+      ...(paused ? { paused } : {}),
       degraded,
       warnings,
       concurrency: Math.min(this.concurrency, Math.max(1, tasks.length)),
@@ -514,6 +550,7 @@ export class BrowserImportBroker {
         ...(task.result?.warnings ? { warnings: task.result.warnings } : {}),
         ...(task.result?.stage ? { stage: task.result.stage } : {}),
         ...(task.result?.collection ? { collection: task.result.collection } : {}),
+        ...(task.pause ? { pause: task.pause } : {}),
         ...(task.error ? { error: task.error } : {}),
         attempt_count: Number(task.attempts || 0),
         max_attempts: Number(task.maxAttempts || this.maxAttempts)

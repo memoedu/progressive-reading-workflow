@@ -53,6 +53,8 @@ HTML 转换在 Readability/Turndown 前提取 KaTeX、MathJax、MathML 注解和
 
 导入管理的链接历史包含浏览器、Obsidian 与网页提交。维护程序可在本机通过 `GET /api/import-center/maintenance-failures?since=<ISO 时间>` 查询这些入口及整站父任务的终态失败，响应只提供任务标识、阶段、错误代码与重试状态。修复后可用 `POST /api/import-center/maintenance-retry` 提交原 `task_id`。它按原任务编号幂等创建一次新尝试，保留原任务和参数。整站重试依据当前已核实的正文重新确定待导入项。正文缺失但浏览器侧状态仍存在时，只有来源、历史入库哈希和原始正文哈希都匹配，且尚无阅读加工，才恢复正文并复用文档身份。
 
+用户明确暂停整站任务时，经本机 `POST /api/site-imports/pause` 提交 `task_id` 和当前行的 `expected_status`。服务记录 `paused` 终态并保留采集快照和原回执。已经创建的文章批次可以收尾，父任务停止创建批次。维护失败接口和自动重试跳过暂停任务。导入管理的「继续未完成项」可以主动按原快照继续。历史记录只有在独立确认用户确实要求暂停后，才可用 `expected_status: "failed"` 补记暂停。
+
 维护只接收本机入口、浏览器扩展或 Obsidian 发起的请求。普通跨站网页请求不会触发维护。重试关联由 broker 创建。修复后若再次得到失败终态，可用该次尝试的任务编号发起下一次重试。工作台持续回读原事件所关联的最新结果。
 
 连接失败后的请求重试沿用稳定的 `client_request_id`；收到 `request_id` 后只继续查询。后端终态请求不可变，用户明确重新处理失败条目时创建新尝试 ID，只提交失败项，并保留原失败回执。不得因短暂查询失败重复创建整批任务。网页在同一标签页 sessionStorage 保存当前批次与重试记录。队列通过 `.local-ir/browser-import-broker/state.sqlite3` 事务记录请求、任务和回执。服务首次启动时读取并保留旧 `state.json`。日常状态查询使用导入接口。正式输出使用后端核定的本地阅读目录。
