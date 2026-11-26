@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import {SCHEMA,paths,normalizeSource,writeJson,readJson,digest} from '../subscription-workflow/config.mjs';
 import {readingDestination} from '../subscription-workflow/reading-options.mjs';
 import {planReadingOrganization,organizeReadingSubscriptions} from '../subscription-workflow/reading-organization.mjs';
@@ -17,7 +18,10 @@ test('all source types route below subscription and source-specific folders with
 });
 
 async function fixture(){
-  const artifact='D:/Artifacts/ProgressiveReading/subscription-storage-tests';await fs.mkdir(artifact,{recursive:true});
+  const artifact=process.platform==='win32'
+    ? 'D:/Artifacts/ProgressiveReading/subscription-storage-tests'
+    : await fs.realpath(os.tmpdir());
+  await fs.mkdir(artifact,{recursive:true});
   const root=await fs.mkdtemp(path.join(artifact,'case-')),home=path.join(root,'home'),rssHome=path.join(root,'rss'),videoHome=path.join(root,'video');
   const rss=normalizeSource({kind:'rss',name:'Synthetic feed',url:'https://feed.test/rss',mode:'reports'}),column=normalizeSource({kind:'zhihu_column',name:'Synthetic column',url:'https://www.zhihu.com/column/example',mode:'reports'});
   const video=normalizeSource({kind:'bilibili_collection',name:'Synthetic collection',url:'https://www.bilibili.com/video/BV1234567890/',mode:'reports'});video.destination='视频/Synthetic collection';video.watch={id:'fixture-watch',destination:path.join(root,'阅读区',video.destination)};
@@ -35,9 +39,12 @@ async function fixture(){
   await writeJson(ledgerPath,{items:{a:{item_url:'https://feed.test/a',subscription_ids:[rss.id],platform:'rss',publication:{path:article,sha256:digest(await fs.readFile(article)),status:'published'}},b:{item_url:'https://zhuanlan.zhihu.com/p/123',subscription_ids:[column.id],platform:'zhihu',publication:{path:archived,status:'archived'}}},short_archive_sources:{[rss.id]:'Synthetic feed.md'}});
   await writeJson(path.join(rssHome,'state.json'),{items:{a:{feeds:[rss.url],artifacts:[{path:article}]}}});
   await writeJson(path.join(videoHome,'state.json'),{entries:{v:{watch_ids:['fixture-watch'],publication:clip}}});
-  const report=path.join(paths(root).summaryRoot,'report.md');await fs.mkdir(path.dirname(report),{recursive:true});await fs.writeFile(report,`[Read](<${article.replaceAll('\\','/')}>)\n`);
+  const report=path.join(paths(root).summaryRoot,'report.md');
+  const webLinks='[Root-relative](/阅读区/RSS/annotated.md)\n[Protocol-relative](//example.test/阅读区/RSS/annotated.md)\n';
+  await fs.mkdir(path.dirname(report),{recursive:true});
+  await fs.writeFile(report,`[Read](<${article.replaceAll('\\','/')}>)\n${webLinks}`);
   const sidecar=path.join(root,'.local-ir/browser-document-state/annotated.md.browser-ir.json');await writeJson(sidecar,{document:{path:'Projects/Reading/阅读区/RSS/annotated.md'},browser:{sourceMetadata:{}},annotations:[{text:'Original annotation.'}]});
-  return {root,config,rss,column,video,article,archived,clip,image,frozen,short,ledgerPath,report,sidecar};
+  return {root,config,rss,column,video,article,archived,clip,image,frozen,short,ledgerPath,report,sidecar,webLinks};
 }
 
 test('migration covers reading and archived bodies, video assets, short archives and reference readback',async()=>{
@@ -49,7 +56,10 @@ test('migration covers reading and archived bodies, video assets, short archives
   const targetClip=result.moves.find(m=>m.source===f.clip).target;assert.deepEqual(await fs.readFile(path.join(path.dirname(targetClip),'images/shot.png')),Buffer.from([0,7,255,14]));
   assert.equal(await fs.readFile(path.join(path.dirname(targetClip),'_assets/source/original.md'),'utf8'),'![frozen](images/shot.png)\nOriginal source bytes.\n');
   const sidecar=await readJson(f.sidecar);assert.equal(sidecar.document.path,'Projects/Reading/阅读区/订阅/RSS/Synthetic feed/annotated.md');assert.equal(sidecar.annotations[0].text,'Original annotation.');
-  assert.match(await fs.readFile(f.report,'utf8'),/订阅\/RSS\/Synthetic feed/);assert.equal(updated.short_archive_sources[f.rss.id],'RSS/Synthetic feed/短文归档.md');
+  const updatedReport=await fs.readFile(f.report,'utf8');
+  assert.match(updatedReport,/订阅\/RSS\/Synthetic feed/);
+  assert.ok(updatedReport.endsWith(f.webLinks));
+  assert.equal(updated.short_archive_sources[f.rss.id],'RSS/Synthetic feed/短文归档.md');
   assert.equal((await organizeReadingSubscriptions(f.root,{recoveryRoot:path.join(f.root,'recovery-again')})).moves.length,0);
 });
 

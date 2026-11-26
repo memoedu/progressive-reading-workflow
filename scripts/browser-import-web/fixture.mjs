@@ -1,5 +1,6 @@
 // Isolated HTTP acceptance fixture. No external sources, models, real cookies or user articles.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { spawn } from "node:child_process";
@@ -8,7 +9,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function startFixture({ producer = "synthetic", columnFixture = false, cookieDataRoot = "", sitePlanPath = "" } = {}) {
-  const artifactsRoot = process.env.WEB_IMPORT_TEST_ROOT || "D:/Artifacts/ProgressiveReading/web-import";
+  const artifactsRoot = process.env.WEB_IMPORT_TEST_ROOT || (process.platform === "win32"
+    ? "D:/Artifacts/ProgressiveReading/web-import"
+    : await fs.realpath(os.tmpdir()));
   await fs.mkdir(artifactsRoot, { recursive: true });
   const root = await fs.mkdtemp(path.join(artifactsRoot, "fixture-"));
   const workflowRoot = path.join(root, "workflow");

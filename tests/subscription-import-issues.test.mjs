@@ -17,8 +17,14 @@ test('body recognition accepts original imports and rejects an empty processed b
   assert.deepEqual(savedReadingBody('# Title\n\n## 阅读前置卡\nGuide\n\n## 正文\n\n---\n\n## 原文\n'),{body:'',structured:true});
 });
 
-test('optional provenance warnings can publish through the real background worker and reuse existing annotations',async()=>{
+test('optional provenance warnings can publish through the real background worker and reuse existing annotations',async(t)=>{
   const f=await startFixture();
+  const previousRssHome=process.env.RSS_IMPORT_HOME;
+  process.env.RSS_IMPORT_HOME=path.join(f.root,'rss');
+  t.after(()=>{
+    if(previousRssHome===undefined)delete process.env.RSS_IMPORT_HOME;
+    else process.env.RSS_IMPORT_HOME=previousRssHome;
+  });
   try{
     await fs.mkdir(path.join(f.root,'rss'),{recursive:true});
     await fs.writeFile(path.join(f.root,'rss','RSS 自动导入.md'),'```json\n{"enabled":false}\n```\n## ① 标准流程导入\n## ② 原文直接导入\n## ③ 日报与周报\n');

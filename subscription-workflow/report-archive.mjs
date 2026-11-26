@@ -228,6 +228,9 @@ export function mapMarkdownDestinations(text, replace, { references = false, tit
 export function relocatedMarkdown(text, source, target, mapping = new Map(), workflowRoot) {
   return mapMarkdownDestinations(text,(match,destination)=>{
       const raw = destination.startsWith("<") ? destination.slice(1,-1) : destination;
+      if (raw.startsWith("/") && !raw.startsWith("//") && mapping.has(raw)) {
+        return `](<${mapping.get(raw)}>)`;
+      }
       const mappedUri=/^(?:file|obsidian):|^[a-z]:[\\/]/iu.test(raw)?relocatedPath(raw,mapping,workflowRoot):raw;
       if(mappedUri!==raw)return `](<${mappedUri}>)`;
       if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/iu.test(raw)) return match;
