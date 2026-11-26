@@ -11,6 +11,7 @@ import {organizeSiteFiles, remapReceipts} from './organization.mjs';
 import {writeSiteIndexes} from './indexes.mjs';
 import {bindRepositoryRelations} from '../scripts/source-relations.mjs';
 import {writeRepositoryIndexes} from './repository-indexes.mjs';
+import {taxonomyFolder} from './taxonomy.mjs';
 import {ensureSiteRss} from './rss.mjs';
 import {capturedArticle} from './article-capture.mjs';
 import {recoverTruncatedOriginal} from './original-publication-recovery.mjs';
@@ -94,7 +95,15 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
   const live=await findSourcePublications(root,expected.map(article=>article.url));
   collection.results=collection.results.map(row=>{const current=live.get(urlImportDedupeKey(row.requested_url)),artifact=row.artifacts?.find(a=>a.kind==='markdown');return current&&(artifact?.path!==current.path||artifact.sha256!==current.sha256)?sourceReuseResult(row.requested_url,current):row;});
   await onProgress('来源核对完成，整理原站目录');
-  const organization=expected.some(article=>collection.results.some(row=>row.requested_url===article.url&&SUCCESS.has(row.status)))?await organizeSiteFiles(root,settings,collection,runId,{broker,onProgress}):{};
+  const publishedRows=new Map(collection.results.map(row=>[row.requested_url,row]));
+  const allSuccessful=expected.every(article=>SUCCESS.has(publishedRows.get(article.url)?.status));
+  // Repository captures are published directly into their source directories.
+  // A verified no-move case must not acquire the subscription migration lock.
+  const placedRepository=settings.repository&&allSuccessful&&expected.every(article=>{
+    const row=publishedRows.get(article.url),artifact=row.artifacts?.find(item=>item.kind==='markdown');
+    return row.status==='idempotent_replay'||artifact&&path.resolve(path.dirname(artifact.path))===path.resolve(root,'阅读区',taxonomyFolder(settings.destination,article.taxonomy));
+  });
+  const organization=expected.some(article=>collection.results.some(row=>row.requested_url===article.url&&SUCCESS.has(row.status)))?(placedRepository?{moved:0,duplicates_retired:0,already_organized:true}:await organizeSiteFiles(root,settings,collection,runId,{broker,onProgress})):{};
   await onProgress('回读正式正文与目录链接');
   const rows=new Map(collection.results.map(row=>[row.requested_url,row]));
   const records=[];
