@@ -63,6 +63,8 @@ test('reference repair updates both publication and document-state body hashes',
   const root=path.resolve('D:/Artifacts/ProgressiveReading/receipt-fixture'),file=path.join(root,'阅读区/Topic/article.md'),hash=digest('updated relative link');
   const result=remapReceipts({artifacts:[{kind:'markdown',path:file,sha256:'old'}],receipt:{final_markdown_sha256:'old'},document:{path:'阅读区/Topic/article.md'},content:{markdownSha256:'old'}},new Map(),root,new Map([[file,hash]]));
   assert.equal(result.artifacts[0].sha256,hash);assert.equal(result.receipt.final_markdown_sha256,hash);assert.equal(result.content.markdownSha256,hash);
+  const vaultState=remapReceipts({document:{path:'04 Projects/Primary/阅读区/Topic/article.md'},content:{markdownSha256:'old'}},new Map(),root,new Map([[file,hash]]));
+  assert.equal(vaultState.content.markdownSha256,hash);
 });
 
 test('generated index ownership survives checked relocation and still protects handwritten edits',async()=>{

@@ -34,7 +34,8 @@ export function remapReceipts(value,mapping,root,hashes,relocate=receiptRelocato
   if(result.path&&hashes.has(result.path)&&result.sha256)result.sha256=hashes.get(result.path);
   const markdown=result.artifacts?.find?.(a=>a.kind==='markdown');if(markdown&&result.receipt?.final_markdown_sha256)result.receipt.final_markdown_sha256=markdown.sha256;
   if(result.document?.path&&result.content?.markdownSha256){
-    const file=readingDocumentPathCandidates({workflowRoot:root,readingRoot:path.join(root,'阅读区'),storedDocumentPath:result.document.path})
+    const stored=result.document.path;
+    const file=[path.resolve(root,stored),...readingDocumentPathCandidates({workflowRoot:root,readingRoot:path.join(root,'阅读区'),storedDocumentPath:stored})]
       .find(candidate=>hashes.has(candidate));
     if(file)result.content.markdownSha256=hashes.get(file);
   }
