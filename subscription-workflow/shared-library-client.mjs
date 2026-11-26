@@ -3,7 +3,7 @@ import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
 import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedReadingSource, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
-import { verifyPublicYoutubeListing } from './shared-library-sources.mjs';
+import { verifyPublicVideoPublication } from './shared-library-sources.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 import { standardWorkflowOptions } from '../standard-preprocessing/index.mjs';
 import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-preprocessing/lib/core.mjs';
@@ -241,7 +241,7 @@ export async function downloadSharedReading(root, { url, kind, processingOptions
 }
 
 export async function syncSharedReading(root, { url, kind, original, markdown, processingOptions }, {
-  fetchImpl = fetch, verifyYoutube = verifyPublicYoutubeListing
+  fetchImpl = fetch, verifyVideo = verifyPublicVideoPublication
 } = {}) {
   const canonical = sharedArticleUrl(url);
   const state = await settings(root);
@@ -258,9 +258,9 @@ export async function syncSharedReading(root, { url, kind, original, markdown, p
   }
   try {
     let publicSourceAttestation;
-    if (sharedReadingSource(canonical) === 'youtube') {
-      const verified = await verifyYoutube(canonical, fetchImpl);
-      if (!verified) return { status:'local_only', reason:'video_source_not_publicly_listed' };
+    if (['youtube', 'bilibili'].includes(sharedReadingSource(canonical))) {
+      const verified = await verifyVideo(canonical, fetchImpl);
+      if (!verified) return { status:'local_only', reason:'video_source_not_publicly_verified' };
       publicSourceAttestation = { ...verified, original_sha256:sharedDigest(original) };
     }
     const result = await request(state, 'publication', {

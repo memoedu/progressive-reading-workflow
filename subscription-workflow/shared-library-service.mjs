@@ -181,12 +181,17 @@ export function createSharedLibraryServer({
     const originalSha256 = sharedDigest(original);
     const alreadyVerified = [current.record?.original, ...(current.record?.original_revisions || [])].some(item => item?.sha256 === originalSha256);
     const attestation = input.public_source_attestation;
-    const certifiedYoutube = publisher?.trusted_public_source_publisher === true &&
-      sharedReadingSource(url) === 'youtube' && attestation?.type === 'youtube_public_channel_listing' &&
-      attestation.video_id === new URL(url).searchParams.get('v') && attestation.original_sha256 === originalSha256 &&
+    const source = sharedReadingSource(url);
+    const canonical = new URL(url);
+    const youtubeProof = source === 'youtube' && attestation?.type === 'youtube_public_channel_listing' &&
+      attestation.video_id === canonical.searchParams.get('v');
+    const bilibiliProof = source === 'bilibili' && attestation?.type === 'bilibili_public_playback' &&
+      attestation.video_id === canonical.pathname.split('/').at(-1) && attestation.part === Number(canonical.searchParams.get('p') || 1);
+    const certifiedVideo = publisher?.trusted_public_source_publisher === true &&
+      (youtubeProof || bilibiliProof) && attestation.original_sha256 === originalSha256 &&
       typeof attestation.title === 'string' && attestation.title.trim() && attestation.title.length <= 300 &&
       !publicArchiveContainsPrivateData(url, attestation.title, config.private_email_sha256 || []);
-    const proof = alreadyVerified ? current.record : certifiedYoutube ? { title: attestation.title } : await verifySource(url);
+    const proof = alreadyVerified ? current.record : certifiedVideo ? { title: attestation.title } : await verifySource(url);
     if (!proof) return localOnly('source_not_publicly_verified');
     if (proof.markdown && proof.markdown.trim() !== original.trim()) return localOnly('public_source_body_mismatch');
     const title = String(proof.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);

@@ -80,6 +80,17 @@ export async function verifyPublicReadingSource(url, fetchImpl = fetch, publicWe
   return media?.durl?.length && typeof view.title === 'string' ? { title: view.title } : null;
 }
 
+export async function verifyPublicVideoPublication(url, fetchImpl = fetch) {
+  const source = sharedReadingSource(url);
+  if (source === 'youtube') return verifyPublicYoutubeListing(url, fetchImpl);
+  if (source !== 'bilibili') return null;
+  const proof = await verifyPublicReadingSource(url, fetchImpl);
+  if (!proof) return null;
+  const canonical = new URL(sharedArticleUrl(url));
+  return { type:'bilibili_public_playback', video_id:canonical.pathname.split('/').at(-1),
+    part:Number(canonical.searchParams.get('p') || 1), title:proof.title };
+}
+
 async function anonymousText(url, allowed, fetchImpl) {
   const parsed = new URL(url);
   if (!allowed.has(parsed.origin) || parsed.username || parsed.password) throw new Error('shared_source_redirect_not_allowed');
