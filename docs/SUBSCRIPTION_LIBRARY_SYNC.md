@@ -38,7 +38,7 @@ node subscription-workflow/cli.mjs sync-shared-material --sha256 '<原件哈希>
 
 服务器配置字段包括 `port`、`trust_proxy`、`gitleaks`、`accounts`、`session_secret`、`private_email_sha256` 和 `github`。`github` 包含 `appId`、`installationId`、`keyPath`。将 GitHub App 安装到公开资料库并授予 Contents 和 Pull requests 写权限。私钥通过 systemd 独立凭据提供。账号记录的 salt 和 hash 由 `createSharedAccount` 生成。移除或替换账号后，重启同步进程使对应会话失效。`trust_proxy` 只用于由 nginx 覆盖 X-Real-IP 的回环部署。
 
-无法直连 YouTube 的服务可对已授权执行匿名来源核验的本机发布账号设置 `trusted_public_source_publisher: true`。服务将账号提交的公开频道证据与规范化视频 ID、原稿 SHA-256 逐项匹配。该权限仅用于 YouTube 来源核验。
+无法直接核验视频来源的服务可对已授权执行匿名核验的本机发布账号设置 `trusted_public_source_publisher: true`。服务将账号提交的公开频道或匿名播放证据与视频 ID、B 站分 P 和原稿 SHA-256 匹配。
 
 将[来源配置示例](../config/shared-library-server-sources.example.json)的字段合并到服务器配置。`public_rss` 声明公开 feed、可接受的文章域名和分类目录。`public_materials` 的每条记录包含 `url`、`extension`、`sha256` 和 `bytes`，并可用 `article_url` 关联文章索引及加工版本。仅登记已验证的匿名原件下载地址，单件不超过 25 MiB。
 

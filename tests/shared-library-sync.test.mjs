@@ -41,7 +41,7 @@ test('YouTube source verification requires an exact video in the anonymous autho
   assert.equal(await verifyPublicYoutubeListing(url, fetchListing('other-video')), null);
 });
 
-test('only the designated publisher can attest to an exact YouTube video and source digest', async t => {
+test('only the designated publisher can attest to an exact public video, part, and source digest', async t => {
   const password = 'isolated-fixture-password';
   const owner = await createSharedAccount(password);
   let writes = 0;
@@ -67,12 +67,17 @@ test('only the designated publisher can attest to an exact YouTube video and sou
   const videoId = 'aB_c-234567';
   const url = 'https://www.youtube.com/watch?v=' + videoId;
   const attestation = {type:'youtube_public_channel_listing',video_id:videoId,title:'Public fixture',original_sha256:sharedDigest(markdown)};
-  const submit = (token, proof) => post('publication', {url, original:markdown, public_source_attestation:proof}, token);
+  const submit = (token, proof, source = url) => post('publication', {url:source, original:markdown, public_source_attestation:proof}, token);
   assert.equal((await submit(plain, attestation)).reason, 'source_not_publicly_verified');
   assert.equal((await submit(trusted, {...attestation, video_id:'other-video'})).reason, 'source_not_publicly_verified');
   assert.equal((await submit(trusted, {...attestation, original_sha256:'0'.repeat(64)})).reason, 'source_not_publicly_verified');
   assert.equal((await submit(trusted, attestation)).status, 'available');
-  assert.equal(writes, 1);
+  const bili = 'https://www.bilibili.com/video/BV1234567890?p=2';
+  const playback = {...attestation,type:'bilibili_public_playback',video_id:'BV1234567890',part:2};
+  assert.equal((await submit(plain, playback, bili)).reason, 'source_not_publicly_verified');
+  assert.equal((await submit(trusted, {...playback,part:1}, bili)).reason, 'source_not_publicly_verified');
+  assert.equal((await submit(trusted, playback, bili)).status, 'available');
+  assert.equal(writes, 2);
 });
 
 test('registered public web sources are independently verified without credentials or cross-URL redirects', async () => {
