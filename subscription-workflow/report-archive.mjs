@@ -229,10 +229,10 @@ export function relocatedMarkdown(text, source, target, mapping = new Map(), wor
   return mapMarkdownDestinations(text,(match,destination)=>{
       const raw = destination.startsWith("<") ? destination.slice(1,-1) : destination;
       if (raw.startsWith("/") && !raw.startsWith("//") && mapping.has(raw)) {
-        return `](<${mapping.get(raw)}>)`;
+        return match.replace(destination,()=>'<'+mapping.get(raw)+'>');
       }
       const mappedUri=/^(?:file|obsidian):|^[a-z]:[\\/]/iu.test(raw)?relocatedPath(raw,mapping,workflowRoot):raw;
-      if(mappedUri!==raw)return `](<${mappedUri}>)`;
+      if(mappedUri!==raw)return match.replace(destination,()=>'<'+mappedUri+'>');
       if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/iu.test(raw)) return match;
       const separator = raw.search(/[#?]/u);
       const pathname = separator < 0 ? raw : raw.slice(0, separator);
@@ -244,8 +244,8 @@ export function relocatedMarkdown(text, source, target, mapping = new Map(), wor
       if(source===target&&mapped===absolute)return match;
       const relative = path.relative(path.dirname(target),mapped).replaceAll("\\","/");
       const encoded = encodeURI(relative).replaceAll("#","%23").replaceAll("?","%3F");
-      return `](<${encoded+suffix}>)`;
-  });
+      return match.replace(destination,()=>'<'+encoded+suffix+'>');
+  }, {references:true,titles:true});
 }
 
 export async function ensureArchiveSources(paths, ledger) {

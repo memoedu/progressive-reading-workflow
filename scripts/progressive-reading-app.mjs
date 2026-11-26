@@ -13,6 +13,7 @@ import LocalIrDocumentCore from "../document-core/index.mjs";
 import { preprocessBrowserCapture, browserCaptureProcessingOptions } from "../standard-preprocessing/integrations/browser-capture.mjs";
 import { preprocessNetworkMarkdown } from "../standard-preprocessing/integrations/network-import.mjs";
 import { PROCESSOR_VERSION as standardPreprocessProcessorVersion } from "../standard-preprocessing/lib/core.mjs";
+import { bilingualReadingFilename, generatedReadingTitle } from "../standard-preprocessing/lib/reading-filename.mjs";
 import { GUIDE_COVERAGE_VERSION } from '../standard-preprocessing/lib/guide-coverage.mjs';
 import { loadProducerConfig as loadUnifiedProducerConfig, requestProducerText } from '../standard-preprocessing/lib/producer.mjs';
 import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./standard-import-quality.mjs";
@@ -1271,12 +1272,18 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   const documentStatus = completed ? "done" : "inbox";
   await fs.mkdir(root, { recursive: true });
   await fs.mkdir(browserStateRoot, { recursive: true });
-  const target = await browserDraftTarget(root, parsed.href, converted.title || draft.title);
-  const metadataTarget = path.join(browserStateRoot, `${path.basename(target)}.browser-ir.json`);
+  let target = await browserDraftTarget(root, parsed.href, converted.title || draft.title);
+  let metadataTarget = path.join(browserStateRoot, `${path.basename(target)}.browser-ir.json`);
   let reimportSnapshot = null, previousPublication = null;
   let orphanState = null;
   const guardedReimport = draft.importJob?.forceReimport === true && Boolean(draft.importJob?.expectedPublication);
   if (standardize && (draft.sourceType !== "url_import" || guardedReimport) && await pathExists(target)) {
+    if (!await pathExists(metadataTarget)) {
+      const prior = await findReadyDocumentStateImportForUrl(parsed.href);
+      if (prior?.artifacts.find(item => item.kind === "markdown")?.path === target) {
+        metadataTarget = prior.artifacts.find(item => item.kind === "browser_ir_metadata").path;
+      }
+    }
     const metadataBytes = await fs.readFile(metadataTarget).catch(() => null);
     const previous = metadataBytes ? JSON.parse(metadataBytes.toString('utf8')) : null;
     previousPublication = previous;
@@ -1323,6 +1330,15 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
     : null;
+  const readingTitle = preprocessing?.readingTitle || (sharedReading && generatedReadingTitle(sharedReading.readingBytes.toString("utf8")));
+  if (!reimportSnapshot && !orphanState && !await pathExists(target)) {
+    const filename = bilingualReadingFilename(readingTitle, `--浏览器加工--${shortHash(parsed.href)}.md`);
+    if (filename) {
+      target = path.join(root, filename);
+      metadataTarget = path.join(browserStateRoot, `${filename}.browser-ir.json`);
+      if (await pathExists(target) || await pathExists(metadataTarget)) throw new Error("existing_article_preserved_review_required");
+    }
+  }
   const originalImport = !standardize && !sharedReading && draft.sourceType === 'url_import';
   const originalMarkdown = browserDraftDocument({
     draft: { ...draft, url: parsed.href },
@@ -1365,7 +1381,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   } : draft;
   const metadata = LocalIrDocumentCore.createDocumentState(stateDraft, {
     path: documentPath,
-    title: preprocessing?.readingTitle || converted.title || draft.title,
+    title: readingTitle || converted.title || draft.title,
     sourceUrl: String(draft.sourceMetadata?.source_url || parsed.href),
     destination: resolvedDestination,
     documentStatus,

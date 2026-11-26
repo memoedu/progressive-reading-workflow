@@ -33,6 +33,7 @@ import { foldPublishedOriginal } from "./lib/original-section.mjs";
 import { simplifyPublishedChinese } from "./lib/chinese-script.mjs";
 import { normalizeReaderMath } from "./lib/reader-math.mjs";
 import { GUIDE_COVERAGE_VERSION } from './lib/guide-coverage.mjs';
+import { readingTitlePublicationPath } from "./lib/reading-filename.mjs";
 
 export { buildSplitManifest, buildSplitRequest, SPLIT_MANIFEST_VERSION, SPLIT_POLICY_VERSION };
 
@@ -830,7 +831,9 @@ async function writeAndPublishRun(request, result, options = {}) {
     : { output_dir: null, files: {} };
   const publication = options.publishPath
     ? await publishReadingArtifact(result, {
-        publishPath: options.publishPath,
+        publishPath: options.automaticFilenameSource
+          ? readingTitlePublicationPath(options.publishPath, result.artifacts?.reading_title, options.automaticFilenameSource)
+          : options.publishPath,
         assetSourceDir: options.assetSourceDir,
         runDir: written.output_dir,
         now: options.now,

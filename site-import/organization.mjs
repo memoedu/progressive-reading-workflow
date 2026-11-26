@@ -4,6 +4,7 @@ import {readJson,writeJson,digest,paths,loadConfig,withLock} from '../subscripti
 import {acquireLock} from '../rss-import/core.mjs';
 import {relocatedPath,relocatedMarkdown,replaceChecked} from '../subscription-workflow/report-archive.mjs';
 import {sourceAliasResolver,findSourcePublications,sourceReuseResult} from '../scripts/reading-source-library.mjs';
+import {readingDocumentPathCandidates} from '../scripts/standard-import-quality.mjs';
 import {urlImportDedupeKey} from '../scripts/url-import-input.mjs';
 import {listRuns,runPath} from './store.mjs';
 import {taxonomyFolder,taxonomyGroups} from './taxonomy.mjs';
@@ -32,7 +33,12 @@ export function remapReceipts(value,mapping,root,hashes,relocate=receiptRelocato
   const result={};for(const [key,item]of Object.entries(value)){result[key]=typeof item==='string'&&/(?:path|paths|file|uri)$/iu.test(key)?relocate(item):remapReceipts(item,mapping,root,hashes,relocate);}
   if(result.path&&hashes.has(result.path)&&result.sha256)result.sha256=hashes.get(result.path);
   const markdown=result.artifacts?.find?.(a=>a.kind==='markdown');if(markdown&&result.receipt?.final_markdown_sha256)result.receipt.final_markdown_sha256=markdown.sha256;
-  if(result.document?.path&&result.content?.markdownSha256){const file=path.resolve(root,result.document.path);if(hashes.has(file))result.content.markdownSha256=hashes.get(file);}
+  if(result.document?.path&&result.content?.markdownSha256){
+    const stored=result.document.path;
+    const file=[path.resolve(root,stored),...readingDocumentPathCandidates({workflowRoot:root,readingRoot:path.join(root,'阅读区'),storedDocumentPath:stored})]
+      .find(candidate=>hashes.has(candidate));
+    if(file)result.content.markdownSha256=hashes.get(file);
+  }
   return result;
 }
 
@@ -96,7 +102,7 @@ async function organizeUnlocked(root,settings,collection,id,{broker,onProgress=a
   return executeOrganization(root,collection,journal,saved,broker);
 }
 
-async function executeOrganization(root,collection,journal,saved,broker){
+export async function executeOrganization(root,collection,journal,saved,broker){
   const {recovery}=saved,mapping=new Map(saved.mapping.filter(([from,to])=>locationKey(from)!==locationKey(to))),moves=[];
   let restored=0;
   for(const duplicate of saved.duplicates.filter(d=>locationKey(d.source)===locationKey(d.winner))){
