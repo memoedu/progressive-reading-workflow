@@ -479,7 +479,7 @@ async function parseImportIntent({ instruction, urls }) {
     "- 可以导入用户直接提供的 URL。",
     "- 可以生成阅读前置卡。",
     "- 可以把微信和普通网页输出为阅读区 Markdown。",
-    "- YouTube 现成字幕已恢复导入；无字幕 ASR 和其他视频仍暂停，不要承诺自动转写。",
+    "- YouTube 优先导入现成字幕，无字幕时只下载音轨并转写，再进入标准预处理。",
     "- 不绕过登录、验证码、权限墙。",
     "- AI 只负责解析意图和生成导读，文件写入由本地代码完成。",
     "",
@@ -1113,7 +1113,9 @@ async function standardizeBrowserDraft(draft, parsedUrl, converted, onProgress) 
     source_url: String(draft.sourceMetadata?.source_url || parsedUrl.href),
     canonical_url: String(draft.sourceMetadata?.canonical_url || parsedUrl.href),
     source_title: converted.title || draft.title,
-    import_method: draft.sourceMetadata?.source_type === 'youtube_video_transcript' ? 'youtube_subtitle_standard_preprocess' : "browser_standard_preprocess",
+    import_method: draft.sourceMetadata?.source_type === 'youtube_video_transcript'
+      ? draft.sourceMetadata.asr_used ? 'youtube_audio_standard_preprocess' : 'youtube_subtitle_standard_preprocess'
+      : "browser_standard_preprocess",
     highlight_mode: "virtual_metadata",
     conversion_method: conversionMethod,
     browser_draft_id: draft.id,
@@ -1467,9 +1469,9 @@ function authenticatedCookieHealth() {
   };
 }
 
-async function fetchUrlImportDraft(requestedUrl) {
+async function fetchUrlImportDraft(requestedUrl, { onProgress } = {}) {
   if (youtubeVideoIdentity(requestedUrl)) {
-    return fetchYoutubeSubtitleDraft(requestedUrl, { liveSnapshot: liveCookieSnapshot });
+    return fetchYoutubeSubtitleDraft(requestedUrl, { liveSnapshot: liveCookieSnapshot, onProgress });
   }
   const shared = await resolveSharedSubscription(workflowRoot, requestedUrl, null, { publicSourcesOnly: true }).catch(() => null);
   if (shared?.status === 'available') {
@@ -1574,7 +1576,7 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
     const source = articleSource ? await capturedArticle(workflowRoot, articleSource, url)
       : await findSiteArticleCapture(workflowRoot, url);
     if (!source) {
-      fetched = await fetchUrlImportDraft(url);
+      fetched = await fetchUrlImportDraft(url, { onProgress });
     } else {
       if (articleSource) destinationFolder = taxonomyFolder(destinationFolder, source.metadata?.taxonomy);
       fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[],
@@ -2483,7 +2485,7 @@ async function importBilibili(job, url, runName, doctor) {
 async function importVideos(job, urls, runName) {
   const youtubeUrls = urls.filter(url => youtubeVideoIdentity(url));
   if (youtubeUrls.length) {
-    await log(job, `YouTube 字幕导入：${youtubeUrls.length} 个链接`);
+    await log(job, `YouTube 视频导入：${youtubeUrls.length} 个链接`);
     const request = await browserImportBroker.createRequest(youtubeUrls, {
       source: 'local-app-video', entryRoute: 'ai', destinationFolder: 'YouTube',
       userInstruction: importerInstruction(job), processingOptions: job.processingOptions || {}, transport: BACKGROUND_FETCH_TRANSPORT
@@ -2492,18 +2494,18 @@ async function importVideos(job, urls, runName) {
     const summary = await browserImportBroker.getRequest(request.request_id);
     for (const result of summary.results) {
       const target = result.artifacts?.find(item => item.kind === 'markdown')?.path;
-      if (target) job.outputs.push({ url: result.requested_url, status: result.status, method: 'youtube_subtitle_standard_preprocess', target, request_id: request.request_id });
-      else job.failures.push({ url: result.requested_url, status: result.status, stage: 'youtube_subtitles', reason: result.error, request_id: request.request_id });
+      if (target) job.outputs.push({ url: result.requested_url, status: result.status, method: 'youtube_video_standard_preprocess', target, request_id: request.request_id });
+      else job.failures.push({ url: result.requested_url, status: result.status, stage: 'youtube_transcript', reason: result.error, request_id: request.request_id });
     }
   }
   for (const url of urls.filter(url => !youtubeVideoIdentity(url))) {
-    const reason = "当前仅恢复 YouTube 现成字幕导入；其他视频与无字幕 ASR 仍暂停。";
+    const reason = "此入口支持 YouTube，B 站视频请使用视频导入队列。";
     const target = await writeFailureReport({
       dir: path.join(job.runDir, "video-suspended"),
       url,
       stage: "video_suspended",
       reason,
-      detail: "不要将无字幕视频的低质量 ASR 草稿写入阅读区。后续恢复条件见 docs/VIDEO_WORKFLOW_STATUS.md。"
+      detail: "视频处理入口见 docs/VIDEO_WORKFLOW_STATUS.md。"
     });
     job.failures.push({ url, status: "suspended", stage: "video_suspended", reason, target });
   }

@@ -5,7 +5,7 @@
 | 规则 | 触发输入 | 默认行为 |
 | --- | --- | --- |
 | 知乎专栏 → 全部文章 | `https://www.zhihu.com/column/<id>`、`https://zhihu.com/column/<id>`、`https://zhuanlan.zhihu.com/<slug>` | 完整枚举分页与置顶文章，全局去重后逐篇导入；自动按每批最多 50 篇提交既有后端。 |
-| YouTube → 字幕全文 | watch、youtu.be、shorts、live 单视频链接 | 优先人工字幕，复用既有 VTT 解析、分段和标准预处理；按 video ID 去重。采用下方统一验收规则，可读结果正常落盘，不启动 ASR。见[视频状态](VIDEO_WORKFLOW_STATUS.md)。 |
+| YouTube → 视频正文 | watch、youtu.be、shorts、live 单视频链接 | 优先使用平台字幕。无字幕轨时只下载音轨并使用全局转写服务。按 video ID 去重，复用统一预处理和入库验收。见[视频状态](VIDEO_WORKFLOW_STATUS.md)。 |
 | 普通链接 → 单篇导入 | 未命中高级规则的 HTTP(S) URL；知乎 `/p/<article-id>` 仍属单篇 | 沿用标准采集、预处理、目录路由、去重与正式落盘。 |
 
 机器清单为 `scripts/import-rule-catalog.mjs`，只读接口为 `GET /api/browser-import/rules`。统一页面 `/imports` 的链接区显示清单，旧 `/import` 自动转到这里。新增高级规则应增加有界的识别与展开处理器，再调用同一个 broker 与逐篇 worker，不另建导入后端。

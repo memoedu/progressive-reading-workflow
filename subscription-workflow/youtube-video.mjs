@@ -42,7 +42,7 @@ export async function runYoutubeVideo(root, request, watch, {
   const prepared = {sourceDir,jobDir};
   const result = illustrated
     ? await processIllustrated(item,watch,{artifactRoot,onProgress,prepareSource:async()=>prepared,
-      processingOptions:{...PROCESSING_OPTIONS,source_language:source.language}})
+      processingOptions:{...PROCESSING_OPTIONS,source_language:source.language || 'auto'}})
     : await processTranscript(item,prepared);
   return {...result,title:transcript.title};
 }

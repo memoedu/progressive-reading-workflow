@@ -1,15 +1,17 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { youtubeVideoIdentity } from './url-import-input.mjs';
 import { parseVtt, groupTranscriptSegments } from './import-youtube-subtitle-canary.mjs';
+import { transcribeAudioFile } from '../video-workflow/audio-transcription.mjs';
 
 const execFileAsync = promisify(execFile);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const loginRequired = /Sign in|login|cookies are no longer valid|confirm your age/iu;
-export const YOUTUBE_SUBTITLE_WORKFLOW_VERSION = 'youtube-subtitles/v1';
+export const YOUTUBE_SUBTITLE_WORKFLOW_VERSION = 'youtube-subtitles/v2';
 export { youtubeVideoIdentity };
 
 function originalTrack(formats) {
@@ -33,7 +35,7 @@ export function selectSubtitleTrack(info) {
     });
     if (available.length) return available[0];
   }
-  throw new Error('youtube_subtitles_unavailable_asr_disabled');
+  return null;
 }
 
 export function subtitleIntegrity(segments, paragraphs, duration, rawVtt) {
@@ -70,7 +72,8 @@ export function youtubeCookieFile(cookies, nowSeconds = Date.now() / 1000) {
 async function invokeYtDlp(args) {
   try {
     const result = await execFileAsync(process.env.PROGRESSIVE_READING_YTDLP || 'yt-dlp', args,
-      { windowsHide: true, timeout: 180000, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' });
+      { windowsHide: true, timeout: args.includes('--extract-audio') ? 900000 : 180000,
+        maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' });
     // --ignore-no-formats-error keeps subtitle-only responses usable, but can
     // turn a login challenge into a successful, metadata-only response.
     if (args.includes('--dump-single-json') && loginRequired.test(result.stderr)) {
@@ -91,9 +94,29 @@ async function invokeYtDlp(args) {
   }
 }
 
+function timestamp(milliseconds) {
+  const hours = Math.floor(milliseconds / 3_600_000);
+  const minutes = Math.floor(milliseconds / 60_000) % 60;
+  const seconds = Math.floor(milliseconds / 1000) % 60;
+  const clock = [hours,minutes,seconds].map(value => String(value).padStart(2,'0')).join(':');
+  return `${clock}.${String(milliseconds % 1000).padStart(3,'0')}`;
+}
+
+function transcriptionSegments(utterances,duration) {
+  let previousStart = -1;
+  return utterances.map(({start_ms,end_ms,text}) => {
+    if (!Number.isSafeInteger(start_ms) || !Number.isSafeInteger(end_ms) || start_ms < 0 || start_ms < previousStart
+        || end_ms <= start_ms || end_ms > (duration+3)*1000 || typeof text !== 'string' || !text.trim()) {
+      throw new Error('youtube_audio_transcription_timestamps_invalid');
+    }
+    previousStart = start_ms;
+    return {start:timestamp(start_ms),end:timestamp(end_ms),text:text.trim()};
+  });
+}
+
 export async function fetchYoutubeSubtitleDraft(requestedUrl, {
   artifactRoot = process.env.PROGRESSIVE_READING_YOUTUBE_ARTIFACT_ROOT || 'D:/Artifacts/ProgressiveReading/youtube-subtitles',
-  liveSnapshot, runYtDlp = invokeYtDlp, onProgress = () => {}
+  liveSnapshot, runYtDlp = invokeYtDlp, transcribe = transcribeAudioFile, onProgress = () => {}
 } = {}) {
   const identity = youtubeVideoIdentity(requestedUrl);
   if (!identity) throw new Error('unsupported_youtube_video_url');
@@ -132,16 +155,50 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
     }
     if (info.id !== identity.id || info._type === 'playlist') throw new Error('youtube_metadata_identity_mismatch');
     if (info.is_live) throw new Error('youtube_live_stream_not_finished');
-    const track = selectSubtitleTrack(info);
-    await fs.writeFile(infoPath, JSON.stringify(info), { mode: 0o600 });
-    if (authenticated) await refreshCookieFile();
-    await onProgress({ stage: 'youtube_subtitles', video_id: identity.id, language: track.language, kind: track.kind });
-    await runYtDlp([...base, '--load-info-json', infoPath, track.kind === 'manual' ? '--write-subs' : '--write-auto-subs',
-      '--sub-langs', `^${track.language.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, '--sub-format', track.ext,
-      '--force-overwrites', '-o', path.join(outputDir, '%(id)s.%(ext)s')]);
-    const subtitlePath = path.join(outputDir, `${identity.id}.${track.language}.${track.ext}`);
-    const raw = await fs.readFile(subtitlePath, 'utf8');
-    const segments = parseVtt(raw, { includeEnd: true });
+    let track = selectSubtitleTrack(info);
+    let raw, segments, asr = null;
+    if (track) {
+      await fs.writeFile(infoPath, JSON.stringify(info), { mode: 0o600 });
+      if (authenticated) await refreshCookieFile();
+      await onProgress({ stage: 'youtube_subtitles', video_id: identity.id, language: track.language, kind: track.kind });
+      await runYtDlp([...base, '--load-info-json', infoPath, track.kind === 'manual' ? '--write-subs' : '--write-auto-subs',
+        '--sub-langs', `^${track.language.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, '--sub-format', track.ext,
+        '--force-overwrites', '-o', path.join(outputDir, '%(id)s.%(ext)s')]);
+      raw = await fs.readFile(path.join(outputDir, `${identity.id}.${track.language}.${track.ext}`), 'utf8');
+      segments = parseVtt(raw, { includeEnd: true });
+    } else {
+      const duration = Number(info.duration);
+      if (!Number.isFinite(duration) || duration <= 0) throw new Error('youtube_audio_source_duration_unavailable');
+      await onProgress({stage:'youtube_audio',video_id:identity.id});
+      if (authenticated) await refreshCookieFile();
+      const audioArgs = base.filter(arg => !['--skip-download','--ignore-no-formats-error'].includes(arg));
+      const downloadAudio = args => runYtDlp([...args,'--format','bestaudio','--extract-audio','--audio-format','m4a',
+        '--print','after_move:%(id)s|%(duration)s','--no-simulate','-o',path.join(outputDir,'%(id)s.%(ext)s'),identity.url]);
+      let output;
+      try { output = await downloadAudio(audioArgs); }
+      catch (error) {
+        if (authenticated || error.message !== 'youtube_login_required' || !liveSnapshot) throw error;
+        await refreshCookieFile();
+        if (!authenticated) throw error;
+        output = await downloadAudio([...audioArgs,'--cookies',cookiePath]);
+      }
+      await fs.unlink(cookiePath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      const expected = output.trim().split(/\r?\n/u).find(line => line.startsWith(`${identity.id}|`));
+      const audioDuration = Number(expected?.split('|')[1]);
+      if (!audioDuration || Math.abs(audioDuration-duration)>3) throw new Error('youtube_audio_identity_mismatch');
+      const audioPath = path.join(outputDir,`${identity.id}.m4a`);
+      if (!(await fs.stat(audioPath)).size) throw new Error('youtube_audio_empty');
+      const digest = createHash('sha256');
+      for await (const chunk of createReadStream(audioPath)) digest.update(chunk);
+      const audioSha = digest.digest('hex');
+      await onProgress({stage:'youtube_transcription',video_id:identity.id});
+      const receipt = await transcribe({path:audioPath,sha256:audioSha},path.join(outputDir,'asr'));
+      segments = transcriptionSegments(receipt.utterances,duration);
+      raw = 'WEBVTT\n\n'+segments.map(({start,end,text}) => `${start} --> ${end}\n${text}`).join('\n\n')+'\n';
+      asr = {route:receipt.route,audio_sha256:audioSha};
+      track = {language:info.language || '',kind:'audio_transcription'};
+      await fs.writeFile(path.join(outputDir,'audio-transcription.vtt'),raw);
+    }
     const paragraphs = groupTranscriptSegments(segments);
     const integrity = subtitleIntegrity(segments, paragraphs, info.duration, raw);
     const markdown = paragraphs.map(item => item.text).join('\n\n');
@@ -150,7 +207,9 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
       source_type: 'youtube_video_transcript', source_id: identity.id, title: info.title || identity.id,
       author: info.channel || info.uploader || '', duration: Number(info.duration || 0),
       language: track.language, subtitle_language: track.language, subtitle_kind: track.kind,
-      input_form: 'spoken_transcript', source_is_original: true, capture_agent: 'yt_dlp_subtitles',
+      input_form: 'spoken_transcript', source_is_original: true,
+      capture_agent: asr ? 'global_audio_transcription' : 'yt_dlp_subtitles',
+      asr_used:Boolean(asr),...(asr ? {asr_route:asr.route,audio_sha256:asr.audio_sha256} : {}),
       workflow_version: YOUTUBE_SUBTITLE_WORKFLOW_VERSION, content_integrity: integrity,
       subtitle_sha256: hash(raw), transcript_sha256: hash(markdown), raw_artifact_dir: outputDir };
     await fs.writeFile(path.join(outputDir, 'source.json'), JSON.stringify(metadata, null, 2) + '\n');
@@ -162,7 +221,7 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
         subtitle_kind: track.kind, subtitle_sha256: metadata.subtitle_sha256, content_integrity: integrity,
         raw_artifact_dir: outputDir, chrome_cookie_snapshot_used: authenticated, browser_tab_created: false,
         acquisition_mode: authenticated ? 'chrome_live_snapshot' : 'public_subtitles',
-        media_downloaded: false, asr_used: false },
+        media_downloaded:Boolean(asr), asr_used:Boolean(asr), ...(asr ? {asr} : {}) },
       draft: { id: `local-ir-youtube-${identity.id}`, url: identity.url, title: metadata.title, pageText: markdown,
         html: '', annotations: [], qaCards: [], articleMusing: null, sourceType: 'url_import',
         sourceMetadata: metadata, userInstruction: '', revision: 0, createdAt: capturedAt, updatedAt: capturedAt } };

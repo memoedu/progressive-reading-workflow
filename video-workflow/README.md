@@ -4,7 +4,7 @@
 
 ## 模式与依赖
 
-默认处理字幕正文；图文模式必须显式选择 `--type illustrated` 或 `--type 图文模式`。兼容别名 `illustrated_strong` 仍可读取。无可用字幕时保留等待状态，不把简介当正文，不自动下载整段音视频或改用 ASR。
+默认处理字幕正文。CLI 的图文模式必须显式选择 `--type illustrated` 或 `--type 图文模式`，兼容别名 `illustrated_strong`。YouTube 链接导入和单次视频队列在无字幕轨时只下载并转写音轨。B 站订阅保留等待字幕的行为。
 
 上游 VideoBook 代码由 `fetch-public.py` 按固定提交下载，`upstream-lock.json` 记录来源、Apache-2.0 许可及逐文件哈希。`verifyUpstream()` 在使用前核验；本地适配器不改写上游源码。
 

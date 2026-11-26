@@ -8,7 +8,8 @@ const jobNames={rss:'RSS 检查',bilibili:'B 站检查',zhihu:'知乎检查',dai
 const stepNames={scan:'检查来源',previews:'处理材料',decisions:'处理勾选',report:'生成报告',activity:'写入入库动态',
   'apply-source-scopes':'应用接收范围','retry-rss':'重试 RSS','retry-bilibili':'重试 B 站','retry-zhihu':'重试知乎','retry-selections':'重试勾选项',
   prepare_visual_jobs:'整理板书证据',extract_and_independently_review:'板书校订与独立审阅',compile_source_evidence:'核对来源证据',supplement_board_evidence:'补充板书证据',
-  youtube_metadata:'读取 YouTube 视频信息',youtube_subtitles:'获取 YouTube 字幕',youtube_standard_preprocess:'处理字幕正文',
+  youtube_metadata:'读取 YouTube 视频信息',youtube_subtitles:'获取 YouTube 字幕',youtube_audio:'获取 YouTube 音轨',
+  youtube_transcription:'转写视频音轨',youtube_standard_preprocess:'整理视频正文',
   review_generated_diagrams:'核对图示',admit_reviewed_source:'准入已核验的校订',generate_body_and_guide:'生成正文与导读',verify_publication:'验收图文产物',board_blocked:'来源证据需要补充'};
 const trackedRuns=new Map();
 const sourceGroupOpen=new Map();
@@ -16,6 +17,7 @@ function element(tag,text,cls){const node=document.createElement(tag);if(text!==
 function readableError(value){const text=String(value||'');
   if(text.includes('youtube_login_required'))return 'YouTube 要求登录。登录状态同步后可重试。';
   if(text.includes('youtube_subtitles_unavailable_asr_disabled'))return 'YouTube 未提供可用字幕。';
+  if(text.includes('global_audio_transcription_failed'))return '音轨转写失败。可在异常记录中查看任务并重试。';
   if(/paid_subscribers|paywall/u.test(text))return '来源正文需要付费订阅，现有访问条件只能取得摘要。';if(/platform_subtitles_not_yet_available/u.test(text))return '平台尚未提供字幕，下个周期会再次检查。';if(/target_login_snapshot_unavailable/u.test(text))return '当前来源的登录快照不可用，等待浏览器登录状态同步后重试。';if(/zhihu_http_403/u.test(text))return '知乎接口拒绝访问（403），当前未取得可用正文。';if(/source_metadata|missingProperty/u.test(text))return '来源记录缺少部分可选信息。';if(/identity_changed|source.*mismatch/u.test(text))return '来源或处理流程已变化，需要重新核对。';if(/[{}\n]|pr_preprocess_|result_contract|\\u[0-9a-f]{4}/iu.test(text)||!/[\u3400-\u9fff]/u.test(text))return '处理未完成，请重试。详细原因已保留在异常记录中。';return text.slice(0,240);}
 async function api(url,body){
   const controller=new AbortController();

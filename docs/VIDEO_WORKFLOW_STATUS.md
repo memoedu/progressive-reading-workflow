@@ -2,7 +2,9 @@
 
 单次视频导入支持 B 站和 YouTube，默认关闭图文模式。两种平台都可从 `/api/subscriptions/import-video` 或 `node subscription-workflow/cli.mjs import-video` 提交，并指定阅读区内的目标分类。B 站支持指定分 P，YouTube 按单条视频处理。显式传入 `output_type: "illustrated"` 或 `--output-type illustrated` 开启图文模式。
 
-YouTube 优先使用原始字幕，通过现有 VTT 解析器进入标准书面化与导读流程。匿名访问遇到登录校验时，复用本机已有的 YouTube 登录快照重试。无可用字幕时保留明确失败或等待状态，ASR 不是默认降级路径。
+YouTube 优先使用原始字幕。平台没有可用字幕轨时，只下载该视频的音轨，交由本机全局转写入口和当前默认转写服务处理。两条路径都要通过时间轴和正文完整性检查，再进入标准书面化与导读。匿名访问遇到登录校验时，复用本机已有的 YouTube 登录快照重试。字幕抓取异常、音轨获取失败或转写未通过检查时，队列保留具体失败状态。
+
+需要新版 yt-dlp 时可用 `PROGRESSIVE_READING_YTDLP` 指定已安装的可执行文件。需要配置转写入口时可显式指定 `PROGRESSIVE_READING_ASR_CLI` 和 `PROGRESSIVE_READING_ASR_PYTHON`，默认沿用本机全局转写 CLI。
 
 B 站分 P、视频与合集订阅使用 `video-workflow/`。一次性纯文导入使用已核验的字幕和 `video-workflow/import-transcript.mjs` 的标准入口。可匿名播放的 B 站分 P 将原始字幕正文及加工稿登记到[公开资料库](SUBSCRIPTION_LIBRARY_SYNC.md)，已有同选项、同原稿版本可直接复用。字幕、截图、板书校订与多分 P 的证据规则见 [视频模块](../video-workflow/README.md)。
 
