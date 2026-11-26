@@ -18,6 +18,16 @@ function streamTargets(document) {
 
 export function publisherArticleBody(document) {
   const candidates = document.body.querySelectorAll(".instapaper_body");
+  if (!candidates.length) {
+    // A single publisher entry can be a link-heavy curated page. Readability
+    // may discard its content even when the publisher marks it explicitly.
+    const entries = [...document.body.querySelectorAll("article.entry")]
+      .filter(entry => !entry.closest(HIDDEN));
+    if (entries.length === 1 && entries[0].querySelector(":scope > .entry-content:not([hidden], [inert], [aria-hidden=\"true\"])")) {
+      return entries[0];
+    }
+    return null;
+  }
   if (candidates.length !== 1) return null;
   const [article] = candidates;
   let hidden = article.closest(HIDDEN);

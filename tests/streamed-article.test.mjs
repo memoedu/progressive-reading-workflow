@@ -46,3 +46,21 @@ test("article marker does not override the existing authentication check", async
       { headers: { "Content-Type": "text/html" } })
   }), { status: "requires_browser_auth", message: "password_form_detected" });
 });
+
+test("a unique visible publisher entry preserves linked sections in the network and snapshot converters", async () => {
+  const entry = '<article class="entry"><h1>Curated reading</h1><div class="entry-content">' +
+    '<p>Opening explanation of the topic.</p><ul>' +
+    Array.from({length:18}, (_, i) => '<li><a href="/reading/' + i + '">Recommended article ' + i + '</a></li>').join('') +
+    '</ul><p>Closing remarks from the author.</p></div></article>';
+  const page = '<nav>Site navigation</nav><main>' + entry + '</main><aside>Unrelated catalog</aside>';
+  const fetched = await fetchUrlWithoutBrowser(url, {fetchImpl:async () =>
+    new Response(page,{headers:{"Content-Type":"text/html"}})});
+  assert.equal(fetched.articleHtml,entry);
+  const captured = htmlArticleToMarkdown({html:fetched.articleHtml,sourceUrl:url});
+  assert.deepEqual(htmlArticleToMarkdown({html:page,sourceUrl:url}),captured);
+  assert.match(captured.markdown,/Recommended article 17\]\(https:\/\/fixture\.example\/reading\/17\)/u);
+  assert.match(captured.markdown,/Closing remarks from the author/u);
+  assert.doesNotMatch(captured.markdown,/Site navigation|Unrelated catalog/u);
+  assert.equal(htmlDetails('<main>'+entry+entry+'</main>',url).articleHtml,undefined);
+  assert.equal(htmlDetails('<main hidden>'+entry+'</main>',url).articleHtml,undefined);
+});
