@@ -28,3 +28,12 @@ test('Spanish bibliography headings retain reference context and stop at the nex
  }
  assert.deepEqual([...translationLiteralBlockKeys([{type:'heading',source_block_key:'heading',markdown:'## Por qué las referencias importan'},{type:'paragraph',source_block_key:'prose',markdown:'El argumento necesita una explicación.'}])],[]);
 });
+
+test('escaped reference numbering preserves complete citations while numbered prose still translates',()=>{
+ const reference='Rivera, A., Brown, B., Stone, C., & Wang, D. (2007). A method for measuring drift. Measurement Review, 8, 120–132.';
+ const prose='These instructions explain why a careful measurement takes time and how to document each sensor before comparing the results.';
+ for(const prefix of ['[64] ',String.raw`\[64\] `,'[23] – ','[7]: ']){
+  assert.equal(isBibliographicReferenceBlock(prefix+reference),true);
+  assert.equal(isBibliographicReferenceBlock(prefix+prose),false);
+ }
+});

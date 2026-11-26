@@ -853,7 +853,7 @@ const APA_INITIAL_AUTHOR=String.raw`\p{Lu}[\p{L}\p{M}'’–-]+(?:\s+\p{Lu}[\p{L
 const APA_INITIAL_AUTHORS=new RegExp('^'+APA_INITIAL_AUTHOR+'(?:(?:,\\s*(?:&\\s*)?|\\s+&\\s+)'+APA_INITIAL_AUTHOR+')*$','u');
 export function isBibliographicReferenceBlock(markdown) {
   const citationLines = String(markdown).trim().split(/\r?\n/u).filter(line => line.trim());
-  const numberedCitation = /^\s*\\?\[\d+\\?\]\s*[–—-]\s+/u;
+  const numberedCitation = /^\s*\\?\[\d+\\?\]\s*(?:[–—:-]\s+|\s+)/u;
   if (citationLines.length > 1 && citationLines.every(line => numberedCitation.test(line) || /^\s*(?:[-*+]\s+|\d+[.)]\s+)/u.test(line))) {
     return citationLines.every(line => isBibliographicReferenceBlock(line));
   }
