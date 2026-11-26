@@ -13,6 +13,7 @@ import { ExternalProducer, loadBatchProducerConfig } from '../standard-preproces
 import { downloadSharedReading } from './shared-library-client.mjs';
 import { synchronizeReadingPublication } from './reading-publication.mjs';
 import { findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
+import { generatedReadingTitle, readingTitlePublicationPath } from '../standard-preprocessing/lib/reading-filename.mjs';
 
 export async function subscriptionProducer(config = null) {
   return new ExternalProducer({...config || await loadBatchProducerConfig(),AI_PRODUCER_PROVIDER:'codex_exec'});
@@ -98,11 +99,13 @@ export async function deliverArticle(paths, item, name, options = {}) {
       item.publication = await withSourcePublication(paths.workflowRoot, item.item_url, async () => {
         const existing = await findSourcePublication(paths.workflowRoot, item.item_url);
         if (existing) return { ...existing, status:'published', preserved_existing:true };
-        const markdown = `---\nsource_url: ${JSON.stringify(item.item_url)}\nimport_method: shared_standard_reading\n---\n\n${shared.readingBytes.toString('utf8')}\n`;
-        await fs.mkdir(path.dirname(target), { recursive:true });
-        await fs.writeFile(target, markdown, { flag:'wx' });
+        const reading = shared.readingBytes.toString('utf8');
+        const markdown = `---\nsource_url: ${JSON.stringify(item.item_url)}\nimport_method: shared_standard_reading\n---\n\n${reading}\n`;
+        const output = readingTitlePublicationPath(target, generatedReadingTitle(reading), item.item_url);
+        await fs.mkdir(path.dirname(output), { recursive:true });
+        await fs.writeFile(output, markdown, { flag:'wx' });
         const sharing = await synchronizeReadingPublication(paths.workflowRoot, { reused: shared });
-        return { status:'published', path:target, sha256:digest(markdown), published_at:new Date().toISOString(), direct_reading:true,
+        return { status:'published', path:output, sha256:digest(markdown), published_at:new Date().toISOString(), direct_reading:true,
           ...sharing };
       });
       if (item.reading_options.generate_guide) {
@@ -115,13 +118,14 @@ export async function deliverArticle(paths, item, name, options = {}) {
   const outputDir = path.join(paths.preprocessRoot,'direct-reading',item.material_id,digest(JSON.stringify(request)).slice(0,20));
   const runner = options.readingRunner || runPreprocessingRequest;
   const run = await runner(request,{outputDir,publishPath:target,assetSourceDir:item.source_package_path,cacheDir:readingCache,
+    automaticFilenameSource:item.item_url,
     publicationSource: { url:item.item_url, archivedOriginalSha256:shareable ? originalSha256 : undefined,
       privateContent:Boolean(options.readingRunner) },
     ...(!options.readingRunner ? {producer:await subscriptionProducer()} : {}),
     onProgress:event=>options.onPreviewProgress?.({materialId:item.material_id,status:'processing',...event})});
   accepted(run);
   if (run.publication?.status !== 'published' || run.publication.cleanliness?.valid !== true
-    || (!run.publication.preserved_existing && path.resolve(run.publication.markdown?.path || '') !== target)
+    || (!run.publication.preserved_existing && path.resolve(run.publication.markdown?.path || '') !== readingTitlePublicationPath(target,run.result.artifacts?.reading_title,item.item_url))
     || digest(await fs.readFile(run.publication.markdown.path)) !== run.publication.markdown.sha256) throw new Error('reading_publication_verification_failed');
   item.publication = {status:'published',path:run.publication.markdown.path,sha256:run.publication.markdown.sha256,
     published_at:new Date().toISOString(),result_path:path.join(outputDir,'result.json'),

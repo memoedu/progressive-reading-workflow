@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { buildPreprocessRequest, runStandardPreprocessingWorkflow } from '../index.mjs';
 import { isBibliographicReferenceBlock } from '../lib/producer.mjs';
+import { bilingualReadingFilename } from '../lib/reading-filename.mjs';
 
 test('numbered journal records are identified without exempting numbered explanatory prose', () => {
   const reference = '\\[1\\] – Baker, Alex D., and Casey R. Lane. “Timing and memory.” Journal 12, no. 4 (2021): 21-27.';
@@ -12,7 +16,7 @@ test('numbered journal records are identified without exempting numbered explana
   assert.equal(isBibliographicReferenceBlock('2. Ibid. The researchers observed a substantial difference in the new sample.'), false);
 });
 
-test('generated translations display both document titles instead of the first subsection', async () => {
+test('generated translations display both titles and publish with a bilingual automatic filename', async t => {
   const request = buildPreprocessRequest({
     markdown: '## A subsection\n\nOne small example demonstrates the original idea.',
     sourceType: 'browser_capture_markdown',
@@ -36,9 +40,26 @@ test('generated translations display both document titles instead of the first s
       }
     };
   } };
-  const { result } = await runStandardPreprocessingWorkflow(request, { producer, cacheDir: false });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bilingual-reading-filename-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const { result, publication } = await runStandardPreprocessingWorkflow(request, {
+    producer, cacheDir: false, publishPath: path.join(dir, 'automatic.md'),
+    automaticFilenameSource: request.source_metadata.source_url
+  });
   assert.equal(result.translation_state, 'generated_translation');
   assert.equal(result.artifacts.reading_title, '原文标题｜The source title');
   assert.match(result.artifacts.reading_markdown, /^title: "原文标题｜The source title"$/mu);
   assert.match(result.artifacts.reading_markdown, /^# 原文标题｜The source title$/mu);
+  assert.match(path.basename(publication.markdown.path), /^原文标题｜The source title--[a-f0-9]{10}\.md$/u);
+  await fs.access(publication.markdown.path);
+  await assert.rejects(fs.access(path.join(dir, 'automatic.md')), { code: 'ENOENT' });
+});
+
+test('bilingual filenames sanitize unsafe characters and reserve space for their sidecars', () => {
+  const filename = bilingualReadingFilename('学习 [一]｜Learn: Why / How?', '--browser.md');
+  assert.equal(filename, '学习 一｜Learn Why How--browser.md');
+  assert.equal(bilingualReadingFilename('Untranslated source title'), null);
+  const long = bilingualReadingFilename('原题'.repeat(100)+'｜'+'English words '.repeat(100), '--browser.md');
+  assert.match(long, /^原题.+｜English words .+--browser\.md$/u);
+  assert.ok(Buffer.byteLength(long + '.browser-ir.json') <= 255);
 });
