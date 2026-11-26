@@ -38,9 +38,10 @@ function decodeEntities(text) {
     .replace(/&nbsp;/g, " ");
 }
 
-export function parseVtt(vtt) {
+export function parseVtt(vtt, { includeEnd = false } = {}) {
   const segments = [];
   let start = "";
+  let end = "";
   let lines = [];
 
   function flush() {
@@ -51,7 +52,7 @@ export function parseVtt(vtt) {
     const text = decodeEntities(lines.join(" ").replace(/<[^>]+>/g, ""))
       .replace(/\s+/g, " ")
       .trim();
-    if (text && segments.at(-1)?.text !== text) segments.push({ start, text });
+    if (text && segments.at(-1)?.text !== text) segments.push({ start, text, ...(includeEnd ? { end } : {}) });
     start = "";
     lines = [];
   }
@@ -65,7 +66,9 @@ export function parseVtt(vtt) {
     if (/^\d+$/.test(line)) continue;
     if (line.includes("-->")) {
       flush();
-      start = line.split("-->")[0].trim().replace(/\.\d+$/, "");
+      const [from, to] = line.split("-->");
+      start = from.trim().replace(/\.\d+$/, "");
+      end = to.trim().split(/\s+/u, 1)[0];
       continue;
     }
     lines.push(line);

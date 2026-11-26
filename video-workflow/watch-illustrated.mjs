@@ -17,7 +17,8 @@ const execute=promisify(execFile),root=import.meta.dirname;
 const read=async file=>JSON.parse(await fs.readFile(file,'utf8'));
 const hash=value=>createHash('sha256').update(value).digest('hex');
 export const sameStrongPrompt=(left,right)=>String(left).replace(/\r\n/gu,'\n')===String(right).replace(/\r\n/gu,'\n');
-export const watchJobDir=(artifactRoot,item)=>path.join(artifactRoot,item.bvid+'-cid'+item.cid,'illustrated');
+export const watchJobDir=(artifactRoot,item,mode='illustrated')=>path.join(artifactRoot,
+  item.bvid ? item.bvid+'-cid'+item.cid : 'youtube-'+item.video_id,mode);
 
 // Frozen attempts are reusable only for the same source and workflow. A newer
 // source, prompt or setting gets its own attempt, preserving earlier evidence.
@@ -58,7 +59,7 @@ export async function withCaptureCookies(url,action){
   const snapshot=new LiveCookieSnapshot({workflowRoot:path.dirname(root),dataRoot:defaultCookieDataRoot(path.dirname(root))});
   snapshot.refresh({force:true});
   if(!snapshot.health().loaded||!snapshot.headerForUrl(url))throw Error('target_login_snapshot_unavailable');
-  const cookies=scopedNetscapeCookies(snapshot.jar.cookies,'www.bilibili.com');
+  const cookies=scopedNetscapeCookies(snapshot.jar.cookies,new URL(url).hostname);
   if(!cookies.count)throw Error('target_login_snapshot_unavailable');
   await snapshot.protectDirectory();
   const file=path.join(snapshot.dataRoot,'video-watch-capture-'+randomUUID()+'.cookies.txt');

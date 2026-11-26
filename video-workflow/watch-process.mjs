@@ -7,7 +7,7 @@ import{LiveCookieSnapshot,defaultCookieDataRoot}from'../scripts/live-cookie-snap
 import { artifactPath } from '../scripts/runtime-paths.mjs';
 import{scopedNetscapeCookies}from'./run-authenticated.mjs';
 import{biliApi,canonicalUrl}from'./watch-core.mjs';
-import{verifyUpstream}from'./import-transcript.mjs';
+import{importTranscript,verifyUpstream}from'./import-transcript.mjs';
 import{assertIllustratedWatch,watchJobDir,runWatchedIllustrated,prepareIllustratedAttempt,VIDEO_PYTHON}from'./watch-illustrated.mjs';
 const execute=promisify(execFile),root=import.meta.dirname;
 export const WATCH_ARTIFACTS=artifactPath('ProgressiveReading','video-watch');
@@ -81,8 +81,8 @@ export async function acquireSource(item,watch,jobDir,{packages=publicPackages,a
   return {sourceDir};
 }
 
-export async function prepareWatchSource(item,watch,artifactRoot,acquire=acquireSource){
-  const jobDir=watchJobDir(artifactRoot,item),sourceDir=jobDir+'/source';
+export async function prepareWatchSource(item,watch,artifactRoot,acquire=acquireSource,mode='illustrated'){
+  const jobDir=watchJobDir(artifactRoot,item,mode),sourceDir=jobDir+'/source';
   // Reuse only exact-part original subtitles. Never import the upstream AI book.
   const legacy=path.join(artifactRoot,item.bvid+'-cid'+item.cid,'source');
   if(!await fs.stat(sourceDir+'/source.json').then(()=>true,()=>false)){
@@ -104,7 +104,15 @@ export async function prepareWatchSource(item,watch,artifactRoot,acquire=acquire
   return {sourceDir,jobDir};
 }
 
-export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,acquire,runFlow=runWatchedIllustrated,command=execute,onProgress=async()=>{}}={}){
+export async function processTranscriptItem(item,{sourceDir,jobDir},{importSource=importTranscript}={}){
+  const receipt=await importSource({inputDir:sourceDir,outputDir:path.join(jobDir,'run'),publishPath:item.publish_path,
+    processingOptions:{structure_body:true,include_reading_guide:true,require_content_headings:true}});
+  return {status:receipt.status,publication:receipt.publication.markdown.path,workflow:'transcript',
+    reused:Boolean(receipt.preserved_existing||receipt.publication.preserved_existing)};
+}
+
+export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,acquire,prepareSource=prepareWatchSource,
+  processingOptions=PROCESSING_OPTIONS,runFlow=runWatchedIllustrated,command=execute,onProgress=async()=>{}}={}){
   assertIllustratedWatch(watch);
   const jobDir=watchJobDir(artifactRoot,item),legacyRun=jobDir+'/run';
   let runDir=legacyRun;
@@ -112,14 +120,14 @@ export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,
   try{await command(VIDEO_PYTHON,[
     '-c','import markdown_it, playwright.sync_api, PIL, yt_dlp'],{windowsHide:true});}
   catch{throw Error('video_render_runtime_unavailable: install video-workflow/render-requirements.txt');}
-  const acquired=await prepareWatchSource(item,watch,artifactRoot,acquire);
+  const acquired=await prepareSource(item,watch,artifactRoot,acquire);
   if(acquired.status==='waiting_source')return acquired;
   let sourceDir=acquired.sourceDir;
   // Preserve a completed receipt; never rerun an already published article.
   let receipt;
   try{receipt=await read(runDir+'/illustrated-receipt.json');}catch(error){if(error.code!=='ENOENT')throw error;}
   if(receipt?.status!=='completed'&&item.resume_mode!=='verification_only'){
-    ({sourceDir,runDir}=await prepareIllustratedAttempt({item,watch,sourceDir,runDir,processingOptions:PROCESSING_OPTIONS}));
+    ({sourceDir,runDir}=await prepareIllustratedAttempt({item,watch,sourceDir,runDir,processingOptions}));
     receipt=await read(runDir+'/illustrated-receipt.json').catch(error=>{if(error.code==='ENOENT')return null;throw error;});
   }
   if(!receipt&&item.resume_mode==='verification_only')throw Error('saved_receipt_missing_no_regeneration_allowed');
@@ -127,7 +135,7 @@ export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,
     try{await fs.access(item.publish_path);throw Error('publication_already_exists_without_matching_receipt');}
     catch(error){if(error.code!=='ENOENT')throw error;}
     await verifyUpstream();
-    try{receipt=await runFlow({item,watch,sourceDir,runDir,processingOptions:PROCESSING_OPTIONS,onProgress});}
+    try{receipt=await runFlow({item,watch,sourceDir,runDir,processingOptions,onProgress});}
     catch(error){
       if(error.message==='target_login_snapshot_unavailable')return {status:'waiting_source',reason:error.message};
       throw error;
