@@ -10,6 +10,7 @@ import { publicationMetadata } from './publication-time.mjs';
 import { recordExceptions, acknowledgeExceptions, exceptionFile } from './exception-log.mjs';
 import { normalizeVideoRequest, runVideoRequest } from './video-request.mjs';
 import {subscriptionImportIssues,readableImportError} from './import-issues.mjs';
+import { retryReadingPublications } from './reading-publication-outbox.mjs';
 
 const execute = promisify(execFile);
 export const JOB_KINDS = ['rss','bilibili','zhihu','daily','weekly','decisions','retry','video_import'];
@@ -348,9 +349,15 @@ export async function monitorMarkdown(root, now = Date.now()) {
 }
 
 export function startSubscriptionWorker(root = codeRoot) {
-  if (!existsSync(paths(root).marker)) return () => {};
   let busy=false;
+  let publicationBusy=false;
   const tick=async()=>{
+    if (!publicationBusy) {
+      publicationBusy=true;
+      retryReadingPublications(root).catch(error=>console.error('reading_publication_retry',cleanError(error)))
+        .finally(()=>{publicationBusy=false;});
+    }
+    if (!existsSync(paths(root).marker)) return;
     if(busy)return; busy=true;
     try {
       const config=await loadConfig(root); if(!config?.enabled)return;

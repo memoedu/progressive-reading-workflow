@@ -266,6 +266,9 @@ export async function syncSharedReading(root, { url, kind, original, markdown, p
     const { originalBytes, readingBytes, ...receipt } = await verifiedReadingPair(result.commit, record, entry, fetchImpl);
     return receipt;
   } catch (error) {
+    if (['shared_invalid_reading', 'shared_material_not_publication_ready'].includes(error.message)) {
+      return { status: 'local_only', reason: error.message };
+    }
     return { status: 'retry_wait', error: /^shared_[a-z0-9_]+$/u.test(error.message) ? error.message : 'shared_sync_unavailable' };
   }
 }

@@ -9,7 +9,11 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout } from 'node:timers/promises';
 
-test('Obsidian URL import reads back a public original before local publication and records temporary failures', async t => {
+const html = pathname => '<html><head><meta charset="utf-8"><title>Publication ' + pathname +
+  '</title></head><body><article><h1>Fixture article</h1><p>' +
+  'This is a complete fixture describing publication order and how archive bytes are verified. '.repeat(25) + '</p></article></body></html>';
+
+test('URL imports read back public originals before publication across reader routes and persist retry receipts', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'web-import-shared-'));
   const endpoint = 'https://sync.fixture.example/progressive-reading-sync/';
   const host = 'https://www.readthesequences.com';
@@ -30,31 +34,42 @@ test('Obsidian URL import reads back a public original before local publication 
     const root = process.env.PROGRESSIVE_READING_WORKFLOW_ROOT;
     const commit = '1'.repeat(40);
     const blobs = new Map();
+    let firstReadback = false;
+    let retryRequests = 0;
+    const html = ${html.toString()};
     globalThis.fetch = async (input, options) => {
       const url = new URL(input);
       if (url.origin === '${host}') {
-        const html = '<html><head><meta charset="utf-8"><title>Publication ' + url.pathname + '</title></head><body><article><h1>Fixture article</h1><p>' +
-          'This is a complete fixture describing publication order and how archive bytes are verified. '.repeat(25) + '</p></article></body></html>';
-        return new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8'}});
+        return new Response(html(url.pathname),{headers:{'Content-Type':'text/html; charset=utf-8'}});
       }
       if (url.origin === 'https://raw.githubusercontent.com') {
         const blob=blobs.get(decodeURI(url.pathname).split('/').at(-1));
         assert.ok(blob);
-        assert.equal((await fs.readdir(path.join(root,'阅读区'),{recursive:true})).some(name => name.endsWith('.md')),false);
+        if (firstReadback) {
+          assert.equal((await fs.readdir(path.join(root,'阅读区'),{recursive:true})).some(name => name.endsWith('.md')),false);
+          firstReadback = false;
+        }
         await fs.writeFile(path.join(root,'readback-completed'),commit);
         return new Response(blob);
       }
       assert.equal(url.origin,'https://sync.fixture.example');
       if (url.pathname.endsWith('/article')) return Response.json({status:'local_only',reason:'shared_source_not_found'});
       assert.ok(url.pathname.endsWith('/publication'));
-      const {url:source,original,reading} = JSON.parse(options.body);
-      assert.equal(reading,undefined);
-      if (source.endsWith('/retry')) return Response.json({error:'shared_github_unavailable'},{status:503});
+      const {url:source,original,reading,processing_sha256,options_sha256} = JSON.parse(options.body);
+      firstReadback = source.endsWith('/verified');
+      if (source.endsWith('/retry') && retryRequests++ === 0) return Response.json({error:'shared_github_unavailable'},{status:503});
       const digest = value => createHash('sha256').update(value).digest('hex');
       const hash = digest(original);
       blobs.set(hash+'.md',original);
+      assert.equal(typeof reading,source.endsWith('/snapshot') ? 'string' : 'undefined');
+      const readingFiles = reading === undefined ? [] : [{
+        original_sha256:hash,processing_sha256,options_sha256,sha256:digest(reading),
+        path:'加工版本/'+digest(source).slice(0,24)+'/reading-'+digest(reading)+'.md'
+      }];
+      if (readingFiles.length) blobs.set('reading-'+digest(reading)+'.md',reading);
       return Response.json({status:'available',commit,record:{schema:'progressive-reading.shared-article/v1',
-        url:source,title:'Fixture article',original:{path:'原稿/'+digest(source).slice(0,24)+'/'+hash+'.md',sha256:hash}}});
+        url:source,title:'Fixture article',original:{path:'原稿/'+digest(source).slice(0,24)+'/'+hash+'.md',sha256:hash},
+        reading_files:readingFiles}});
     };
   `);
   const socket = net.createServer();
@@ -87,10 +102,11 @@ test('Obsidian URL import reads back a public original before local publication 
     assert.fail('Import did not complete '+stderr);
   }
   await poll('/api/highlights/health', result=>result.status==='ok');
-  for (const [slug,expected] of [['verified','available'],['retry','retry_wait']]) {
+  let retryRequest;
+  for (const [slug,expected,source] of [['verified','available','new_reader_import'],['retry','retry_wait','obsidian_local_ir']]) {
     const created = await fetch(base+'/api/browser-import/requests',{method:'POST',
       headers:{'content-type':'application/json'},body:JSON.stringify({
-        urls:[host+'/'+slug],source:'obsidian_local_ir',processing_mode:'original_text'
+        urls:[host+'/'+slug],source,processing_mode:'original_text'
       })}).then(response=>response.json());
     assert.ok(created.request_id);
     const completed = (await poll('/api/browser-import/requests/'+created.request_id,value=>value.terminal)).results[0];
@@ -98,6 +114,29 @@ test('Obsidian URL import reads back a public original before local publication 
     const receipt=completed.receipt.shared_reading;
     assert.equal(receipt.status,expected);
     if (slug==='verified') assert.equal(await fs.readFile(path.join(root,'readback-completed'),'utf8'),receipt.commit);
+    else {
+      assert.deepEqual(await fetch(base+'/api/import-center/shared-publications/'+receipt.sync_id).then(r=>r.json()),receipt);
+      const retry = path.join(root,'.local-ir','shared-reading-publications',receipt.sync_id+'.json');
+      const waiting = JSON.parse(await fs.readFile(retry,'utf8'));
+      await fs.writeFile(retry+'.test',JSON.stringify({...waiting,retry_at:0}));
+      await fs.rename(retry+'.test',retry);
+      retryRequest = created.request_id;
+    }
     await fs.access(completed.artifacts.find(item=>item.kind==='markdown').path);
   }
+  const snapshot = await fetch(base+'/api/highlights/import-local',{method:'POST',
+    headers:{'content-type':'application/json'},body:JSON.stringify({
+      async:true, client_request_id:'reading-publication-snapshot',
+      draft:{id:'fixture-snapshot',url:host+'/snapshot',title:'Publication /snapshot',html:html('/snapshot')},
+      processing_options:{input_form:'written',content_profile:'natural_language',source_language:'en',
+        translate:false,spoken_to_written:false,structure_body:false,include_reading_guide:false}
+    })}).then(response=>response.json());
+  assert.ok(snapshot.request_id);
+  const snapshotResult = (await poll('/api/browser-import/requests/'+snapshot.request_id,value=>value.terminal)).results[0];
+  assert.equal(snapshotResult.receipt?.processing_mode,'standard_preprocess',JSON.stringify(snapshotResult.errors));
+  assert.equal(snapshotResult.receipt.shared_reading.status,'available');
+  assert.ok(snapshotResult.receipt.shared_reading.reading.sha256);
+  const recovered = await poll('/api/browser-import/requests/'+retryRequest,
+    value=>value.results[0]?.receipt?.shared_reading?.status==='available');
+  assert.equal(recovered.results[0].receipt.shared_reading.commit,'1'.repeat(40));
 });
