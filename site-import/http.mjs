@@ -52,6 +52,10 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
     if(['/api/import-candidates/status','/api/import-candidates/update'].includes(url.pathname))send(res,200,await updateCandidate(root,input));
     else if(url.pathname==='/api/site-imports/source')send(res,200,await saveSiteSource(root,input.source,input.revision));
     else if(url.pathname==='/api/site-imports/start')send(res,202,brief(await startSiteRun(root,input,broker,runRequest)));
+    else if(url.pathname==='/api/site-imports/pause'){
+      if(!/^browser-import-task-[a-f0-9-]{36}$/u.test(input.task_id||''))throw new Error('invalid_import_task_id');
+      send(res,200,await broker.pauseSiteTask(input.task_id,input.expected_status));
+    }
     else if(url.pathname==='/api/import-center/maintenance-retry'){
       const request = await broker.retryMaintenanceTask(input.task_id, async (site, clientRequestId, taskId) => {
         const previous = await readRun(root, site.run_id);

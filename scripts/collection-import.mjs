@@ -50,6 +50,7 @@ export async function processCollectionTask(task, { broker, discover, runRequest
       const batchUrls = urls.slice(offset, offset + 50);
       const request = collection.batches[index]?.request_id ? await broker.getRequest(collection.batches[index].request_id) : await broker.createRequest(batchUrls, {
         source: task.source, clientRequestId: `${task.id}:articles:${index}`,
+        collectionClaim: { taskId: task.id, leaseToken: task.lease_token },
         userInstruction: task.user_instruction, entryRoute: task.entry_route, destinationFolder: task.destination_folder,
         processingOptions: task.processing_options || {}, processingMode: task.processing_mode || "standard_preprocess",
         articleSource: collection.inventory.article_source ? {
@@ -97,6 +98,8 @@ export async function processCollectionTask(task, { broker, discover, runRequest
     await broker.completeTask(task.id, { ok, result, error: ok ? null : result.status === "needs_classification" ? "部分文章需要补充分类信息。" : "collection_articles_incomplete", degradedStatus: result.status === "needs_classification" ? "needs_classification" : null, leaseToken: task.lease_token });
     await onProgress?.(collection);
   } catch (error) {
+    if (error.message === "browser_import_task_stale_lease"
+        && (await broker.getRequest(task.request_id))?.status === "paused") return;
     if(error.inventory)collection.inventory=error.inventory;
     collection.phase = "failed";
     collection.error = error.message;

@@ -21,14 +21,28 @@ export const siteProcessingOptions=settings=>({input_form:'written',content_prof
   include_reading_guide:settings.generate_guide===true,translation_mode:settings.translation_mode});
 
 const SUCCESS=new Set(['imported','imported_with_warnings','idempotent_replay']);
-const TERMINAL_SITE_PHASES=new Set(['completed','completed_with_failures','failed','needs_classification']);
+const TERMINAL_SITE_PHASES=new Set(['completed','completed_with_failures','failed','needs_classification','paused']);
 
 export async function siteRunStatus(run,broker){
-  if(!run?.phase||!run.request_id||TERMINAL_SITE_PHASES.has(run.phase))return run;
+  if(!run?.phase||!run.request_id||(TERMINAL_SITE_PHASES.has(run.phase)&&run.phase!=='failed'))return run;
   const request=await broker?.getRequest(run.request_id);
   if(!request?.terminal)return run;
   // The broker may finish before the separate site view has been saved.
   const row=request.results?.[0];
+  if(request.status==='paused'){
+    const saved=row?.collection||run.collection;
+    const results=new Map((saved?.results||[]).map(result=>[result.requested_url,result]));
+    const batches=[];
+    for(const batch of saved?.batches||[]){
+      const current=!batch.terminal&&batch.request_id?await broker.getRequest(batch.request_id):null;
+      for(const result of current?.results||[])results.set(result.requested_url,result);
+      batches.push(current?{...batch,terminal:current.terminal}:batch);
+    }
+    const collection={...saved,phase:'paused',error:null,results:[...results.values()],batches};
+    return {...run,phase:'paused',pause:row.pause,collection,results:collection.results,counts:siteCounts(collection),
+      updated_at:request.updated_at||run.updated_at};
+  }
+  if(run.phase==='failed')return run;
   const saved=row?.collection||run.collection;
   const phase=request.awaiting_input?'needs_classification':SUCCESS.has(row?.status)?'completed':
     saved?.phase==='completed_with_failures'?'completed_with_failures':'failed';
@@ -52,7 +66,7 @@ export async function startSiteRun(root,{source_id,client_request_id,retry_run_i
     const config=await readSources(root),source=config.sources.find(s=>s.id===source_id);
     if(!source)throw new Error('请先保存整站导入设置');
     for(const recorded of await listRuns(root)){
-      if(recorded.id===id||recorded.source_id!==source_id||TERMINAL_SITE_PHASES.has(recorded.phase))continue;
+      if(recorded.id===id||!recorded.request_id||recorded.source_id!==source_id||TERMINAL_SITE_PHASES.has(recorded.phase))continue;
       const active=await siteRunStatus(recorded,broker);
       if(!TERMINAL_SITE_PHASES.has(active.phase))return active;
     }
