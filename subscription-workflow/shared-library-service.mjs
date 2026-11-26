@@ -104,12 +104,14 @@ export function createSharedLibraryServer({
   config, github = createSharedGitHub(config.github), fetchArticle = config.public_rss
     ? createPublicRssSources(config.public_rss) : url => pilotArticleUrl(url) ? fetchPilotArticle(url) : localOnly('source_not_in_public_feed'),
   scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now, fetchMaterial = fetch,
-  verifyReadingSource = verifyPublicReadingSource
+  verifyReadingSource
 }) {
   const sessions = sessionProtocol(config, now);
   const limits = new Map();
   const pending = new Map();
   const writeAvailable = Boolean(github.ready && config.gitleaks);
+  const publicWebOrigins = config.public_web_origins === undefined ? undefined : new Set(config.public_web_origins);
+  const verifySource = verifyReadingSource || (url => verifyPublicReadingSource(url, fetch, publicWebOrigins));
   const publicMaterials = new Map((config.public_materials || []).map(({ url, extension, sha256, bytes, article_url }) => {
     const record = sharedMaterialRecord({ schema: 'progressive-reading.shared-material/v1', url, extension, sha256, bytes,
       path: '原材料/' + String(extension).toUpperCase() + '/' + sha256 + '.' + extension,
@@ -175,7 +177,7 @@ export function createSharedLibraryServer({
     const current = await github.lookup(url);
     const originalSha256 = sharedDigest(original);
     const alreadyVerified = [current.record?.original, ...(current.record?.original_revisions || [])].some(item => item?.sha256 === originalSha256);
-    const proof = alreadyVerified ? current.record : await verifyReadingSource(url);
+    const proof = alreadyVerified ? current.record : await verifySource(url);
     if (!proof) return localOnly('source_not_publicly_verified');
     if (proof.markdown && proof.markdown.trim() !== original.trim()) return localOnly('public_source_body_mismatch');
     const title = String(proof.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);

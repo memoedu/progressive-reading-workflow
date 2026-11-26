@@ -8,5 +8,10 @@
     { "feed": "https://www.neelnanda.io/blog?format=rss", "folder": "Neel Nanda", "article_origins": ["https://www.neelnanda.io"] },
     { "feed": "https://nintil.com/rss.xml", "folder": "Nintil", "article_origins": ["https://nintil.com"] }
   ],
+  "public_web_origins": [
+    "https://www.lesswrong.com",
+    "https://www.masterhowtolearn.com",
+    "https://www.readthesequences.com"
+  ],
   "public_materials": []
 }
