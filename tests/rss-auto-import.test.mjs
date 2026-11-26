@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import nodeFs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { CONFIG_NAME, RssImporter, acquireLock, parseConfig, itemEligibility, saveJson, verifyImport } from '../rss-import/core.mjs';
 import { reconcileInVault, ensureObsidianVisible } from '../rss-import/obsidian.mjs';
 
-const root='D:/Artifacts/RSS-Routing-20260915/tests';
+const root=process.platform==='win32'
+  ? 'D:/Artifacts/RSS-Routing-20260915/tests'
+  : await fs.realpath(os.tmpdir());
 const nowValue=Date.parse('2026-09-14T00:00:00Z');
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const document=(feeds,extra={})=>'# RSS\n## 默认模式\n```json\n'+JSON.stringify({enabled:true,lookback_days:180,poll_minutes:5,destination_folder:'RSS',...extra})+'\n```\n## ① 标准流程导入\n'+feeds.join('\n')+'\n## ② 原文直接导入\n'+(extra.original_feeds || []).join('\n')+'\n## ③ 日报与周报（暂停）\n'+(extra.report_feeds || []).join('\n')+'\n## 帮助\nhttps://help.example.test/\n';

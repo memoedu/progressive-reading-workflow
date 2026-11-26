@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import { initialize, paths, normalizeSource, saveSource, loadConfig, writeJson, readJson, digest, withLock } from '../subscription-workflow/config.mjs';
 import { saveSourceMaterial, canonicalCatalog } from '../subscription-workflow/catalog.mjs';
@@ -24,7 +25,9 @@ import { resolveProcessingPlan } from '../standard-preprocessing/lib/workflow-pl
 import { validateRequestContract, buildPreprocessRequest } from '../standard-preprocessing/index.mjs';
 import { resolveVaultLocation, refreshObsidianLinks } from '../subscription-workflow/obsidian-links.mjs';
 
-const artifact='D:/Artifacts/ProgressiveReading/subscriptions-20261106/tests';
+const artifact=process.platform==='win32'
+  ? 'D:/Artifacts/ProgressiveReading/subscriptions-20261106/tests'
+  : await fs.realpath(os.tmpdir());
 const previousRssHome=process.env.RSS_IMPORT_HOME;
 test('subscription production pins Codex Exec while preserving the chosen Codex model and caller config',async()=>{
   const config={AI_PRODUCER_PROVIDER:'deepseek',AI_PRODUCER_BASE_URL:'https://api.example.test',AI_PRODUCER_MODEL:'old-api-model',AI_PRODUCER_CODEX_MODEL:'fixture-codex-model'};

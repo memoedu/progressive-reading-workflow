@@ -2,12 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import {SCHEMA,paths,normalizeSource,writeJson,loadConfig,deleteSource,saveSource} from '../subscription-workflow/config.mjs';
 import {handleSubscriptions} from '../subscription-workflow/http.mjs';
 
 async function fixture(){
-  const artifact='D:/Artifacts/ProgressiveReading/subscription-source-deletion-tests';await fs.mkdir(artifact,{recursive:true});
+  const artifact=process.platform==='win32'
+    ? 'D:/Artifacts/ProgressiveReading/subscription-source-deletion-tests'
+    : await fs.realpath(os.tmpdir());
+  await fs.mkdir(artifact,{recursive:true});
   const root=await fs.mkdtemp(path.join(artifact,'case-')),home=path.join(root,'home');
   await writeJson(paths(root).marker,{home});
   const active=normalizeSource({kind:'rss',name:'Synthetic active feed',url:'https://active.test/feed',mode:'reports'});

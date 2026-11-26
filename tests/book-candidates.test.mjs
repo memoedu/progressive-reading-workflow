@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {JSDOM} from 'jsdom';
 import {bookResources,pageBookResource} from '../site-import/book-resources.mjs';
 import {readCandidates,registerCandidates,setCandidateStatus,updateCandidate,candidatePage} from '../site-import/candidates.mjs';
@@ -13,7 +15,13 @@ import http from 'node:http';
 import {handleImportCenter} from '../site-import/http.mjs';
 
 const base='https://independent-books.example';
-const temp=()=>fs.mkdtemp('D:/Artifacts/ProgressiveReading/book-candidates-test-');
+async function temp(){
+ const artifacts=process.platform==='win32'
+  ? 'D:/Artifacts/ProgressiveReading'
+  : await fs.realpath(os.tmpdir());
+ await fs.mkdir(artifacts,{recursive:true});
+ return fs.mkdtemp(path.join(artifacts,'book-candidates-test-'));
+}
 test('linked library metadata uses only literal proven GET catalog and link templates, never book bodies',async()=>{
  const seen=[],pages=new Map([
   ['/shelf/view/','<script src="../common.js"></script><script src="./view.js"></script>'],

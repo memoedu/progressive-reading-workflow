@@ -45,7 +45,10 @@ function fixtureRegistry() {
 }
 
 test("derives the report registry only from the third Markdown region", async (t) => {
-  const fixtureRoot='D:/Artifacts/RSS-Routing-20260915/tests';await fs.mkdir(fixtureRoot,{recursive:true});
+  const fixtureRoot=process.platform==='win32'
+    ? 'D:/Artifacts/RSS-Routing-20260915/tests'
+    : await fs.realpath(os.tmpdir());
+  await fs.mkdir(fixtureRoot,{recursive:true});
   const root = await fs.mkdtemp(path.join(fixtureRoot, "rss-subscriptions-"));
   t.after(async () => fs.rm(root, { recursive: true, force: true }));
   const configPath = path.join(root, "subscriptions.md");
