@@ -913,7 +913,7 @@ export function bibliographicReferenceBlockKeys(blocks) {
       const headingLevel = heading[1].length;
       const headingText = heading[2].replace(/^[-*+]\s+/u, "").trim();
       const sectionLabel = headingText.replace(/^(?:(?:chapter|section|appendix)\s+(?:[A-Z]|\d+(?:\.\d+)*)[:.)–—-]?\s+|(?:\d+(?:\.\d+)*[.)]?|[A-Z][.)])\s+)/iu,'').replace(/[*_`]/gu,'').trim();
-      const startsBibliography = /^(?:bibliograph(?:y|ies)|references?|reference\s+books?|(?:main\s+)?textbooks?|recommended\s+readings?|further\s+readings?|reading\s+list|bibliograf[ií]as?|referencias?(?:\s+bibliogr[aá]ficas)?|参考文献|参考书(?:目)?|教材|推荐阅读|延伸阅读|书目)(?:\s*[:：])?$/iu.test(sectionLabel);
+      const startsBibliography = /^(?:bibliograph(?:y|ies)|references?|citations?\s+(?:and|&)\s+references?|references?\s+(?:and|&)\s+citations?|reference\s+books?|(?:main\s+)?textbooks?|recommended\s+readings?|further\s+readings?|reading\s+list|bibliograf[ií]as?|referencias?(?:\s+bibliogr[aá]ficas)?|参考文献|参考书(?:目)?|教材|推荐阅读|延伸阅读|书目)(?:\s*[:：])?$/iu.test(sectionLabel);
       if (startsBibliography) activeHeadingLevel = activeHeadingLevel === null ? headingLevel : Math.min(activeHeadingLevel, headingLevel);
       else if (activeHeadingLevel !== null && headingLevel <= activeHeadingLevel) activeHeadingLevel = null;
       continue;

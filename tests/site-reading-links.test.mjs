@@ -3,6 +3,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { projectReadingLinks, sourceReadingLinks } from '../site-import/reading-links.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
+import { obsidianReadingLink } from '../subscription-workflow/reading-options.mjs';
 
 const source = { url: 'https://example.org/notes/source/', path: path.resolve('阅读区/来源.md') };
 const targetUrl = 'https://example.org/articles/target/';
@@ -50,4 +51,17 @@ test('page-relative article links resolve against the original page URL', () => 
   assert.equal(result.links.length, 1);
   assert.match(result.markdown, /\[related\]\(<[^>]+\.md>\)/u);
   assert.match(result.markdown, /\[local section\]\(#section\)/u);
+});
+
+test('verified reading links can open in a new Obsidian tab in both import modes', () => {
+  const markdown = '[related](' + targetUrl + ')\n';
+  const linkForFile = () => obsidianReadingLink('阅读区/分组/目标 #1.md', 'fixture');
+  for (const preserveOriginal of [false, true]) {
+    const { markdown: output, links } = projectReadingLinks(markdown, source, records, { preserveOriginal, linkForFile });
+    const uri = new URL(links[0].href);
+    assert.equal(uri.searchParams.get('paneType'), 'tab');
+    assert.equal(uri.searchParams.get('file'), '阅读区/分组/目标 #1.md');
+    assert.ok(output.includes(links[0].href));
+    assert.equal(output.startsWith(markdown), preserveOriginal);
+  }
 });
