@@ -165,7 +165,10 @@ function renderDirectory(page, context) {
       // capture does not prove that the same anchor exists in the local note.
       const target = directory !== page.path ? directory : null;
       const article = !url.hash && publication?.path;
-      const file = target || article || null;
+      const candidate = target || article || null;
+      // Obsidian parses a literal hash in its file parameter as a heading.
+      // Keep the source clickable without renaming a reader's file.
+      const file = candidate?.includes('#') ? null : candidate;
       const href = file ? linkForFile(file) : url.href;
       const label = clean(content);
       if (!label) return '';

@@ -6,6 +6,7 @@ import test from 'node:test';
 import { digest, writeJson } from '../subscription-workflow/config.mjs';
 import { obsidianReadingLink } from '../subscription-workflow/reading-options.mjs';
 import { inferDirectoryTopics, publishSourceDirectories } from '../site-import/source-directories.mjs';
+import { prepareSharedSourceDirectories } from '../site-import/shared-directories.mjs';
 import { runPath, saveRun, sitePaths } from '../site-import/store.mjs';
 
 const siteUrl = 'https://example.test/';
@@ -25,9 +26,10 @@ async function fixture(t) {
 
 test('publishes ordered directory branches with new-tab links and source-backed reuse', async t => {
   const { root, reading } = await fixture(t);
-  const article = path.join(reading, '正文 #1 (marked).md');
+  const article = path.join(reading, '正文 1 (marked).md');
   const original = '---\nsource_url: "https://example.test/article"\n---\n\n# Reader-edited text\n';
   await fs.writeFile(article, original);
+  await fs.writeFile(path.join(reading, '正文 #2.md'), original.replace('/article','/literal-hash'));
   await writeJson(path.join(root, 'imports', 'rss-reading', 'review-ledger.v1.json'), { items: {
     article: { item_url: siteUrl + 'old', source_identity: {
       source_url: siteUrl + 'old', canonical_url: siteUrl + 'article'
@@ -40,7 +42,8 @@ test('publishes ordered directory branches with new-tab links and source-backed 
     '<li><ol><li><a href="/old">Redirected article</a></li><li><a href="/missing">Web only</a></li></ol></li>',
     '<li><a href="/other">Second</a><ol><li><a href="/article">Same article</a></li></ol></li></ol>'
   ].join('');
-  const chapter = '<main><ul><li><a href="/article">Repeated</a></li><li><a href="/article#detail">Source-only anchor</a></li></ul></main>';
+  const chapter = '<main><ul><li><a href="/article">Repeated</a></li><li><a href="/article#detail">Source-only anchor</a></li>' +
+    '<li><a href="/literal-hash">Filename with hash</a></li></ul></main>';
   const fetchPage = async url => {
     const selected = url.endsWith('/chapter') ? chapter : body;
     return { url, body: selected, sha256: digest(selected) };
@@ -62,7 +65,19 @@ test('publishes ordered directory branches with new-tab links and source-backed 
   assert.deepEqual(index.links.filter(link => link.kind === 'article').map(link => link.path), [article, article]);
   assert.equal(index.links[0].path, child.path);
   assert.equal(child.links[1].href, siteUrl + 'article#detail');
+  assert.deepEqual(child.links[2], { kind: 'web', url: siteUrl + 'literal-hash', href: siteUrl + 'literal-hash' });
   assert.equal(await fs.readFile(article, 'utf8'), original);
+
+  const portable = await prepareSharedSourceDirectories(root, receipt, {
+    articlePath: url => url === siteUrl + 'old' ? '原稿/正文 #1.md' : null
+  });
+  assert.equal(portable.files.length, 2);
+  assert.match(portable.files[0].markdown, /\.\.\/\.\.\/\.\.\/%E5%8E%9F%E7%A8%BF\/%E6%AD%A3%E6%96%87%20%231\.md/u);
+  assert.doesNotMatch(portable.files[0].markdown, /obsidian:/u);
+  await fs.appendFile(child.path, '\nPrivate note\n');
+  const publicAfterEdit = await prepareSharedSourceDirectories(root, receipt);
+  assert.deepEqual(publicAfterEdit.withheld, [{ path: child.path, reason: 'reader_edited' }]);
+  assert.match(publicAfterEdit.files[0].markdown, /\[First\]\(<https:\/\/example\.test\/chapter>\)/u);
 
   await fs.appendFile(index.path, '\nReader note\n');
   plan.sites[0].pages[0].title = 'Updated contents';
