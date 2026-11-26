@@ -90,7 +90,10 @@ function sourcePackage({ materialId, url, title, contentStatus, requestReady = t
 }
 
 async function createFixture() {
-  const fixtureRoot='D:/Artifacts/RSS-Routing-20260915/tests';await fs.mkdir(fixtureRoot,{recursive:true});
+  const fixtureRoot=process.platform==='win32'
+    ? 'D:/Artifacts/RSS-Routing-20260915/tests'
+    : await fs.realpath(os.tmpdir());
+  await fs.mkdir(fixtureRoot,{recursive:true});
   const root = await fs.mkdtemp(path.join(fixtureRoot, "rss-reading-test-"));
   const configHome=path.join(root,'rss-config');await fs.mkdir(configHome);
   await fs.writeFile(path.join(configHome,'RSS 自动导入.md'),'```json\n{}\n```\n## ① 标准流程导入\n## ② 原文直接导入\n## ③ 日报与周报\nFixture：https://example.test/feed.xml\n');

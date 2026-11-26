@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import {gzipSync} from 'node:zlib';
 import Ajv2020 from 'ajv/dist/2020.js';
 import {fetchArticleContent,originalArticleTarget,ARTICLE_EXTRACTION_VERSION} from '../rss-source/article-fetch.mjs';
@@ -51,7 +52,10 @@ test('RSS HTML fragments retain headings, links, emphasis, lists, tables, code, 
 });
 
 test('format refresh keeps the original material identity and freezes the previous preprocessing request',async()=>{
-  const artifacts='D:/Artifacts/ProgressiveReading/richtext-20261108/tests';await fs.mkdir(artifacts,{recursive:true});
+  const artifacts=process.platform==='win32'
+    ? 'D:/Artifacts/ProgressiveReading/richtext-20261108/tests'
+    : await fs.realpath(os.tmpdir());
+  await fs.mkdir(artifacts,{recursive:true});
   const root=await fs.mkdtemp(path.join(artifacts,'source-'));
   const first=await syncFeedDocument({feedUrl:'https://kirigaya.cn/rss.xml',xml:feed,outputRoot:root,fetchFulltext:true,
     articleFetcher:async()=>({...await fetchArticleContent(url,mock(record())),markdown:'正文解释与实例。'.repeat(30)})});
