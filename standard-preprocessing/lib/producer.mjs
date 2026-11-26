@@ -873,8 +873,10 @@ export function isBibliographicReferenceBlock(markdown) {
   if (/^\s*\[[^\]\n]+\]\([^\s]+\)\s*\([A-Za-zÀ-ž'’.,&\s-]+,\s*(?:19|20)\d{2}[a-z]?\)\s*[.]?\s*$/u.test(String(markdown))) return true;
   const text = translationNaturalLanguage(markdown)
     .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/u, "")
+    .replace(/(?:\s*\[\]\(\))+$/u, "")
     .trim();
   if (!text || /[\p{Script=Han}]/u.test(text)) return false;
+  if (/^ibid\.(?:\s+pp?\.\s*\d+(?:[-–]\d+)?\.?)?$/iu.test(text)) return true;
   // APA journal records put initials after surnames. Require the complete
   // author-year header and journal volume/pages, so a cited prose sentence
   // cannot become an untranslated reference merely by naming an author.

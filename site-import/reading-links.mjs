@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { digest, readJson, writeJson } from '../subscription-workflow/config.mjs';
 import { mapMarkdownDestinations, replaceChecked } from '../subscription-workflow/report-archive.mjs';
-import { findSourcePublications, withSourcePublication } from '../scripts/reading-source-library.mjs';
+import { findSourcePublications, sourceAliasResolver, withSourcePublication } from '../scripts/reading-source-library.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 
 const optionalText = file => fs.readFile(file, 'utf8').catch(error => {
@@ -57,7 +57,7 @@ export function projectReadingLinks(markdown, source, publications, { preserveOr
   return { markdown: frontmatter + projected + appendix, links: associations };
 }
 
-export async function amendSiteReadingFile(root, row, directory, update) {
+export async function amendSiteReadingFile(root, row, directory, update, { resolveIdentity } = {}) {
   return withSourcePublication(root, row.url, async () => {
     const file = path.resolve(row.path);
     const source = await optionalText(file);
@@ -108,7 +108,7 @@ export async function amendSiteReadingFile(root, row, directory, update) {
       }
     }
     return { ...row, ...receipt };
-  });
+  }, { resolveIdentity });
 }
 
 export async function bindSiteReadingLinks(root, records, directory, { preserveOriginal = false, titleFor } = {}) {
@@ -119,12 +119,13 @@ export async function bindSiteReadingLinks(root, records, directory, { preserveO
     if (markdown !== null) for (const url of sourceReadingLinks(markdown, row.url)) urls.add(url);
   }
   const publications = await findSourcePublications(root, [...urls]);
+  const resolveIdentity = await sourceAliasResolver(root);
   const results = [];
   for (const row of candidates) {
     results.push(await amendSiteReadingFile(root, row, directory, async markdown => {
       const projected = projectReadingLinks(markdown, row, publications, { preserveOriginal });
       return titleFor ? titleFor(projected, row) : projected;
-    }));
+    }, { resolveIdentity }));
   }
   return results;
 }

@@ -202,11 +202,11 @@ async function reclaimExitedOwner(file, observed) {
   } finally { await handle.close(); await fs.unlink(recovery); }
 }
 
-export async function withSourcePublication(root, url, operation) {
+export async function withSourcePublication(root, url, operation, { resolveIdentity } = {}) {
   if (!root || !url) return operation();
   const directory = path.join(root, '.local-ir', 'source-publication-locks');
   await fs.mkdir(directory, { recursive: true });
-  const identity=await sourceAliasResolver(root);
+  const identity=resolveIdentity || await sourceAliasResolver(root);
   const file = path.join(directory, digest(identity(url))+'.json');
   const token = randomUUID();
   const deadline = Date.now()+30*60*1000;

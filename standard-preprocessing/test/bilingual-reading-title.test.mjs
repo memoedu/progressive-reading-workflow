@@ -8,6 +8,8 @@ test('numbered journal records are identified without exempting numbered explana
   assert.equal(isBibliographicReferenceBlock(reference), true);
   assert.equal(isBibliographicReferenceBlock(reference + '\n' + reference.replace('[1', '[2')), true);
   assert.equal(isBibliographicReferenceBlock('\\[1\\] – The researchers explained why study time was not the only factor.'), false);
+  assert.equal(isBibliographicReferenceBlock('1. Baker, Alex. “Timing and memory.” Journal 12, no. 4 (2021): 21.[](https://example.org/article#one)\n2. Ibid. p. 21[](https://example.org/article#two)'), true);
+  assert.equal(isBibliographicReferenceBlock('2. Ibid. The researchers observed a substantial difference in the new sample.'), false);
 });
 
 test('generated translations display both document titles instead of the first subsection', async () => {
