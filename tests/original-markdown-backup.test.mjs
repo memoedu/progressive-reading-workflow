@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { createOriginalMarkdownBackup } from '../scripts/original-markdown-backup.mjs';
+import { createOriginalMarkdownBackup, publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 
 const blob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 
@@ -92,6 +92,14 @@ test('keeps links with access token parameters in the local held queue', async t
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'gh');
   assert.ok(calls[0].every(arg => !arg.includes('/contents/')));
+});
+
+test('scans long source tokens and still detects a private email later in the note', () => {
+  const chunk = 'a'.repeat(128 * 1024);
+  const address = 'reader@example.test';
+  const fingerprints = [createHash('sha256').update(address).digest('hex')];
+  assert.equal(publicArchiveContainsPrivateData('article.md', chunk, fingerprints), false);
+  assert.equal(publicArchiveContainsPrivateData('article.md', chunk + '\n' + address, fingerprints), true);
 });
 
 test('explicitly targets a public library and holds matching private data', async t => {

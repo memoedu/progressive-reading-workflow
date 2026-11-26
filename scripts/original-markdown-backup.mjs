@@ -9,7 +9,9 @@ const archivePath = /^(?!\.|\/)(?!.*(?:^|\/)\.)[^\\:\x00-\x1f]+\.md$/iu;
 const archiveIdentity = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
 const credentialLink = /https?:\/\/[^\s<>]+(?:\?|&(?:amp;)?)(?:access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?(?:id|key|token)|cookie|x-amz-credential)=/iu;
 const readerData = /(?:\b[a-z]:[\\/](?:Users|AppData)[\\/]|(?:^|\n)(?:reader_(?:email|username|account)|browser_draft_id)\s*:|<!--\s*(?:local-ir:(?:highlight|annotation|musing)|subscriptions:archived-short))/iu;
-const emailAddress = /[a-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/giu;
+// Start at a token boundary so opaque source strings cannot trigger a retry
+// from every character while the scanner looks for a following @.
+const emailAddress = /(?<![a-z0-9.!#$%&'*+/=?^_\x60{|}~-])[a-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/giu;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const gitBlob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 
@@ -53,6 +55,7 @@ function originalOrigin(value) {
 export function publicArchiveContainsPrivateData(relative, markdown, emailFingerprints = []) {
   const text = (relative + '\n' + markdown).replace(/%[a-f0-9]{2}/giu, encoded => String.fromCharCode(parseInt(encoded.slice(1), 16)));
   if (readerData.test(text) || credentialLink.test(text)) return true;
+  if (!emailFingerprints.length) return false;
   return [...text.matchAll(emailAddress)].some(([email]) => emailFingerprints.includes(sha256(email.toLowerCase())));
 }
 
