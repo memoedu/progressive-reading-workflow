@@ -22,7 +22,7 @@ test('generated translations display both titles and publish with a bilingual au
     sourceType: 'browser_capture_markdown',
     sourceMetadata: { source_url: 'https://example.org/article', title: 'The source title', source_is_original: true },
     processingOptions: {
-      translate: true, include_reading_guide: false, input_form: 'written',
+      translate: true, translation_mode: 'plain', include_reading_guide: false, input_form: 'written',
       content_profile: 'natural_language', spoken_to_written: false, structure_body: false
     }
   });

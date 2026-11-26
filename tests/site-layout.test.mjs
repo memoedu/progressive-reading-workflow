@@ -11,6 +11,7 @@ import {writeJson,readJson,digest} from '../subscription-workflow/config.mjs';
 import {findSourcePublication,sourceReuseResult} from '../scripts/reading-source-library.mjs';
 import {readingMovePayload,readingStateEqual,moveReaderFile} from '../site-import/reader-moves.mjs';
 import {verifySiteCollection} from '../site-import/tasks.mjs';
+import {relocatedMarkdown} from '../subscription-workflow/report-archive.mjs';
 
 test('successful articles are categorized even when a sibling failed, without creating an empty category',async()=>{
  const previous=process.env.NODE_ENV;process.env.NODE_ENV='test';
@@ -65,6 +66,14 @@ test('reference repair updates both publication and document-state body hashes',
   assert.equal(result.artifacts[0].sha256,hash);assert.equal(result.receipt.final_markdown_sha256,hash);assert.equal(result.content.markdownSha256,hash);
   const vaultState=remapReceipts({document:{path:'04 Projects/Primary/阅读区/Topic/article.md'},content:{markdownSha256:'old'}},new Map(),root,new Map([[file,hash]]));
   assert.equal(vaultState.content.markdownSha256,hash);
+});
+
+test('absolute reading links keep their Markdown titles and literal path characters on relocation',()=>{
+  const root=path.resolve('reading-fixture'),file=path.join(root,'article.md');
+  const mapping=new Map([['/reading/old.md','/reading/中文｜English $&.md']]);
+  const input='[Article](/reading/old.md "Source")\n\n[ref]: /reading/old.md "Source"\n';
+  const output='[Article](</reading/中文｜English $&.md> "Source")\n\n[ref]: </reading/中文｜English $&.md> "Source"\n';
+  assert.equal(relocatedMarkdown(input,file,file,mapping,root),output);
 });
 
 test('generated index ownership survives checked relocation and still protects handwritten edits',async()=>{
