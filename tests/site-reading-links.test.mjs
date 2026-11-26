@@ -44,3 +44,10 @@ test('local association retains inline titles and reference-link structure', () 
   assert.match(result.markdown, /\[related\]\(<[^>]+\.md> "Details"\)/u);
   assert.match(result.markdown, /^\[t\]: <[^>]+\.md> "Details"$/mu);
 });
+
+test('page-relative article links resolve against the original page URL', () => {
+  const result = projectReadingLinks('[related](../../articles/target/)\n[local section](#section)\n', source, records);
+  assert.equal(result.links.length, 1);
+  assert.match(result.markdown, /\[related\]\(<[^>]+\.md>\)/u);
+  assert.match(result.markdown, /\[local section\]\(#section\)/u);
+});

@@ -22,7 +22,7 @@ function readingBody(markdown) {
 function visitReadingLinks(markdown, sourceUrl, visit) {
   return mapMarkdownDestinations(markdown, (match, destination, line, index) => {
     const raw = destination.startsWith('<') ? destination.slice(1, -1) : destination;
-    if (!/^(?:https?:\/\/|\/)/iu.test(raw) || !URL.canParse(raw, sourceUrl) || /!\[[^\]]*$/u.test(line.slice(0, index))) return match;
+    if (!raw || raw.startsWith('#') || !URL.canParse(raw, sourceUrl) || /!\[[^\]]*$/u.test(line.slice(0, index))) return match;
     const url = new URL(raw, sourceUrl);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return match;
     return visit(match, url, destination);
