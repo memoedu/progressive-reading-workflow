@@ -43,6 +43,12 @@ npm test
 
 生成的整站目录按路径片段编码本地链接，标题或文件夹中的井号和百分号仍指向原文件。
 
+已导入的站点可以通过 `node scripts/build-site-directories.mjs <目录计划.json>` 预览原站分类目录。追加 `--apply` 将目录写入现有阅读区站点下的 `原站目录`，并在整站导入数据目录保存逐页来源和链接回执。目录按网页选择器命中的顺序呈现，已有阅读文件按来源 URL 和已记录别名匹配。同一文件可出现在多个列表中。可关联的文件使用 Obsidian 新标签页链接，其余条目用网页 URL。更新前会检查已有目录是否被编辑。
+
+目录计划的 `sites` 列表用 `sourceId` 引用整站设置，用 `runId` 引用采集回执。每个站点的 `pages` 依次指定 `file`、`url` 和 HTML `include` 选择器，另可指定 `title`、`exclude`。已有结构化公开来源可用有序 `entries` 代替选择器，每个条目含 `title`、可选的 `url` 和 `children`。维护历史来源时也可直接提供 `name`、`url` 和已存在的 `destination`。实际站点计划与回执留在本机。
+
+如果作者只有平面的粗标签，可以在目录计划中设置 `inferTopics: true` 并给出完整采集的 `runId`。该选项复用现有主题归类器和按原文哈希缓存的分类，在单独的 `推断主题.md` 展示结果。它保留作者目录、文章正文和阅读状态。预览会获取目录页，启用主题推断时也可能运行模型。
+
 维护时可用 `reload-local-ir-app.ps1 -Apply -ResumeSiteDiscovery <实跑编号>` 重新加载同一个只读采集任务。此入口要求持久队列中只有一个活跃任务、编号一致，且尚未冻结正式入库清单或启动发布。重载后复用已采集的来源文件。
 
 `PROGRESSIVE_READING_DATA_HOME`、`PROGRESSIVE_READING_ARTIFACT_HOME` 和各专用覆盖项适用于新安装及显式配置，既有 D 盘安装继续兼容原路径。不要把实际配置或私人阅读材料纳入公开提交。

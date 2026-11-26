@@ -101,7 +101,7 @@ function libraryZone(root, file) {
 
 // Read the actual library, rather than trusting an importer's stale output path.
 // One batch scan serves every requested identity, including both publication orders.
-export async function findSourcePublications(root, urls) {
+export async function findSourcePublications(root, urls, { zones = LIBRARY_ZONES, requireFrontmatter = false } = {}) {
   const ledger = await optionalJson(path.join(root, 'imports', 'rss-reading', 'review-ledger.v1.json'));
   const identity=await sourceAliasResolver(root,ledger);
   const wanted = new Set(urls.filter(Boolean).map(identity));
@@ -109,17 +109,20 @@ export async function findSourcePublications(root, urls) {
   const aliasPriority=new Map();
   const sourceLocations = new Map();
   if (!wanted.size) return found;
-  const retain = async (url, file, extra = {}) => {
+  const retain = async (url, file, extra = {}, verifiedSourceKeys = []) => {
     const key = identity(url), zone = libraryZone(root, file);
     const rank={'已归档原文':0,'待归档原文':1,'阅读区':2};
-    if (!wanted.has(key) || !zone || (found.has(key)&&rank[found.get(key).zone]<rank[zone])) return;
+    if (!wanted.has(key) || !zones.includes(zone) || (found.has(key)&&rank[found.get(key).zone]<rank[zone])) return;
     let data;
     try { data = await fs.readFile(file); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     if (!data.length) return;
     // A native reader move can precede receipt repair. Prefer the preserved
     // alias-bearing publication over a later canonical-only duplicate even
     // when the ledger still points at an obsolete path or the duplicate.
-    const priority=sourceUrls(data.toString('utf8').slice(0,16384)).some(source=>identity(source)===key&&urlImportDedupeKey(source)!==key)?1:0;
+    const sources = sourceUrls(data.toString('utf8').slice(0,16384));
+    if (requireFrontmatter && !sources.some(source => identity(source) === key ||
+      verifiedSourceKeys.includes(urlImportDedupeKey(source)))) return;
+    const priority=sources.some(source=>identity(source)===key&&urlImportDedupeKey(source)!==key)?1:0;
     if(found.has(key)&&rank[found.get(key).zone]===rank[zone]&&(aliasPriority.get(key)||0)>=priority)return;
     found.set(key, { path: path.resolve(file), sha256: digest(data), zone,canonical_url:key, ...extra });
     aliasPriority.set(key,priority);
@@ -135,7 +138,7 @@ export async function findSourcePublications(root, urls) {
         await retain(item.item_url, file, { aggregate: true, source_block_key: shortKey });
     }
   }
-  for (const zone of LIBRARY_ZONES) {
+  for (const zone of zones) {
     const queue = [path.join(root, zone)];
     while (queue.length) {
       const directory = queue.pop();
@@ -162,7 +165,8 @@ export async function findSourcePublications(root, urls) {
     const states=await parallelProbes(entries.filter(entry=>entry.isFile()&&entry.name.endsWith('.browser-ir.json')).map(entry=>path.join(directory,entry.name)),file=>cachedDocumentProbe(file,true));
     for (const state of states) {
       const metadata = state?.browser?.sourceMetadata || {};
-      const aliases = [state?.document?.sourceUrl,metadata.source_url,metadata.canonical_url].filter(url=>url && wanted.has(urlImportDedupeKey(url)) && !found.has(urlImportDedupeKey(url)));
+      const sourceKeys = [state?.document?.sourceUrl,metadata.source_url,metadata.canonical_url].filter(Boolean).map(urlImportDedupeKey);
+      const aliases = [state?.document?.sourceUrl,metadata.source_url,metadata.canonical_url].filter(url=>url && wanted.has(identity(url)) && !found.has(identity(url)));
       if (!aliases.length) continue;
       const candidates = readingDocumentPathCandidates({ workflowRoot:root, readingRoot:path.join(root,'阅读区'), storedDocumentPath:state.document?.path });
       for (const file of candidates) {
@@ -170,13 +174,13 @@ export async function findSourcePublications(root, urls) {
         const text = await fs.readFile(file,'utf8').catch(error => { if(error.code==='ENOENT')return '';throw error; });
         // A sidecar alone cannot turn a missing, failed or unrelated file into a publication.
         const identities = sourceUrls(text).map(urlImportDedupeKey);
-        if (!identities.some(key=>[metadata.source_url,metadata.canonical_url,state.document?.sourceUrl].filter(Boolean).map(urlImportDedupeKey).includes(key))) continue;
-        for (const alias of aliases) await retain(alias,file);
+        if (!identities.some(key=>sourceKeys.includes(key))) continue;
+        for (const alias of aliases) await retain(alias,file,{},sourceKeys);
       }
       // Source identity still locates an archived/moved file after a legacy path expires.
       for (const source of [metadata.source_url,metadata.canonical_url,state.document?.sourceUrl].filter(Boolean))
         for (const file of sourceLocations.get(urlImportDedupeKey(source)) || [])
-          for (const alias of aliases) await retain(alias,file);
+          for (const alias of aliases) await retain(alias,file,{},sourceKeys);
     }
   }
   return new Map(urls.filter(Boolean).flatMap(url=>{const value=found.get(identity(url));return value?[[urlImportDedupeKey(url),value]]:[];}));

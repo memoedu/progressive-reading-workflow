@@ -24,6 +24,7 @@ repository. Do not change its visibility as part of routine maintenance.
   Portable path overrides must not silently move an existing installation.
 - Use the existing shared import, preprocessing and publication interfaces.
 - Source taxonomy may exist only beside archive entries or in public tag indexes. Verify all memberships before treating exclusive flat tags as categories; preserve overlapping tags and reuse existing bodies when repairing folders. See `docs/WEB_IMPORT_PAGE.md`.
+- When updating directories for previously imported sites, use the source directory workflow in `docs/DEVELOPMENT.md`. Preserve author order, hierarchy and overlapping memberships. Resolve local articles from on-disk source URLs and verified aliases, use Obsidian new-tab links for local targets, and keep unmatched source links on the web. Label inferred topics and preserve reader-edited indexes, bodies and reading state. Commit and sync reusable code and rules through the usual PR workflow. Keep actual site plans and reading materials local.
 - Use isolated synthetic fixtures for tests. Do not import into the real reading
   library, change scheduled tasks or write to RemNote as a side effect of tests.
 - Run `npm test` for changes to shared logic. Browser/import changes also need
