@@ -290,6 +290,7 @@
       "type": "object",
       "properties": {
         "reading_markdown": { "type": ["string", "null"] },
+        "reading_title": { "type": "string", "minLength": 1 },
         "quarantine_markdown": { "type": ["string", "null"] },
         "target_zone": { "enum": ["local-ir-reading", "preprocess-review", "translation-quarantine"] },
         "semantic": { "anyOf": [{ "$ref": "#/$defs/semantic" }, { "type": "null" }] },

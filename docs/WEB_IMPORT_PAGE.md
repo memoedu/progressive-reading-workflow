@@ -59,3 +59,6 @@ RSS 阅读页地址与正文页地址不同，需要由原文提取证据建立�
 `npm test` 包含独立站点的编码正文、陈旧站点地图、目录总数、私密排除、失败恢复、归档文章复用和新表单端到端测试。链接与规则检查使用 `npm run web-import:test`、`npm run web-import:e2e`、`npm run import-rules:test`、`npm run import-rules:e2e`。
 
 已授权的真实站点可使用 `node scripts/canary-site-import.mjs --url https://example.com --mode original_text --output D:/Artifacts/site-canary.json` 验收。该命令加载实际 `/imports` 页面并操作同一前端表单控制器，不另建导入通道；后台发现由真实 Codex 完成。
+## 整站正文链接
+
+整站导入写入目录前，使用阅读区文件记录的来源 URL 与已核验的别名匹配正文链接。找到目标时，标准处理的阅读正文链接指向本地文件。原文直接入库在正文后附上命中的本地文件链接，保留原文链接。英文原文附录保留网页链接。
