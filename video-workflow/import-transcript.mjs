@@ -144,6 +144,9 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
   const requestMetadata = { ...metadata };
   delete requestMetadata.files;
   delete requestMetadata.subtitle_file;
+  // Historical video sources can carry an empty language when the video API
+  // supplied none. The standard workflow classifies the language if omitted.
+  if (typeof requestMetadata.language === 'string' && requestMetadata.language.trim().length < 2) delete requestMetadata.language;
   const slug = path.basename(publishPath, '.md');
   const bookMarkdown = files.includes('book.md') ? await fs.readFile(path.join(inputDir,'book.md'),'utf8') : '';
   // Attach source visuals before full-text editing, while the caption offsets
@@ -202,8 +205,12 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
   let spokenQuality = null;
   const sharedRefinement = run.result.receipt.body_refinement;
   if (!producer && !refinement && !sharedRefinement) {
-    const spokenResult = JSON.parse(await fs.readFile(path.join(outputDir, 'preprocess/stages/spoken_to_written/result.json'), 'utf8'));
-    spokenQuality = spokenQualityFromReceipt(spokenResult.receipt);
+    spokenQuality = spokenQualityFromReceipt(run.result.receipt);
+    if (!spokenQuality) {
+      const stage = await fs.readFile(path.join(outputDir, 'preprocess/stages/spoken_to_written/result.json'), 'utf8')
+        .catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      spokenQuality = stage ? spokenQualityFromReceipt(JSON.parse(stage).receipt) : null;
+    }
     if (!spokenQuality?.chunks?.length || spokenQuality.chunks.some(chunk => chunk.status !== 'passed'
         || chunk.attempts.at(-1)?.review?.verdict !== 'pass'
         || chunk.attempts.at(-1)?.review?.issues?.length !== 0)) throw new Error('spoken_quality_review_not_passed');

@@ -203,10 +203,12 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
     const integrity = subtitleIntegrity(segments, paragraphs, info.duration, raw);
     const markdown = paragraphs.map(item => item.text).join('\n\n');
     const capturedAt = new Date().toISOString();
+    const language = typeof track.language === 'string' ? track.language.trim() : '';
     const metadata = { source_url: identity.url, canonical_url: identity.url, source_platform: 'YouTube',
       source_type: 'youtube_video_transcript', source_id: identity.id, title: info.title || identity.id,
       author: info.channel || info.uploader || '', duration: Number(info.duration || 0),
-      language: track.language, subtitle_language: track.language, subtitle_kind: track.kind,
+      ...(language.length >= 2 && language.length <= 32 ? {language,subtitle_language:language} : {}),
+      subtitle_kind: track.kind,
       input_form: 'spoken_transcript', source_is_original: true,
       capture_agent: asr ? 'global_audio_transcription' : 'yt_dlp_subtitles',
       asr_used:Boolean(asr),...(asr ? {asr_route:asr.route,audio_sha256:asr.audio_sha256} : {}),
@@ -217,7 +219,7 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
     await fs.writeFile(path.join(outputDir, 'caption-map.json'), JSON.stringify({ segments, paragraphs, integrity }, null, 2) + '\n');
     await onProgress({ stage: 'youtube_standard_preprocess', video_id: identity.id, ...integrity });
     return { requestedUrl, finalUrl: identity.url, redirectChain: [], segments,
-      fetchReceipt: { workflow_version: YOUTUBE_SUBTITLE_WORKFLOW_VERSION, subtitle_language: track.language,
+      fetchReceipt: { workflow_version: YOUTUBE_SUBTITLE_WORKFLOW_VERSION, subtitle_language: metadata.subtitle_language ?? null,
         subtitle_kind: track.kind, subtitle_sha256: metadata.subtitle_sha256, content_integrity: integrity,
         raw_artifact_dir: outputDir, chrome_cookie_snapshot_used: authenticated, browser_tab_created: false,
         acquisition_mode: authenticated ? 'chrome_live_snapshot' : 'public_subtitles',
