@@ -57,6 +57,23 @@ test('upstream JSON adapter keeps Markdown-native Mermaid and LaTeX as source te
   assert.ok(markdown.includes('$x^2+y^2=1$'));
 });
 
+test('video source with an unknown language stays in standard spoken refinement', async () => {
+  const root = await fs.mkdtemp('D:/Artifacts/ProgressiveReading/video-unknown-language-');
+  const inputDir = path.join(root,'source');
+  await fs.mkdir(inputDir);
+  await fs.writeFile(path.join(inputDir,'source.json'),JSON.stringify({
+    source_url:'https://example.org/unlabelled-video',title:'无语言标签的访谈',language:''
+  }));
+  await fs.writeFile(path.join(inputDir,'transcript.txt'),'[00:00:00] 展览从下午两点开始，入场后先领取材料。');
+  const producer = new SyntheticProducer();
+  const receipt = await importTranscript({inputDir,outputDir:path.join(root,'audit'),
+    publishPath:path.join(root,'reading','无语言标签的访谈.md'),producer,
+    processingOptions:{content_profile:'natural_language',include_reading_guide:false}});
+  assert.equal(producer.bodyCalls.length,1);
+  assert.equal(producer.bodyCalls[0].mode,'spoken_to_written');
+  assert.equal(receipt.workflow_route.source_language.value,'zh');
+});
+
 for (const mode of ['spoken_to_written','strong_structuring']) test(`companion book media survives ${mode} publication without extra calls`, async () => {
   const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/book-media-canary-');
   const input=path.join(root,'source');

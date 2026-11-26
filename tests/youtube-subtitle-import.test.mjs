@@ -34,7 +34,7 @@ test('a video without captions enters the same intake with verified audio and ti
     protectDirectory:()=>fs.mkdir(authRoot,{recursive:true})};
   const audio = Buffer.from('fixture audio'), stages = [];
   const settings = {artifactRoot:root,liveSnapshot,onProgress:event=>stages.push(event.stage),runYtDlp:async args=>{
-    if (args.includes('--dump-single-json')) return JSON.stringify({...info,subtitles:{},language:'zh'});
+    if (args.includes('--dump-single-json')) return JSON.stringify({...info,subtitles:{},language:''});
     assert.equal(args.at(-1),url);
     assert.equal(args[args.indexOf('--format')+1],'bestaudio');
     assert.ok(args.includes('--extract-audio'));
@@ -53,6 +53,8 @@ test('a video without captions enters the same intake with verified audio and ti
   assert.equal(result.segments[0].start,'00:00:01.250');
   assert.equal(result.fetchReceipt.asr_used,true);
   assert.equal(result.draft.sourceMetadata.subtitle_kind,'audio_transcription');
+  assert.equal(Object.hasOwn(result.draft.sourceMetadata,'language'),false);
+  assert.equal(result.fetchReceipt.subtitle_language,null);
   assert.equal(result.fetchReceipt.content_integrity.last_caption_seconds,149);
   await assert.rejects(fetchYoutubeSubtitleDraft(url,{...settings,
     transcribe:async()=>({utterances:utterances.slice(0,1),route:'fixture'})}),/timeline_incomplete/u);
