@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createSharedAccount, createSharedLibraryServer } from '../subscription-workflow/shared-library-service.mjs';
 import { createSharedGitHub } from '../subscription-workflow/shared-library-github.mjs';
-import { createPublicRssSources, verifyPublicReadingSource } from '../subscription-workflow/shared-library-sources.mjs';
+import { createPublicRssSources, verifyPublicReadingSource, verifyPublicYoutubeListing } from '../subscription-workflow/shared-library-sources.mjs';
 import { syncFeedDocument } from '../rss-source/core.mjs';
 import { downloadSharedReading, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedReadingFile, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
 import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedOriginalRevisionPath, sharedReadingPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
@@ -15,6 +15,65 @@ const commit = '1'.repeat(40);
 const markdown = '# Public fixture\n\n' + 'An independently sourced paragraph. '.repeat(10);
 const record = { schema: sharedSchema, title: 'Public fixture', url: existingUrl,
   original: { path: 'Test folder/Original.md', sha256: sharedDigest(markdown) } };
+
+test('YouTube source verification requires an exact video in the anonymous author channel listing', async () => {
+  const id = 'aB_c-234567';
+  const url = 'https://www.youtube.com/watch?v=' + id;
+  assert.equal(sharedArticleUrl('https://youtu.be/' + id + '?si=fixture'), url);
+  const title = 'A public video in the fixture';
+  const fetchListing = videoId => async (target, options) => {
+    const request = new URL(target);
+    assert.equal(request.origin, 'https://www.youtube.com');
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.redirect, 'error');
+    if (request.pathname === '/oembed') {
+      assert.equal(request.searchParams.get('url'), url);
+      return Response.json({ title, author_url:'https://www.youtube.com/@publisher' });
+    }
+    assert.equal(request.pathname, '/@publisher/search');
+    assert.equal(request.searchParams.get('query'), title);
+    return new Response('<script>var ytInitialData = ' +
+      JSON.stringify({ reflectedText:id, result:{ videoRenderer:{ videoId } } }) + ';</script>');
+  };
+  assert.deepEqual(await verifyPublicYoutubeListing(url, fetchListing(id)), {
+    type:'youtube_public_channel_listing', video_id:id, title
+  });
+  assert.equal(await verifyPublicYoutubeListing(url, fetchListing('other-video')), null);
+});
+
+test('only the designated publisher can attest to an exact YouTube video and source digest', async t => {
+  const password = 'isolated-fixture-password';
+  const owner = await createSharedAccount(password);
+  let writes = 0;
+  const server = createSharedLibraryServer({
+    config:{ accounts:{ plain:owner, trusted:{ ...owner, trusted_public_source_publisher:true } }, gitleaks:'fixture' },
+    verifyReadingSource: async () => null,
+    scan: async () => true,
+    github:{ ready:true, lookup:async () => ({commit, record:null}), publishReading:async input => {
+      writes++;
+      assert.equal(input.original, markdown);
+      return {status:'available', commit, record};
+    } }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const endpoint = 'http://127.0.0.1:' + server.address().port + '/progressive-reading-sync/';
+  const post = (action, body, token) => fetch(endpoint + action, {
+    method:'POST', headers:{'content-type':'application/json', ...(token ? {authorization:'Bearer '+token} : {})},
+    body:JSON.stringify(body)
+  }).then(response => response.json());
+  const plain = (await post('session', {account:'plain',password})).token;
+  const trusted = (await post('session', {account:'trusted',password})).token;
+  const videoId = 'aB_c-234567';
+  const url = 'https://www.youtube.com/watch?v=' + videoId;
+  const attestation = {type:'youtube_public_channel_listing',video_id:videoId,title:'Public fixture',original_sha256:sharedDigest(markdown)};
+  const submit = (token, proof) => post('publication', {url, original:markdown, public_source_attestation:proof}, token);
+  assert.equal((await submit(plain, attestation)).reason, 'source_not_publicly_verified');
+  assert.equal((await submit(trusted, {...attestation, video_id:'other-video'})).reason, 'source_not_publicly_verified');
+  assert.equal((await submit(trusted, {...attestation, original_sha256:'0'.repeat(64)})).reason, 'source_not_publicly_verified');
+  assert.equal((await submit(trusted, attestation)).status, 'available');
+  assert.equal(writes, 1);
+});
 
 test('registered public web sources are independently verified without credentials or cross-URL redirects', async () => {
   const url = 'https://web.example/articles/verified';

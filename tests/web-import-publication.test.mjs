@@ -13,7 +13,7 @@ const html = pathname => '<html><head><meta charset="utf-8"><title>Publication '
   '</title></head><body><article><h1>Fixture article</h1><p>' +
   'This is a complete fixture describing publication order and how archive bytes are verified. '.repeat(25) + '</p></article></body></html>';
 
-test('URL imports read back public originals before publication across reader routes and persist retry receipts', async t => {
+test('URL imports save locally, verify GitHub readback across reader routes and persist retry receipts', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'web-import-shared-'));
   const endpoint = 'https://sync.fixture.example/progressive-reading-sync/';
   const host = 'https://www.readthesequences.com';
@@ -46,7 +46,7 @@ test('URL imports read back public originals before publication across reader ro
         const blob=blobs.get(decodeURI(url.pathname).split('/').at(-1));
         assert.ok(blob);
         if (firstReadback) {
-          assert.equal((await fs.readdir(path.join(root,'阅读区'),{recursive:true})).some(name => name.endsWith('.md')),false);
+          assert.equal((await fs.readdir(path.join(root,'阅读区'),{recursive:true})).some(name => name.endsWith('.md')),true);
           firstReadback = false;
         }
         await fs.writeFile(path.join(root,'readback-completed'),commit);

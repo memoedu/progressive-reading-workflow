@@ -13,7 +13,7 @@ export async function synchronizeReadingPublication(root, {
   publicCapture = false,
   privateContent = false,
   markdown,
-  qualityStatus,
+  defer = false,
   kind,
   processingOptions,
   versions,
@@ -56,16 +56,14 @@ export async function synchronizeReadingPublication(root, {
       if (!source?.markdown) return local('source_not_publicly_verified');
       if (source.markdown.trim() !== original.trim()) return local('public_source_body_mismatch');
     }
-    const request = {
-      url: canonical, kind, original, processingOptions,
-      markdown: qualityStatus === 'ready' ? markdown : undefined
-    };
+    const request = { url: canonical, kind, original, processingOptions, markdown };
+    if (defer) return { shared_reading: await queueRetry(root, request, { status:'queued' }) };
     let sharedReading = await syncReading(root, request);
     if (sharedReading.status === 'retry_wait') {
       sharedReading = await queueRetry(root, request, sharedReading)
         .catch(() => ({ ...sharedReading, retry_error: 'shared_retry_persistence_failed' }));
     }
-    const variants = archived && qualityStatus === 'ready' ? versions ?? (standardResult ? generatedSharedVersions(standardResult) : []) : [];
+    const variants = archived && markdown !== undefined ? versions ?? (standardResult ? generatedSharedVersions(standardResult) : []) : [];
     const sharedVersions = variants.length ? await syncVersions(root, canonical, originalHash, variants) : [];
     return { shared_reading: sharedReading, ...(sharedVersions.length ? { shared_versions: sharedVersions } : {}) };
   } catch {

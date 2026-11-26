@@ -30,11 +30,26 @@ test('publication depends on source evidence and verified output, independently 
   assert.deepEqual(calls[0], calls[1]);
   assert.deepEqual(calls[1], calls[2]);
   await synchronizeReadingPublication(root, { ...input, qualityStatus: 'warning' }, dependencies);
-  assert.equal(calls[3].markdown, undefined);
+  assert.equal(calls[3].markdown, markdown);
   assert.equal(calls[3].original, original);
   const reused = await synchronizeReadingPublication(root, { reused: { commit: 'f'.repeat(40), original:{sha256:'a'.repeat(64)} } }, dependencies);
   assert.equal(reused.shared_reading.reused, true);
   assert.equal(calls.length, 4);
+});
+
+test('the original can queue before processing has produced a reading edition', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'reading-original-'));
+  t.after(() => fs.rm(temp, { recursive:true, force:true }));
+  const input = { url, original, publicCapture:true, defer:true };
+  const queued = (await synchronizeReadingPublication(temp, input, { settings })).shared_reading;
+  assert.equal(queued.status, 'queued');
+  const recovered = await retryReadingPublications(temp, { settings, syncReading:async (_root, request) => {
+    assert.equal(request.original, original);
+    assert.equal(request.markdown, undefined);
+    return { status:'available' };
+  } });
+  assert.equal(recovered.status, 'available');
+  assert.equal(recovered.sync_id, queued.sync_id);
 });
 
 test('personal material and unverified archive claims never send content for publication', async () => {

@@ -181,7 +181,7 @@ export async function addReadingGuide(paths,item,options = {}) {
     url:item.item_url, original:source.material?.markdown, archivedOriginalSha256:source.source_metadata?.shared_original_sha256,
     privateContent:Boolean(source.user_instruction || originalPublication?.markdown?.sha256 !== digest(before) ||
       digest(await fs.readFile(file)) !== digest(after)),
-    markdown:after, qualityStatus:'ready', standardResult:run.result, processingOptions:readingRequest(source,item,true).processing_options
+    markdown:after, standardResult:run.result, processingOptions:readingRequest(source,item,true).processing_options
   }));
 }
 

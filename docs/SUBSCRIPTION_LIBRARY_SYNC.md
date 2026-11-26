@@ -1,6 +1,6 @@
 # 订阅共享资料库
 
-链接导入、RSS 自动导入、RSS 日报周报和知乎文本在获取正文前按规范化来源地址查公开资料库。命中时从固定 Git 提交下载并核对 SHA-256。新增公开 RSS 原稿由同步服务在当前公开 feed 中确认后独立读取。公众号和已登记的公开网页须通过匿名正文复查。B 站标准纯文稿须关联可匿名播放的精确分 P。
+链接导入、RSS 自动导入、RSS 日报周报和知乎文本在获取正文前按规范化来源地址查公开资料库。命中时从固定 Git 提交下载并核对 SHA-256。新增公开 RSS 原稿由同步服务在当前公开 feed 中确认后独立读取。公众号和已登记的公开网页须通过匿名正文复查。B 站标准纯文稿须关联可匿名播放的精确分 P。YouTube 纯文稿由本机匿名核对作者频道搜索结果中的精确视频 ID。
 
 订阅页的「共享资料库」默认开启。关闭后，新材料走本机导入，已有的公开原稿备份队列暂停写入。已登录的订阅用户由服务器代写主分支，匿名投稿由同一服务器代提 PR。已发表材料可以直接匿名复用。待合并的订阅条目有 PR 链接，队列会继续检查主分支。手工链接导入也会尝试同步公开 RSS 目录内的条目，投稿待审时可继续本机导入并保留 PR 回执。
 
@@ -10,7 +10,7 @@
 
 浏览器、Obsidian、导入管理、整站、RSS 自动入库共用链接队列。普通链接、整页快照、订阅阅读、视频纯文字幕和标准 Markdown 发布共用 GitHub 同步步骤。新增入口沿用阅读稿发布器，提交来源和产物即可。同步由来源证据、加工选项和校验结果决定。
 
-首次发布时，合规原稿和已校验的加工稿先从 GitHub 固定提交回读，再进入阅读区。原文导入和有质量警告的加工稿只同步公开原稿。登录来源、私人加工要求、个人批注、已有文档修订和须携带本地素材的版本可在本机读到具体结果。已从公开库核验并复用的版本保留原提交回执。
+公开原稿在取得后就可提交同步。加工稿先保存到阅读区，随后以正式文件的 SHA-256 核对实际写入的 Markdown 并提交同步。导入入口、导入状态和质量警告不影响已生成产物的同步。原文导入只有原稿产物。同步以从 GitHub 固定提交回读并校验为完成。登录来源、私人加工要求、个人批注、已有文档修订和须携带本地素材的版本留在本机。已从公开库核验并复用的版本保留原提交回执。
 
 来源核验后遇到暂时写入失败，本机会保留一次可重试的发布记录并继续导入。现有后台任务按记录重试，复用原稿、成品和加工选项。原导入请求的查询会返回最新同步结果。命令行或批次可使用回执中的 `sync_id` 查询 `GET /api/import-center/shared-publications/:id`。
 
@@ -37,6 +37,8 @@ node subscription-workflow/cli.mjs sync-shared-material --sha256 '<原件哈希>
 独立同步进程在 127.0.0.1:43182 运行，经 HTTPS 路由访问。部署文件见 [systemd 单元](../subscription-workflow/deploy/shared-library.service) 和 [nginx 片段](../subscription-workflow/deploy/shared-library.nginx.conf)。源文件和依赖从已验证的 Git 提交构建。生产配置由 systemd LoadCredential 读取，路径为 /etc/progressive-reading-sync/config.json。
 
 服务器配置字段包括 `port`、`trust_proxy`、`gitleaks`、`accounts`、`session_secret`、`private_email_sha256` 和 `github`。`github` 包含 `appId`、`installationId`、`keyPath`。将 GitHub App 安装到公开资料库并授予 Contents 和 Pull requests 写权限。私钥通过 systemd 独立凭据提供。账号记录的 salt 和 hash 由 `createSharedAccount` 生成。移除或替换账号后，重启同步进程使对应会话失效。`trust_proxy` 只用于由 nginx 覆盖 X-Real-IP 的回环部署。
+
+无法直连 YouTube 的服务可对已授权执行匿名来源核验的本机发布账号设置 `trusted_public_source_publisher: true`。服务将账号提交的公开频道证据与规范化视频 ID、原稿 SHA-256 逐项匹配。该权限仅用于 YouTube 来源核验。
 
 将[来源配置示例](../config/shared-library-server-sources.example.json)的字段合并到服务器配置。`public_rss` 声明公开 feed、可接受的文章域名和分类目录。`public_materials` 的每条记录包含 `url`、`extension`、`sha256` 和 `bytes`，并可用 `article_url` 关联文章索引及加工版本。仅登记已验证的匿名原件下载地址，单件不超过 25 MiB。
 
