@@ -5,6 +5,8 @@ import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
 import {withCaptureCookies,VIDEO_PYTHON} from '../watch-illustrated.mjs';
+import {transcribeAudioFile,validateReceipt} from '../audio-transcription.mjs';
+export {validateReceipt} from '../audio-transcription.mjs';
 const require=createRequire(import.meta.url);
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const exists=file=>fs.stat(file).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e;});
@@ -23,13 +25,6 @@ function command(exe,args,{json=false}={}){
       try{resolve(json?JSON.parse(stdout.replace(/^\uFEFF/u,'')):null);}catch{reject(Error('audio_source_invalid_receipt'));}
     });
   });
-}
-
-export function validateReceipt(raw,audio,provider){
-  if(raw.schema_version!==1||raw.source_sha256!==audio.sha256||!raw.route||!raw.utterances?.length)
-    throw Error('audio_transcription_source_mismatch');
-  if((['bailian','tingwu'].includes(provider)||raw.route==='standard'||raw.cleanup) &&
-    (raw.cleanup?.deleted!==true||raw.cleanup?.prefix_empty!==true))throw Error('audio_cloud_cleanup_unverified');
 }
 
 export async function prepareAudioSource(item,output){
@@ -59,12 +54,7 @@ export async function prepareAudioSource(item,output){
       const doctor=await command('python',[cli,'doctor','--provider',provider],{json:true});
       if(doctor.providers?.[provider]?.callable!==true)throw Error('configured_asr_provider_unavailable');
       // A complete raw result survives an interruption before saving this adapter's receipt.
-      if(!await exists(rawFile)){
-        const receipt=await command('python',[cli,'transcribe',audio.path,'--provider',provider,'--route','auto','--output-dir',asr],{json:true});
-        if(receipt.ok!==true||receipt.source_sha256!==audio.sha256||receipt.provider!==provider||path.resolve(receipt.output_dir||'')!==asr)
-          throw Error('audio_asr_receipt_mismatch');
-      }
-      const raw=await read(rawFile);validateReceipt(raw,audio,provider);
+      const raw=await transcribeAudioFile(audio,asr,{provider});
       state={provider,audio_sha256:audio.sha256,raw_sha256:hash(await fs.readFile(rawFile)),cleanup:raw.cleanup||null};
       await exact(stateFile,JSON.stringify(state,null,2)+'\n');
     }

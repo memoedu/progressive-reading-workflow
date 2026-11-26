@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fetchYoutubeSubtitleDraft, selectSubtitleTrack, subtitleIntegrity, youtubeCookieFile } from '../scripts/youtube-subtitle-import.mjs';
 import { youtubeVideoIdentity, urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { parseVtt, groupTranscriptSegments } from '../scripts/import-youtube-subtitle-canary.mjs';
@@ -20,8 +21,42 @@ test('video aliases share one identity; playlists and lookalike hosts are reject
 test('track selection prefers manual captions and excludes automatic translations', () => {
   assert.equal(selectSubtitleTrack({ ...info, automatic_captions: { en: formats } }).kind, 'manual');
   assert.equal(selectSubtitleTrack({ automatic_captions: { en: formats } }).kind, 'automatic');
-  assert.throws(() => selectSubtitleTrack({ automatic_captions: { zh: [{ ext: 'vtt', url: 'https://www.youtube.com/api/timedtext?tlang=zh' }] } }), /asr_disabled/u);
-  assert.throws(() => selectSubtitleTrack({}), /asr_disabled/u);
+  assert.equal(selectSubtitleTrack({ automatic_captions: { zh: [{ ext: 'vtt', url: 'https://www.youtube.com/api/timedtext?tlang=zh' }] } }), null);
+  assert.equal(selectSubtitleTrack({}), null);
+});
+
+test('a video without captions enters the same intake with verified audio and timestamps', async () => {
+  const base = 'D:/Artifacts/ProgressiveReading/youtube-restore/tests';
+  await fs.mkdir(base,{recursive:true});
+  const root = await fs.mkdtemp(path.join(base,'asr-'));
+  const authRoot = path.join(root,'auth');
+  const liveSnapshot = {dataRoot:authRoot,jar:{cookies:[]},headerForUrl:()=>null,
+    protectDirectory:()=>fs.mkdir(authRoot,{recursive:true})};
+  const audio = Buffer.from('fixture audio'), stages = [];
+  const settings = {artifactRoot:root,liveSnapshot,onProgress:event=>stages.push(event.stage),runYtDlp:async args=>{
+    if (args.includes('--dump-single-json')) return JSON.stringify({...info,subtitles:{},language:'zh'});
+    assert.equal(args.at(-1),url);
+    assert.equal(args[args.indexOf('--format')+1],'bestaudio');
+    assert.ok(args.includes('--extract-audio'));
+    assert.ok(!args.includes('--skip-download') && !args.includes('--write-subs'));
+    await fs.writeFile(path.join(root,id,`${id}.m4a`),audio);
+    return `${id}|150\n`;
+  }};
+  const utterances = [{start_ms:1250,end_ms:60000,text:'合成字幕验证逐句来源。'.repeat(9)},
+    {start_ms:110000,end_ms:149000,text:'时间轴覆盖视频尾部。'.repeat(7)}];
+  const result = await fetchYoutubeSubtitleDraft(url,{...settings,transcribe:async (input,output)=>{
+    assert.equal(input.sha256,createHash('sha256').update(audio).digest('hex'));
+    assert.equal(output,path.join(root,id,'asr'));
+    return {utterances,route:'fixture'};
+  }});
+  assert.deepEqual(stages,['youtube_metadata','youtube_audio','youtube_transcription','youtube_standard_preprocess']);
+  assert.equal(result.segments[0].start,'00:00:01.250');
+  assert.equal(result.fetchReceipt.asr_used,true);
+  assert.equal(result.draft.sourceMetadata.subtitle_kind,'audio_transcription');
+  assert.equal(result.fetchReceipt.content_integrity.last_caption_seconds,149);
+  await assert.rejects(fetchYoutubeSubtitleDraft(url,{...settings,
+    transcribe:async()=>({utterances:utterances.slice(0,1),route:'fixture'})}),/timeline_incomplete/u);
+  assert.deepEqual(await fs.readdir(authRoot),[]);
 });
 test('existing VTT parser and grouping preserve all parsed text and reject truncated tracks', () => {
   const segments = parseVtt(vtt), paragraphs = groupTranscriptSegments(segments);

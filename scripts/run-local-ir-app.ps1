@@ -11,6 +11,9 @@ $env:PROGRESSIVE_READING_COOKIE_SNAPSHOT_PATH = ''
 $env:PROGRESSIVE_READING_COOKIE_DATA_ROOT = 'D:\AppData\ProgressiveReading\BrowserAuth'
 $env:PROGRESSIVE_READING_URL_COOKIE_MAP_JSON = ''
 $env:PROGRESSIVE_READING_BROWSER_PREPROCESS_TEST_PRODUCER = ''
+if (-not $env:PROGRESSIVE_READING_YTDLP) {
+    $env:PROGRESSIVE_READING_YTDLP = [Environment]::GetEnvironmentVariable('PROGRESSIVE_READING_YTDLP', 'User')
+}
 $env:AI_PRODUCER_PROVIDER = 'codex_exec'
 $env:NODE_ENV = 'production'
 Set-Location -LiteralPath $projectRoot
