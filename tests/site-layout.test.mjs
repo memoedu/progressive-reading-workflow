@@ -76,6 +76,14 @@ test('absolute reading links keep their Markdown titles and literal path charact
   assert.equal(relocatedMarkdown(input,file,file,mapping,root),output);
 });
 
+test('relative reading links decode escaped filename punctuation before finding a renamed article',()=>{
+  const root=path.resolve('reading-fixture'),file=path.join(root,'目录.md');
+  const mapping=new Map([[path.join(root,'Review, by A & B.md'),path.join(root,'新题｜Review.md')]]);
+  const input='[Article](<Review%2C%20by%20A%20%26%20B.md#Results> "Source")';
+  const output='[Article](<%E6%96%B0%E9%A2%98%EF%BD%9CReview.md#Results> "Source")';
+  assert.equal(relocatedMarkdown(input,file,file,mapping,root),output);
+});
+
 test('generated index ownership survives checked relocation and still protects handwritten edits',async()=>{
   const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/index-owner-'),settings={id:'owned',name:'Independent',url:'https://index-owner.test',destination:'整站/Independent'},id=runId('owned'),file=path.join(root,'阅读区',settings.destination,'目录.md'),url='https://index-owner.test/post';
   await fs.mkdir(path.dirname(file),{recursive:true});const relocated='# Old generated index after relocation\n';await fs.writeFile(file,relocated);

@@ -238,7 +238,7 @@ export function relocatedMarkdown(text, source, target, mapping = new Map(), wor
       const pathname = separator < 0 ? raw : raw.slice(0, separator);
       const suffix = separator < 0 ? "" : raw.slice(separator);
       let decoded;
-      try { decoded = decodeURI(pathname); } catch { return match; }
+      try { decoded = decodeURIComponent(pathname); } catch { return match; }
       const absolute = path.resolve(path.dirname(source),decoded);
       const mapped=mapping.get(absolute)||absolute;
       if(source===target&&mapped===absolute)return match;
