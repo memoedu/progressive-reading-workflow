@@ -61,7 +61,7 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
       const digest = value => createHash('sha256').update(value).digest('hex');
       const hash = digest(original);
       blobs.set(hash+'.md',original);
-      assert.equal(typeof reading,source.endsWith('/snapshot') ? 'string' : 'undefined');
+      if (!source.endsWith('/snapshot')) assert.equal(reading,undefined);
       const readingFiles = reading === undefined ? [] : [{
         original_sha256:hash,processing_sha256,options_sha256,sha256:digest(reading),
         path:'加工版本/'+digest(source).slice(0,24)+'/reading-'+digest(reading)+'.md'
@@ -93,7 +93,7 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
   child.stderr.on('data',chunk=>{stderr+=chunk.toString();});
   const base = 'http://127.0.0.1:'+port;
   async function poll(query, complete) {
-    for (let j=0; j<180; j++) {
+    for (let j=0; j<360; j++) {
       const result = await fetch(base+query).then(response=>response.json()).catch(()=>null);
       if (result && complete(result)) return result;
       if (child.exitCode !== null) break;
@@ -136,7 +136,13 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
   assert.equal(snapshotResult.receipt?.processing_mode,'standard_preprocess',JSON.stringify(snapshotResult.errors));
   assert.equal(snapshotResult.receipt.shared_reading.status,'available');
   assert.ok(snapshotResult.receipt.shared_reading.reading.sha256);
+  assert.ok(snapshotResult.receipt.shared_original.sync_id);
   const recovered = await poll('/api/browser-import/requests/'+retryRequest,
     value=>value.results[0]?.receipt?.shared_reading?.status==='available');
   assert.equal(recovered.results[0].receipt.shared_reading.commit,'1'.repeat(40));
+  const originalSynced = await poll('/api/browser-import/requests/'+snapshot.request_id,
+    value=>value.results[0]?.receipt?.shared_original?.status==='available');
+  assert.equal(originalSynced.results[0].receipt.shared_original.original.sha256,
+    snapshotResult.receipt.shared_reading.original.sha256);
+  assert.equal(originalSynced.results[0].receipt.shared_original.reading,undefined);
 });
