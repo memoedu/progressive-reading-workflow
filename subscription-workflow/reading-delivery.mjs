@@ -10,7 +10,8 @@ import { dataPath } from '../scripts/runtime-paths.mjs';
 import { auditVisibleReadingAnchors } from '../standard-preprocessing/lib/core.mjs';
 import { readingDestination } from './reading-options.mjs';
 import { ExternalProducer, loadBatchProducerConfig } from '../standard-preprocessing/lib/producer.mjs';
-import { downloadSharedReading, generatedSharedVersions, syncSharedReadingFile, syncSharedVersions } from './shared-library-client.mjs';
+import { downloadSharedReading } from './shared-library-client.mjs';
+import { synchronizeReadingPublication } from './reading-publication.mjs';
 import { findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
 
 export async function subscriptionProducer(config = null) {
@@ -100,8 +101,9 @@ export async function deliverArticle(paths, item, name, options = {}) {
         const markdown = `---\nsource_url: ${JSON.stringify(item.item_url)}\nimport_method: shared_standard_reading\n---\n\n${shared.readingBytes.toString('utf8')}\n`;
         await fs.mkdir(path.dirname(target), { recursive:true });
         await fs.writeFile(target, markdown, { flag:'wx' });
+        const sharing = await synchronizeReadingPublication(paths.workflowRoot, { reused: shared });
         return { status:'published', path:target, sha256:digest(markdown), published_at:new Date().toISOString(), direct_reading:true,
-          shared_reading:{ status:'available', commit:shared.commit, original:shared.original, reading:shared.reading, reused:true } };
+          ...sharing };
       });
       if (item.reading_options.generate_guide) {
         if (item.publication.preserved_existing) await addReadingGuide(paths,item,options);
@@ -113,6 +115,8 @@ export async function deliverArticle(paths, item, name, options = {}) {
   const outputDir = path.join(paths.preprocessRoot,'direct-reading',item.material_id,digest(JSON.stringify(request)).slice(0,20));
   const runner = options.readingRunner || runPreprocessingRequest;
   const run = await runner(request,{outputDir,publishPath:target,assetSourceDir:item.source_package_path,cacheDir:readingCache,
+    publicationSource: { url:item.item_url, archivedOriginalSha256:shareable ? originalSha256 : undefined,
+      privateContent:Boolean(options.readingRunner) },
     ...(!options.readingRunner ? {producer:await subscriptionProducer()} : {}),
     onProgress:event=>options.onPreviewProgress?.({materialId:item.material_id,status:'processing',...event})});
   accepted(run);
@@ -121,15 +125,9 @@ export async function deliverArticle(paths, item, name, options = {}) {
     || digest(await fs.readFile(run.publication.markdown.path)) !== run.publication.markdown.sha256) throw new Error('reading_publication_verification_failed');
   item.publication = {status:'published',path:run.publication.markdown.path,sha256:run.publication.markdown.sha256,
     published_at:new Date().toISOString(),result_path:path.join(outputDir,'result.json'),
-    publication_path:path.join(outputDir,'publication.json'),direct_reading:true};
-  if (source.source_metadata?.shared_original_sha256 && !source.user_instruction && !run.publication.preserved_existing) {
-    item.publication.shared_versions = await syncSharedVersions(paths.workflowRoot, item.item_url,
-      source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
-  }
-  if (shareable && !run.publication.preserved_existing && !options.readingRunner) {
-    const { path:file, sha256 } = run.publication.markdown;
-    item.publication.shared_reading = await syncSharedReadingFile(paths.workflowRoot, { ...sharedRequest, original, file, sha256 });
-  }
+    publication_path:path.join(outputDir,'publication.json'),direct_reading:true,
+    ...(run.publication.shared_reading ? { shared_reading:run.publication.shared_reading } : {}),
+    ...(run.publication.shared_versions ? { shared_versions:run.publication.shared_versions } : {})};
   if (item.reading_options.generate_guide) item.reading_guide = {status:'ready',result_path:item.publication.result_path};
   return item.review_preview = {status:'ready',direct_reading:true,result_path:item.publication.result_path,
     source_request_sha256:item.preprocess_request_sha256};
@@ -179,15 +177,12 @@ export async function addReadingGuide(paths,item,options = {}) {
   item.reading_guide = {status:'ready',result_path:path.join(outputDir,'result.json'),body_preserved:true,added_anchors:anchored.added_anchors,anchor_audit:anchorAudit};
   item.publication.sha256 = digest(after);
   const originalPublication = item.publication.publication_path && await readJson(item.publication.publication_path);
-  if (source.source_metadata?.shared_original_sha256 && !source.user_instruction && originalPublication?.markdown?.sha256 === digest(before)) {
-    item.reading_guide.shared_versions = await syncSharedVersions(paths.workflowRoot, item.item_url,
-      source.source_metadata.shared_original_sha256, generatedSharedVersions(run.result));
-    const original = source.material?.markdown;
-    if (!options.guideRunner && typeof original === 'string' && digest(original) === source.source_metadata.shared_original_sha256) {
-      item.reading_guide.shared_reading = await syncSharedReadingFile(paths.workflowRoot, { url:item.item_url, original,
-        file, sha256:digest(after), processingOptions:readingRequest(source,item,true).processing_options });
-    }
-  }
+  if (!options.guideRunner) Object.assign(item.reading_guide, await synchronizeReadingPublication(paths.workflowRoot, {
+    url:item.item_url, original:source.material?.markdown, archivedOriginalSha256:source.source_metadata?.shared_original_sha256,
+    privateContent:Boolean(source.user_instruction || originalPublication?.markdown?.sha256 !== digest(before) ||
+      digest(await fs.readFile(file)) !== digest(after)),
+    markdown:after, qualityStatus:'ready', standardResult:run.result, processingOptions:readingRequest(source,item,true).processing_options
+  }));
 }
 
 export async function archiveArticle(paths,item,save) {

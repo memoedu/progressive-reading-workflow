@@ -648,7 +648,7 @@ export async function publishReadingArtifact(result, options = {}) {
         return publication;
       }
     }
-    return publishReadingArtifactUnlocked(result, options);
+    return publishReadingArtifactUnlocked(result, { ...options, libraryRoot: root, sourceUrl: url });
   });
 }
 
@@ -657,7 +657,11 @@ async function publishReadingArtifactUnlocked(result, {
   assetSourceDir = null,
   runDir = null,
   now = null,
-  expectedExistingSha256 = null
+  expectedExistingSha256 = null,
+  libraryRoot = null,
+  sourceUrl = null,
+  sourceRequest = null,
+  publicationSource = {}
 } = {}) {
   const { classifyStandardImportQuality } = await import("../scripts/standard-import-quality.mjs");
   const quality = classifyStandardImportQuality(result);
@@ -771,6 +775,23 @@ async function publishReadingArtifactUnlocked(result, {
     });
   }
 
+  let sharing = {};
+  if (libraryRoot && process.env.NODE_ENV !== 'test') {
+    const request = sourceRequest || (runDir && await fs.readFile(path.join(runDir, 'request.json'), 'utf8').then(JSON.parse).catch(() => null));
+    const { synchronizeReadingPublication } = await import('../subscription-workflow/reading-publication.mjs');
+    sharing = await synchronizeReadingPublication(libraryRoot, {
+      url: sourceUrl,
+      original: request?.material?.markdown,
+      archiveHintSha256: request?.source_metadata?.shared_original_sha256,
+      processingOptions: request?.processing_options,
+      ...publicationSource,
+      markdown: publishedMarkdown,
+      qualityStatus: quality.quality_status,
+      standardResult: result,
+      privateContent: Boolean(publicationSource.privateContent || guardedReplacement || String(request?.user_instruction || '').trim() ||
+        assetRecords.size)
+    });
+  }
   if (!existingMarkdownHash || (guardedReplacement && existingMarkdownHash !== publishedMarkdownHash)) {
     if (await existingFileHash(resolvedPublish) !== existingMarkdownHash) {
       throw new PreprocessInterfaceError("publish_source_changed", `source changed before replacement: ${resolvedPublish}`);
@@ -782,6 +803,7 @@ async function publishReadingArtifactUnlocked(result, {
     published_at: now || new Date().toISOString(),
     status: "published",
     quality_status: quality.quality_status,
+    ...sharing,
     warning_codes: quality.warning_codes,
     failed_validations: (result.receipt?.validations || []).filter(item => item.status === 'failed'),
     source_errors: result.errors || [],
@@ -811,7 +833,9 @@ async function writeAndPublishRun(request, result, options = {}) {
         publishPath: options.publishPath,
         assetSourceDir: options.assetSourceDir,
         runDir: written.output_dir,
-        now: options.now
+        now: options.now,
+        sourceRequest: request,
+        publicationSource: options.publicationSource
       })
     : null;
   return { ...written, publication };

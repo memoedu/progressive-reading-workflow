@@ -6,6 +6,7 @@ import { siteRunStatus,startSiteRun } from './tasks.mjs';
 import {resolveSourceRelation} from '../scripts/source-relations.mjs';
 import {candidatePage,updateCandidate} from './candidates.mjs';
 import {INTERACTIVE_IMPORT_SOURCES} from '../scripts/browser-import-broker.mjs';
+import { readingPublicationReceipt } from '../subscription-workflow/reading-publication-outbox.mjs';
 
 const assets=new Map([['/imports',['index.html','text/html']],['/imports/',['index.html','text/html']],['/imports/app.mjs',['app.mjs','text/javascript']],['/imports/style.css',['style.css','text/css']],['/import-candidates',['candidates.html','text/html']],['/import-candidates/',['candidates.html','text/html']],['/import-candidates/app.mjs',['candidates.mjs','text/javascript']]]);
 const send=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));};
@@ -28,6 +29,12 @@ export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJ
     }
     if(req.method==='GET'&&url.pathname==='/api/import-center/history'){
       send(res,200,{requests:await broker.listRequestSummaries({sources:INTERACTIVE_IMPORT_SOURCES}),legacy_jobs:legacyJobs()});return true;
+    }
+    const sharedPublication = /^\/api\/import-center\/shared-publications\/([a-f0-9]{64})$/u.exec(url.pathname);
+    if (req.method === 'GET' && sharedPublication) {
+      const receipt = await readingPublicationReceipt(root, sharedPublication[1]);
+      send(res, receipt ? 200 : 404, receipt || {error:'shared_publication_receipt_not_found'});
+      return true;
     }
     if(req.method==='GET'&&url.pathname==='/api/import-center/maintenance-failures'){
       const since=Date.parse(url.searchParams.get('since'));

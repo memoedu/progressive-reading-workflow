@@ -6,7 +6,8 @@ import { groupTranscriptSegments } from '../scripts/import-youtube-subtitle-cana
 import { preprocessNetworkMarkdown } from '../standard-preprocessing/integrations/network-import.mjs';
 import { publishReadingArtifact } from '../standard-preprocessing/index.mjs';
 import { libraryRootForPath, sourceIdentityUrl, findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
-import { downloadSharedReading, syncSharedReadingFile } from '../subscription-workflow/shared-library-client.mjs';
+import { downloadSharedReading } from '../subscription-workflow/shared-library-client.mjs';
+import { synchronizeReadingPublication } from '../subscription-workflow/reading-publication.mjs';
 import { sharedReadingSource } from '../subscription-workflow/shared-library.mjs';
 import { layoutInlineAttachments } from './attachment-layout.mjs';
 import { captionMediaSource, extractBookMedia, verifyBookMedia, imageEmbed } from './book-media.mjs';
@@ -168,9 +169,9 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
         return { status:'published', markdown:{ path:publishPath, sha256:hash(local) },
           assets:[{ published_path:asset, sha256:hash(raw) }] };
       });
+      const sharing = await synchronizeReadingPublication(libraryRoot, { reused:shared });
       const receipt = { status:'completed', processing_status:'idempotent_replay', quality_status:'ready', publication,
-        model:{ calls:0 }, attachments:inventory, attachments_verified:publication.assets.length,
-        shared_reading:{ status:'available', commit:shared.commit, original:shared.original, reading:shared.reading, reused:true } };
+        model:{ calls:0 }, attachments:inventory, attachments_verified:publication.assets.length, ...sharing };
       await writeExact(path.join(outputDir,'publication.json'),JSON.stringify(publication,null,2)+'\n');
       await writeExact(path.join(outputDir,'video-receipt.json'),JSON.stringify(receipt,null,2)+'\n');
       return receipt;
@@ -224,7 +225,8 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     if (hash(data) !== record.sha256) throw new Error(`source_changed_during_run:${record.path}`);
     await writeExact(path.join(attachmentRoot, publishedAssetRelative(record.path)), data);
   }
-  const publication = await publishReadingArtifact(result, { publishPath, runDir: outputDir });
+  const publication = await publishReadingArtifact(result, { publishPath, runDir: outputDir,
+    publicationSource:{...shareRequest, original:sourceMedia.markdown, publicCapture:Boolean(canShare), privateContent:!canShare} });
   if (publication.preserved_existing && path.resolve(publication.markdown.path) !== path.resolve(publishPath)) {
     const receipt={status:'completed',preserved_existing:true,quality_status:publication.quality_status,publication,model:run.result.receipt.model,attachments:[],attachments_verified:0};
     await fs.writeFile(path.join(outputDir,'video-receipt.json'),JSON.stringify(receipt,null,2)+'\n');
@@ -257,10 +259,7 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     refinement:refinement?.receipt || sharedRefinement || null,
     attachment_layout:layout.version,used_attachments:layout.used_attachments,attachment_placements:layout.placements,
     book_media:{...mediaReceipt,counts:mediaCounts,restoration_stage:'before_full_text_refinement',verified_after_publication:true} };
-  if (canShare && publication.quality_status === 'ready' && !publication.preserved_existing) {
-    receipt.shared_reading = await syncSharedReadingFile(libraryRoot, { ...shareRequest, original:sourceMedia.markdown,
-      file:publication.markdown.path, sha256:publication.markdown.sha256 });
-  }
+  if (publication.shared_reading) receipt.shared_reading = publication.shared_reading;
   await fs.writeFile(path.join(outputDir, 'video-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   return receipt;
 }
