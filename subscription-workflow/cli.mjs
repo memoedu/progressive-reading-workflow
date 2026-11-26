@@ -50,7 +50,8 @@ export async function main(argv=process.argv.slice(2)) {
   if(command==='import-video') {
     if (!(await loadConfig(root))?.enabled) throw new Error('后台队列已暂停');
     const parts=options.parts ? options.parts.split(',').map(Number) : undefined;
-    const job=await enqueueVideoRequest(root,{url:options.url,parts,destination:options.destination},{retry:options.retry==='true'});
+    const job=await enqueueVideoRequest(root,{url:options.url,parts,destination:options.destination,
+      output_type:options['output-type']},{retry:options.retry==='true'});
     await launchWorker(root);
     return {id:job.id,status:job.status,request:job.request};
   }

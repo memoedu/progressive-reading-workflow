@@ -8,6 +8,7 @@ import { parseVtt, groupTranscriptSegments } from './import-youtube-subtitle-can
 
 const execFileAsync = promisify(execFile);
 const hash = value => createHash('sha256').update(value).digest('hex');
+const loginRequired = /Sign in|login|cookies are no longer valid|confirm your age/iu;
 export const YOUTUBE_SUBTITLE_WORKFLOW_VERSION = 'youtube-subtitles/v1';
 export { youtubeVideoIdentity };
 
@@ -70,12 +71,20 @@ async function invokeYtDlp(args) {
   try {
     const result = await execFileAsync(process.env.PROGRESSIVE_READING_YTDLP || 'yt-dlp', args,
       { windowsHide: true, timeout: 180000, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' });
+    // --ignore-no-formats-error keeps subtitle-only responses usable, but can
+    // turn a login challenge into a successful, metadata-only response.
+    if (args.includes('--dump-single-json') && loginRequired.test(result.stderr)) {
+      const info = JSON.parse(result.stdout);
+      if (!info.duration && !info.formats?.length && !Object.keys(info.subtitles || {}).length
+          && !Object.keys(info.automatic_captions || {}).length) throw new Error('youtube_login_required');
+    }
     return result.stdout;
   } catch (error) {
+    if (error.message === 'youtube_login_required') throw error;
     // Never expose signed URLs, credentials, or arbitrary subprocess output.
     const message = String(error.stderr || error.message || '');
     const code = error.code === 'ENOENT' ? 'tool_missing' : /429|Too Many Requests/iu.test(message) ? 'rate_limited'
-      : /Sign in|login|cookies are no longer valid|confirm your age/iu.test(message) ? 'login_required'
+      : loginRequired.test(message) ? 'login_required'
       : /not available|unavailable|Private video/iu.test(message) ? 'video_unavailable'
       : /timed out|ETIMEDOUT/iu.test(message) || error.killed ? 'timeout' : 'acquisition_failed';
     throw new Error(`youtube_${code}`);
@@ -108,7 +117,7 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
     await fs.writeFile(cookiePath, youtubeCookieFile(liveSnapshot.jar.cookies), { mode: 0o600 });
   }
   try {
-    onProgress({ stage: 'youtube_metadata', video_id: identity.id });
+    await onProgress({ stage: 'youtube_metadata', video_id: identity.id });
     // Keep the existing public-subtitle route. yt-dlp recommends account cookies
     // only for account-required sources; authenticated player responses can omit
     // otherwise available manual captions. Reuse live Chrome auth when required.
@@ -126,13 +135,13 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
     const track = selectSubtitleTrack(info);
     await fs.writeFile(infoPath, JSON.stringify(info), { mode: 0o600 });
     if (authenticated) await refreshCookieFile();
-    onProgress({ stage: 'youtube_subtitles', video_id: identity.id, language: track.language, kind: track.kind });
+    await onProgress({ stage: 'youtube_subtitles', video_id: identity.id, language: track.language, kind: track.kind });
     await runYtDlp([...base, '--load-info-json', infoPath, track.kind === 'manual' ? '--write-subs' : '--write-auto-subs',
       '--sub-langs', `^${track.language.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, '--sub-format', track.ext,
       '--force-overwrites', '-o', path.join(outputDir, '%(id)s.%(ext)s')]);
     const subtitlePath = path.join(outputDir, `${identity.id}.${track.language}.${track.ext}`);
     const raw = await fs.readFile(subtitlePath, 'utf8');
-    const segments = parseVtt(raw);
+    const segments = parseVtt(raw, { includeEnd: true });
     const paragraphs = groupTranscriptSegments(segments);
     const integrity = subtitleIntegrity(segments, paragraphs, info.duration, raw);
     const markdown = paragraphs.map(item => item.text).join('\n\n');
@@ -147,8 +156,8 @@ export async function fetchYoutubeSubtitleDraft(requestedUrl, {
     await fs.writeFile(path.join(outputDir, 'source.json'), JSON.stringify(metadata, null, 2) + '\n');
     await fs.writeFile(path.join(outputDir, 'transcript.md'), markdown + '\n');
     await fs.writeFile(path.join(outputDir, 'caption-map.json'), JSON.stringify({ segments, paragraphs, integrity }, null, 2) + '\n');
-    onProgress({ stage: 'youtube_standard_preprocess', video_id: identity.id, ...integrity });
-    return { requestedUrl, finalUrl: identity.url, redirectChain: [],
+    await onProgress({ stage: 'youtube_standard_preprocess', video_id: identity.id, ...integrity });
+    return { requestedUrl, finalUrl: identity.url, redirectChain: [], segments,
       fetchReceipt: { workflow_version: YOUTUBE_SUBTITLE_WORKFLOW_VERSION, subtitle_language: track.language,
         subtitle_kind: track.kind, subtitle_sha256: metadata.subtitle_sha256, content_integrity: integrity,
         raw_artifact_dir: outputDir, chrome_cookie_snapshot_used: authenticated, browser_tab_created: false,

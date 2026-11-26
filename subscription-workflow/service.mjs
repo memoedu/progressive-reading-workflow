@@ -33,7 +33,7 @@ export async function jobList(root = codeRoot) {
 
 export async function enqueue(root, kind, key = localDate()) {
   if (!JOB_KINDS.includes(kind)) throw new Error('未知订阅任务');
-  if (kind === 'video_import') throw new Error('单次视频导入请提供链接和精确分 P 范围');
+  if (kind === 'video_import') throw new Error('单次视频导入请提供链接，B 站可指定精确分 P 范围');
   const p = paths(root), id = digest(`${kind}:${key}`).slice(0,32), file = path.join(p.jobs,id+'.json');
   return withLock(path.join(p.home,`enqueue-${kind}.lock`), async () => {
     if (key.startsWith('manual-')) {
@@ -241,7 +241,7 @@ async function runJob(root, job, save) {
       job.progress={...progress,at:stamp()};await save();
     }});
     await noticeFaults(root,'video_import',result.faults);
-    if (!result.faults.length) await notify(root,'video_import:'+job.id,'视频图文导入完成',`${result.results.length} 个分 P 已进入阅读区。`);
+    if (!result.faults.length) await notify(root,'video_import:'+job.id,'视频导入完成',`${result.results.length} 项阅读材料已就绪。`);
     return result;
   }
   if (job.kind === 'retry') {

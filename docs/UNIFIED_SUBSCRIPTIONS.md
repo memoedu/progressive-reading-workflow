@@ -14,7 +14,7 @@
 
 B 站订阅支持指定视频分 P 和合集。视频筛选卡使用完整字幕，选中后再运行现有截图、图文正文和标准导读。无字幕时保留等待，不把简介当作全文。
 
-一次性图文转换指定分 P 无需添加订阅。调用 `node subscription-workflow/cli.mjs import-video --url "https://www.bilibili.com/video/BVxxxxxxxxxx/" --parts "38,39,40" --destination "视频"`，或向 `/api/subscriptions/import-video` 提交 JSON `{ "url": "视频链接", "parts": [38,39,40], "destination": "视频" }`。任务进入同一持久队列，由现有后台 worker 执行；只处理列出的分 P。重复提交返回同一任务，已成功的分 P 不重做。队列页显示每 P 的结果，显式重试复用成功步骤；来源、板书校订或质量阻塞会保存到异常记录并通知。一次性纯文导入见 [视频导入范围](VIDEO_WORKFLOW_STATUS.md)。
+单次视频导入无需添加订阅。调用 `node subscription-workflow/cli.mjs import-video --url "视频链接" --destination "视频"`，或向 `/api/subscriptions/import-video` 提交 JSON `{ "url": "视频链接", "destination": "视频" }`。默认使用字幕整理正文。B 站可传 `--parts "38,39,40"` 或 `parts: [38,39,40]` 选择分 P，YouTube 链接只导入该视频。需要图文时显式传 `--output-type illustrated` 或 `output_type: "illustrated"`。重复提交返回同一任务，显式重试复用成功步骤。队列页显示逐项结果，来源、板书校订或质量阻塞会保存到异常记录并通知。见 [视频导入范围](VIDEO_WORKFLOW_STATUS.md)。
 
 数学视频的后台任务会自动继续板书证据提取、独立实图审阅和校订准入，再进入正文与导读。队列显示当前分 P 和校订、生成、验收阶段；整批均受阻时直接标为“处理受阻”。真实来源关键条件仍无法核清、校订未通过或输出验收失败时保留现场并通知，不把后台进程启动或截图取得当作完整转换成功。
 

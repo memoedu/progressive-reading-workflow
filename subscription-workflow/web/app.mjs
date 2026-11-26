@@ -4,15 +4,19 @@ const kinds={rss:'RSS / Atom',bilibili_video:'B 站多 P 视频',bilibili_collec
 const modes={standard_preprocess:'标准流程，自动入库',original_text:'提取原文，自动入库',reports:'日报 / 周报与阅读操作'};
 const states={queued:'排队中',pending:'待处理',processing:'处理中',shared_pending_review:'投稿待合并',running:'运行中',waiting_source:'等待来源',blocked:'处理受阻',source_blocked:'来源受限',verification_failed:'待重新核验',retry_wait:'等待下个周期重试',completed:'完成',completed_with_issues:'完成，部分待处理',failed:'失败',route_conflict:'需要选择模式',awaiting_review:'等待勾选',imported:'已入库',imported_with_warnings:'已入库，有提示',warning:'可导入，有提示'};
 let current=null,editing=null,refreshing=false;
-const jobNames={rss:'RSS 检查',bilibili:'B 站检查',zhihu:'知乎检查',daily:'日报',weekly:'周报',decisions:'勾选处理',retry:'堵塞项重试',video_import:'视频图文导入'};
+const jobNames={rss:'RSS 检查',bilibili:'B 站检查',zhihu:'知乎检查',daily:'日报',weekly:'周报',decisions:'勾选处理',retry:'堵塞项重试',video_import:'视频导入'};
 const stepNames={scan:'检查来源',previews:'处理材料',decisions:'处理勾选',report:'生成报告',activity:'写入入库动态',
   'apply-source-scopes':'应用接收范围','retry-rss':'重试 RSS','retry-bilibili':'重试 B 站','retry-zhihu':'重试知乎','retry-selections':'重试勾选项',
   prepare_visual_jobs:'整理板书证据',extract_and_independently_review:'板书校订与独立审阅',compile_source_evidence:'核对来源证据',supplement_board_evidence:'补充板书证据',
+  youtube_metadata:'读取 YouTube 视频信息',youtube_subtitles:'获取 YouTube 字幕',youtube_standard_preprocess:'处理字幕正文',
   review_generated_diagrams:'核对图示',admit_reviewed_source:'准入已核验的校订',generate_body_and_guide:'生成正文与导读',verify_publication:'验收图文产物',board_blocked:'来源证据需要补充'};
 const trackedRuns=new Map();
 const sourceGroupOpen=new Map();
 function element(tag,text,cls){const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;}
-function readableError(value){const text=String(value||'');if(/paid_subscribers|paywall/u.test(text))return '来源正文需要付费订阅，现有访问条件只能取得摘要。';if(/platform_subtitles_not_yet_available/u.test(text))return '平台尚未提供字幕，下个周期会再次检查。';if(/target_login_snapshot_unavailable/u.test(text))return '当前来源的登录快照不可用，等待浏览器登录状态同步后重试。';if(/zhihu_http_403/u.test(text))return '知乎接口拒绝访问（403），当前未取得可用正文。';if(/source_metadata|missingProperty/u.test(text))return '来源记录缺少部分可选信息。';if(/identity_changed|source.*mismatch/u.test(text))return '来源或处理流程已变化，需要重新核对。';if(/[{}\n]|pr_preprocess_|result_contract|\\u[0-9a-f]{4}/iu.test(text)||!/[\u3400-\u9fff]/u.test(text))return '处理未完成，请重试。详细原因已保留在异常记录中。';return text.slice(0,240);}
+function readableError(value){const text=String(value||'');
+  if(text.includes('youtube_login_required'))return 'YouTube 要求登录。登录状态同步后可重试。';
+  if(text.includes('youtube_subtitles_unavailable_asr_disabled'))return 'YouTube 未提供可用字幕。';
+  if(/paid_subscribers|paywall/u.test(text))return '来源正文需要付费订阅，现有访问条件只能取得摘要。';if(/platform_subtitles_not_yet_available/u.test(text))return '平台尚未提供字幕，下个周期会再次检查。';if(/target_login_snapshot_unavailable/u.test(text))return '当前来源的登录快照不可用，等待浏览器登录状态同步后重试。';if(/zhihu_http_403/u.test(text))return '知乎接口拒绝访问（403），当前未取得可用正文。';if(/source_metadata|missingProperty/u.test(text))return '来源记录缺少部分可选信息。';if(/identity_changed|source.*mismatch/u.test(text))return '来源或处理流程已变化，需要重新核对。';if(/[{}\n]|pr_preprocess_|result_contract|\\u[0-9a-f]{4}/iu.test(text)||!/[\u3400-\u9fff]/u.test(text))return '处理未完成，请重试。详细原因已保留在异常记录中。';return text.slice(0,240);}
 async function api(url,body){
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),20000);
@@ -85,7 +89,7 @@ async function submitRun(kind,id){
 }
 async function retryVideo(job){
   const id='retry-run-status';
-  runStatus(id,'视频图文导入 · 正在提交…');
+  runStatus(id,'视频导入 · 正在提交…');
   const queued=await api('/api/subscriptions/import-video',{...job.request,retry:true});
   trackedRuns.set(id,queued.id);showJob(id,{...queued,kind:'video_import'});
   await refresh();
@@ -173,9 +177,11 @@ function render(data){current=data;if(!data.initialized){$('health').textContent
     const row=element('li',`${jobNames[job.kind]} · ${states[job.status]||job.status} · ${new Date(job.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}`);
     if(job.error)row.append(element('p',readableError(job.error),'error'));
     if(job.kind==='video_import'){
-      row.append(element('p','分 P：'+job.request.parts.join('、'),'hint'));
-      if(job.status==='running'&&job.progress)row.append(element('p',`P${job.progress.part} · ${stepNames[job.progress.stage]||'处理中'}`,'hint'));
-      for(const item of job.result?.results||[])row.append(element('p',`P${item.part} ${item.title} · ${states[item.status]||item.status}${item.reason?'：'+readableError(item.reason):''}`,item.status==='completed'?'hint':'error'));
+      const youtube=Boolean(job.request.video_id);
+      const mode=job.request.output_type==='illustrated'?'图文模式':'字幕模式';
+      row.append(element('p',youtube?`YouTube · ${mode}`:`B 站 · ${mode} · ${job.request.parts.map(part=>'P'+part).join('、')}`,'hint'));
+      if(job.status==='running'&&job.progress)row.append(element('p',`${youtube?'':`P${job.progress.part} · `}${stepNames[job.progress.stage]||'处理中'}`,'hint'));
+      for(const item of job.result?.results||[])row.append(element('p',`${youtube?'':`P${item.part} `}${item.title} · ${states[item.status]||item.status}${item.reason?'：'+readableError(item.reason):''}`,item.status==='completed'?'hint':'error'));
     }
     if(['failed','blocked','completed_with_issues'].includes(job.status)){
       const actions=element('div',undefined,'actions');

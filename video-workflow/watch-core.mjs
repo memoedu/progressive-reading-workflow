@@ -13,12 +13,12 @@ export const canonicalUrl=(bvid,part=1)=>`https://www.bilibili.com/video/${bvid}
 export function readableTitle(value){
   return String(value).replace(/\s+\[\d+-Raw[^\]]*\]\s*$/u,'').replace(/[<>:"/\\|?*\x00-\x1f]/gu,'－').trim().replace(/[. ]+$/u,'');
 }
-export function entryPublication(destination,item){
+export function entryPublication(destination,item,mode='强结构化整理'){
   let title=readableTitle(item.video_title);
   if(item.parts>1)title+=` · P${item.part} ${readableTitle(item.part_title)}`;
   if(!title)throw Error('missing_video_title');
   if(/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/iu.test(title))title='_'+title;
-  const name=title+'（强结构化整理）';
+  const name=title+`（${mode}）`;
   return path.join(destination,name,name+'.md');
 }
 
