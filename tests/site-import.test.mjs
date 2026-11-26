@@ -451,6 +451,8 @@ test('new page preserves source editor, original settings, failures, and existin
     assert.equal(doc.querySelector('[data-site-standard]').hidden,true);
     doc.getElementById('site-form').dispatchEvent(new dom.window.Event('submit',{cancelable:true}));await new Promise(r=>setTimeout(r,30));
     assert.equal(source.processing_mode,'original_text');assert.equal(source.destination,'整站/Independent');assert.match(doc.getElementById('site-sources').textContent,/原文直接入库/u);
+    const sourceLink=doc.querySelector('#site-sources a');
+    assert.equal(sourceLink.target,'_blank');assert.equal(sourceLink.rel,'noopener noreferrer');
     doc.getElementById('learningRepo').value='https://github.com/example/source';doc.getElementById('learningCreate').click();await new Promise(r=>setTimeout(r,20));
     assert.equal(calls.find(c=>c.url==='/api/learning/projects').data.repoUrl,'https://github.com/example/source');
   }finally{mounted.stop();dom.window.close();}

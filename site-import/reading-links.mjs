@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { digest, readJson, writeJson } from '../subscription-workflow/config.mjs';
+import { codeRoot, digest, readJson, writeJson } from '../subscription-workflow/config.mjs';
+import { resolveVaultLocation } from '../subscription-workflow/obsidian-links.mjs';
+import { obsidianReadingLink } from '../subscription-workflow/reading-options.mjs';
 import { mapMarkdownDestinations, replaceChecked } from '../subscription-workflow/report-archive.mjs';
 import { findSourcePublications, sourceAliasResolver, withSourcePublication } from '../scripts/reading-source-library.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
@@ -9,6 +11,17 @@ const optionalText = file => fs.readFile(file, 'utf8').catch(error => {
   if (error.code === 'ENOENT') return null;
   throw error;
 });
+
+export async function resolveSiteReadingTabLink(root) {
+  if (path.resolve(root) !== codeRoot || !process.env.APPDATA) return null;
+  const vault = await resolveVaultLocation(root, path.join(process.env.APPDATA, 'obsidian', 'obsidian.json'));
+  if (!vault) return null;
+  return file => {
+    const relative = path.relative(root, file);
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) return null;
+    return obsidianReadingLink(path.join(vault.workflow_path, relative).replaceAll('\\', '/'), vault.id);
+  };
+}
 
 function readingBody(markdown) {
   const frontmatter = /^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/u.exec(markdown)?.[0] || '';
@@ -38,19 +51,20 @@ export function sourceReadingLinks(markdown, url) {
   return [...urls];
 }
 
-export function projectReadingLinks(markdown, source, publications, { preserveOriginal = false } = {}) {
+export function projectReadingLinks(markdown, source, publications, { preserveOriginal = false, linkForFile } = {}) {
   const { frontmatter, body, appendix } = readingBody(markdown);
   const links = new Map();
   const projected = visitReadingLinks(body, source.url, (match, url, destination) => {
     const file = publications.get(urlImportDedupeKey(url.href));
     if (file?.zone !== '阅读区' || path.resolve(file.path) === path.resolve(source.path)) return match;
     const target = path.relative(path.dirname(source.path), file.path).split(path.sep).map(encodeURIComponent).join('/');
-    links.set(url.href, { url: url.href, path: file.path, target });
-    return preserveOriginal ? match : match.replace(destination, '<' + target + '>');
+    const href = linkForFile?.(file.path) || target;
+    links.set(url.href, { url: url.href, path: file.path, target, href });
+    return preserveOriginal ? match : match.replace(destination, '<' + href + '>');
   });
   const associations = [...links.values()];
   if (preserveOriginal && associations.length) {
-    const listing = associations.map(link => '- [' + path.basename(link.path, '.md').replace(/[\[\]\\]/gu, '\\$&') + '](<' + link.target + '>)');
+    const listing = associations.map(link => '- [' + path.basename(link.path, '.md').replace(/[\[\]\\]/gu, '\\$&') + '](<' + link.href + '>)');
     const separator = markdown.endsWith('\n') ? '\n' : '\n\n';
     return { markdown: markdown + separator + '## 阅读区关联\n\n' + listing.join('\n') + '\n', links: associations };
   }
@@ -111,7 +125,7 @@ export async function amendSiteReadingFile(root, row, directory, update, { resol
   }, { resolveIdentity });
 }
 
-export async function bindSiteReadingLinks(root, records, directory, { preserveOriginal = false, titleFor } = {}) {
+export async function bindSiteReadingLinks(root, records, directory, { preserveOriginal = false, titleFor, linkForFile } = {}) {
   const candidates = records.filter(row => row.verified && !row.reused);
   const urls = new Set();
   for (const row of candidates) {
@@ -123,7 +137,7 @@ export async function bindSiteReadingLinks(root, records, directory, { preserveO
   const results = [];
   for (const row of candidates) {
     results.push(await amendSiteReadingFile(root, row, directory, async markdown => {
-      const projected = projectReadingLinks(markdown, row, publications, { preserveOriginal });
+      const projected = projectReadingLinks(markdown, row, publications, { preserveOriginal, linkForFile });
       return titleFor ? titleFor(projected, row) : projected;
     }, { resolveIdentity }));
   }

@@ -15,7 +15,7 @@ import {taxonomyFolder} from './taxonomy.mjs';
 import {ensureSiteRss} from './rss.mjs';
 import {capturedArticle} from './article-capture.mjs';
 import {recoverTruncatedOriginal} from './original-publication-recovery.mjs';
-import {bindSiteReadingLinks} from './reading-links.mjs';
+import {bindSiteReadingLinks, resolveSiteReadingTabLink} from './reading-links.mjs';
 
 export {capturedArticle} from './article-capture.mjs';
 
@@ -124,8 +124,9 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
     records.push({url:article.url,path:artifact.path,sha256:hash,reused,verified:true});
   }
   await onProgress('关联阅读区中已有的正文链接');
+  const linkForFile = await resolveSiteReadingTabLink(root);
   const linked = await bindSiteReadingLinks(root, records, path.join(runPath(root, runId), 'reading-links'), {
-    preserveOriginal: settings.processing_mode === 'original_text'
+    preserveOriginal: settings.processing_mode === 'original_text', linkForFile
   });
   const linkHashes = new Map(linked.filter(row => row.previous_sha256).map(row => [row.path, row.sha256]));
   if (linkHashes.size) {
@@ -134,7 +135,7 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
     await broker?.relocateSourceArtifacts?.([], [...linkHashes]);
   }
   let index=null,groups=[];
-  if(settings.generate_index&&records.every(row=>row.verified)){const written=await writeSiteIndexes(root,settings,collection.inventory,records,runId,organization);index=written.index;groups=written.groups;}
+  if(settings.generate_index&&records.every(row=>row.verified)){const written=await writeSiteIndexes(root,settings,collection.inventory,records,runId,organization,{linkForFile});index=written.index;groups=written.groups;}
   const verification={expected:expected.length,verified:records.filter(row=>row.verified).length,records,index,groups,organization:{moved:organization.moved||0,duplicates_retired:organization.duplicates_retired||0,host:organization.host}};
   if(settings.repository&&records.every(row=>row.verified)){
     const captures=await Promise.all(expected.map(article=>capturedArticle(root,collection.inventory.article_source,article.url)));

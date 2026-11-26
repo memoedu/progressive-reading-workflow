@@ -37,3 +37,13 @@ test('escaped reference numbering preserves complete citations while numbered pr
   assert.equal(isBibliographicReferenceBlock(prefix+prose),false);
  }
 });
+
+test('a citations and references section preserves entries without requiring uniform citation formatting',()=>{
+ const blocks=[
+  {type:'heading',source_block_key:'heading',markdown:'#### Citations and References'},
+  {type:'paragraph',source_block_key:'reference',markdown:'Baker, A. (2021). An account of the original experiment.'},
+  {type:'heading',source_block_key:'discussion',markdown:'#### Discussion'},
+  {type:'paragraph',source_block_key:'prose',markdown:'The experiment still requires a separate independent explanation.'}
+ ];
+ assert.deepEqual([...translationLiteralBlockKeys(blocks)],['reference']);
+});

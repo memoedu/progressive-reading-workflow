@@ -12,7 +12,7 @@ export function mountImportCenter(doc=document,{fetchImpl=globalThis.fetch.bind(
   const terminal=run=>['completed','completed_with_failures','needs_classification','failed','paused'].includes(run?.phase);
   const node=(tag,text='',className='')=>{const n=doc.createElement(tag);n.textContent=text;if(className)n.className=className;return n;};
   const button=(text,handler,secondary=true)=>{const b=node('button',text,secondary?'secondary':'');b.type='button';b.onclick=()=>busy(b,handler);return b;};
-  const link=(text,url)=>{const a=node('a',text);a.href=url;return a;};
+  const link=(text,url)=>{const a=node('a',text);a.href=url;if(/^https?:\/\//iu.test(url)){a.target='_blank';a.rel='noopener noreferrer';}return a;};
   const readingLink=(text,file)=>link(text,'obsidian://open?path='+encodeURIComponent(file).replaceAll('(','%28').replaceAll(')','%29')+'&paneType=tab');
   const counts=run=>{
     const c=run?.counts||{},d=run?.discovery;
