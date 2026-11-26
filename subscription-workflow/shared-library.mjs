@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
+import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 
 export const sharedRepository = 'memoedu/progressive-reading-library';
 export const pilotOrigin = 'https://www.benkuhn.net';
@@ -56,6 +57,16 @@ export function sharedReadingSource(url) {
   if (parsed.hostname === 'mp.weixin.qq.com' && /^\/s\/[\w-]+$/u.test(parsed.pathname)) return 'wechat';
   if (parsed.hostname === 'www.bilibili.com' && /^\/video\/BV[0-9A-Za-z]{10}$/u.test(parsed.pathname)) return 'bilibili';
   return null;
+}
+
+const publicWebOrigins = new Set(defaultSources.public_web_origins);
+
+export function sharedPublicWebCandidate(url, origins = publicWebOrigins) {
+  const canonical = sharedArticleUrl(url);
+  if (!canonical) return false;
+  if (sharedReadingSource(canonical) === 'wechat') return true;
+  const { origin, pathname } = new URL(canonical);
+  return pathname !== '/' && origins.has(origin);
 }
 export const materialExtension = value => ['pdf', 'epub', 'docx', 'txt'].includes(value);
 export const sharedMaterialIndexPath = hash => 'index/materials/' + hash + '.json';

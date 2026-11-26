@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createSharedAccount, createSharedLibraryServer } from '../subscription-workflow/shared-library-service.mjs';
 import { createSharedGitHub } from '../subscription-workflow/shared-library-github.mjs';
-import { createPublicRssSources } from '../subscription-workflow/shared-library-sources.mjs';
+import { createPublicRssSources, verifyPublicReadingSource } from '../subscription-workflow/shared-library-sources.mjs';
 import { syncFeedDocument } from '../rss-source/core.mjs';
 import { downloadSharedReading, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedReadingFile, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
 import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedOriginalRevisionPath, sharedReadingPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
@@ -15,6 +15,27 @@ const commit = '1'.repeat(40);
 const markdown = '# Public fixture\n\n' + 'An independently sourced paragraph. '.repeat(10);
 const record = { schema: sharedSchema, title: 'Public fixture', url: existingUrl,
   original: { path: 'Test folder/Original.md', sha256: sharedDigest(markdown) } };
+
+test('registered public web sources are independently verified without credentials or cross-URL redirects', async () => {
+  const url = 'https://web.example/articles/verified';
+  const origins = new Set([new URL(url).origin]);
+  const body = '<html><head><title>Verified article</title></head><body><article><h1>Verified article</h1><p>' +
+    'This sentence is part of the article and must be returned by the source verifier. '.repeat(8) + '</p></article></body></html>';
+  const fetchImpl = async (target, options) => {
+    assert.equal(target, url);
+    assert.equal(new Headers(options.headers).has('cookie'), false);
+    assert.equal(options.redirect, 'manual');
+    return new Response(body, { headers: { 'Content-Type': 'text/html' } });
+  };
+  assert.match((await verifyPublicReadingSource(url, fetchImpl, origins)).markdown, /part of the article/u);
+  assert.equal(await verifyPublicReadingSource('https://unregistered.example/articles/verified', fetchImpl, origins), null);
+  let requests = 0;
+  await assert.rejects(verifyPublicReadingSource(url, async () => {
+    requests += 1;
+    return new Response(null, { status:302, headers:{ Location:'https://web.example/another-article' } });
+  }, origins), /shared_source_redirect_not_allowed/u);
+  assert.equal(requests, 1);
+});
 
 test('a verified publication separates original and reading files and reuses only matching processing settings', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'public-reading-files-'));

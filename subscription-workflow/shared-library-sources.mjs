@@ -1,4 +1,4 @@
-import { sharedArticleUrl, sharedReadingSource } from './shared-library.mjs';
+import { sharedArticleUrl, sharedPublicWebCandidate, sharedReadingSource } from './shared-library.mjs';
 import { parseFeedDocument } from '../rss-source/core.mjs';
 import { fetchArticleContent, originalArticleTarget } from '../rss-source/article-fetch.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
@@ -9,15 +9,16 @@ const cacheAge = 5 * 60_000;
 
 export const localOnly = reason => ({ status: 'local_only', reason });
 
-export async function verifyPublicReadingSource(url, fetchImpl = fetch) {
+export async function verifyPublicReadingSource(url, fetchImpl = fetch, publicWebOrigins) {
   const source = sharedReadingSource(url);
-  if (source === 'wechat') {
+  if (sharedPublicWebCandidate(url, publicWebOrigins)) {
     const page = await fetchUrlWithoutBrowser(url, { timeoutMs: 15_000, fetchImpl: (target, options) => {
       if (sharedArticleUrl(target) !== url) throw new Error('shared_source_redirect_not_allowed');
       return fetchImpl(target, options);
     } });
-    if (!page.articleHtml || !page.title || page.fetchReceipt.authenticated_fetch !== false) return null;
-    return htmlArticleToMarkdown({ html: page.articleHtml, sourceUrl: url, title: page.title });
+    if (!page.isHtml || !page.title || page.fetchReceipt.authenticated_fetch !== false ||
+        (source === 'wechat' && !page.articleHtml)) return null;
+    return htmlArticleToMarkdown({ html: page.articleHtml || page.body, sourceUrl: page.finalUrl, title: page.title });
   }
   if (source !== 'bilibili') return null;
   const canonical = new URL(url);
