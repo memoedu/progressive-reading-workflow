@@ -7,13 +7,14 @@ import { processCollectionTask } from '../scripts/collection-import.mjs';
 import { discoverSite,inventoryCurrent,retrySiteUrls } from './discovery.mjs';
 import { discoverSiteInWorker } from './discovery-worker.mjs';
 import { readSources, readRun, saveRun, listRuns, runPath, runId, siteCounts, now } from './store.mjs';
-import {organizeSiteFiles} from './organization.mjs';
+import {organizeSiteFiles, remapReceipts} from './organization.mjs';
 import {writeSiteIndexes} from './indexes.mjs';
 import {bindRepositoryRelations} from '../scripts/source-relations.mjs';
 import {writeRepositoryIndexes} from './repository-indexes.mjs';
 import {ensureSiteRss} from './rss.mjs';
 import {capturedArticle} from './article-capture.mjs';
 import {recoverTruncatedOriginal} from './original-publication-recovery.mjs';
+import {bindSiteReadingLinks} from './reading-links.mjs';
 
 export {capturedArticle} from './article-capture.mjs';
 
@@ -113,6 +114,16 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
     }
     records.push({url:article.url,path:artifact.path,sha256:hash,reused,verified:true});
   }
+  await onProgress('关联阅读区中已有的正文链接');
+  const linked = await bindSiteReadingLinks(root, records, path.join(runPath(root, runId), 'reading-links'), {
+    preserveOriginal: settings.processing_mode === 'original_text'
+  });
+  const linkHashes = new Map(linked.filter(row => row.previous_sha256).map(row => [row.path, row.sha256]));
+  if (linkHashes.size) {
+    for (const row of records) if (linkHashes.has(row.path)) row.sha256 = linkHashes.get(row.path);
+    collection.results = remapReceipts(collection.results, new Map(), root, linkHashes);
+    await broker?.relocateSourceArtifacts?.([], [...linkHashes]);
+  }
   let index=null,groups=[];
   if(settings.generate_index&&records.every(row=>row.verified)){const written=await writeSiteIndexes(root,settings,collection.inventory,records,runId,organization);index=written.index;groups=written.groups;}
   const verification={expected:expected.length,verified:records.filter(row=>row.verified).length,records,index,groups,organization:{moved:organization.moved||0,duplicates_retired:organization.duplicates_retired||0,host:organization.host}};
@@ -128,6 +139,11 @@ export async function verifySiteCollection(root,settings,collection,runId,{broke
         message:'现有仓库索引有改动，已保留该索引。',path:error.message.slice(prefix.length)}];
     }
   }
+  verification.reading_links = {
+    documents: linked.filter(row => row.links.length).length,
+    associations: linked.flatMap(row => row.links).length,
+    preserved: linked.filter(row => row.preserved).length
+  };
   await writeJson(path.join(runPath(root,runId),'verification.json'),verification);return verification;
 }
 

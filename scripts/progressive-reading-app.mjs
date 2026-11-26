@@ -1127,6 +1127,7 @@ async function standardizeBrowserDraft(draft, parsedUrl, converted, onProgress) 
   return {
     markdown,
     conversionMethod,
+    readingTitle: run.result.artifacts.reading_title,
     outputDir: run.output_dir || outputDir,
     materialId: run.result.material_id,
     idempotencyKey: run.result.idempotency_key,
@@ -1342,6 +1343,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     sourceMetadata: {
       ...draft.sourceMetadata,
       destination_folder: draft.destinationFolder || "浏览器高亮",
+      ...(preprocessing.readingTitle ? { reading_title: preprocessing.readingTitle } : {}),
       standard_preprocess: {
         material_id: preprocessing.materialId,
         idempotency_key: preprocessing.idempotencyKey,
@@ -1363,7 +1365,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   } : draft;
   const metadata = LocalIrDocumentCore.createDocumentState(stateDraft, {
     path: documentPath,
-    title: converted.title || draft.title,
+    title: preprocessing?.readingTitle || converted.title || draft.title,
     sourceUrl: String(draft.sourceMetadata?.source_url || parsed.href),
     destination: resolvedDestination,
     documentStatus,

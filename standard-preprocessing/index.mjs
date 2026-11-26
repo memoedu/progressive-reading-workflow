@@ -1025,6 +1025,7 @@ export async function runStandardPreprocessingWorkflow(request, options = {}) {
     result.receipt.hashes = structuredClone(stageRuns[0].run.result.receipt.hashes);
     if (translated) {
       result.translation_state = translated.translation_state;
+      if (translated.artifacts.reading_title) result.artifacts.reading_title = translated.artifacts.reading_title;
       result.source_metadata = { ...result.source_metadata, original_url: translated.source_metadata.original_url };
       if (translated.receipt.processing_profile) result.receipt.processing_profile = structuredClone(translated.receipt.processing_profile);
     }
@@ -1033,7 +1034,7 @@ export async function runStandardPreprocessingWorkflow(request, options = {}) {
       hashes: result.receipt.hashes, semantic: result.artifacts.semantic,
       bodyBlocks: result.artifacts.body_blocks,
       originalBlocks: translated ? translated.artifacts.cleaning_manifest.source_nodes.map(node => ({ markdown: node.text })) : [],
-      translationState: result.translation_state, includeReadingGuide: hasGuide
+      translationState: result.translation_state, readingTitle: result.artifacts.reading_title, includeReadingGuide: hasGuide
     });
     result.artifacts.artifact_hashes.reading_markdown = sha256(result.artifacts.reading_markdown);
   }

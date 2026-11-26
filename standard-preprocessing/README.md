@@ -32,6 +32,8 @@ DeepSeek 继续使用 `AI_PRODUCER_BASE_URL`、`AI_PRODUCER_MODEL` 和专用 `DE
 
 导读各次模型调用使用 Codex Exec 原生 `--output-schema` 约束 JSON 字段与编号；原文保真、完整覆盖和跳转仍由独立核验决定。整篇核验不继承分段生成的范围限制，同一命题的多处出现可以由一条忠实洞察覆盖。该结构约束只作用于导读，正文调用与强结构化提示词保持原样。
 
+标准翻译完成后，阅读标题按「中文标题｜英文标题」显示。英文来源沿用原题。文档标题优先取原文一级标题或来源题名，保存在 Markdown 标题及 `title` 字段。
+
 翻译语义策略从 `D:\Artifacts\TranslationPrompts\general-translation.txt` 动态读取（可用 `PR_TRANSLATION_PROMPT_PATH` 指定其他文件）；该文件是通用单一提示词的唯一编辑入口。工作流只追加 JSON、保护符和分块输出适配，主路径与回退路径共用策略，并提供全文叙述上下文（公式等字面语法保持遮罩）。提示词 SHA-256 纳入翻译阶段的缓存键及 `receipt.prompt_version`，改动后不复用旧翻译缓存。当前在旧 PDF 提示词上增加整体上下文说明；普通英文路径使用语义分组和连续 Markdown 字符串翻译，位置标记由本地恢复原块对应。低保留实验版仍弃用；不能将减少英文残留作为单独的质量目标。早期失败与提示词实验保留在原审计目录，不能覆盖上述现役规则。选择 DeepSeek API 时显式使用 `thinking.type=disabled` 和专用 `DEEPSEEK_READING_API_KEY`；默认后端为 Codex Exec。
 
 安装后可从任意目录直接调用：

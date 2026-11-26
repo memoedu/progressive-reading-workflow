@@ -29,7 +29,7 @@ import { normalizeReaderMath } from './reader-math.mjs';
 export const CONTRACT_VERSION = "1.0.0";
 export const REQUEST_SCHEMA_VERSION = "progressive-reading.preprocess.request/v1";
 export const RESULT_SCHEMA_VERSION = "progressive-reading.preprocess.result/v1";
-export const PROCESSOR_VERSION = "1.12.18";
+export const PROCESSOR_VERSION = "1.12.19";
 export const PROMPT_VERSION = "source-translation-v2.2-five-level-judgments";
 
 const CONTINUE_READING_LABELS = {
@@ -1065,7 +1065,7 @@ export function auditVisibleReadingAnchors(markdown, bodyBlocks) {
   };
 }
 
-export function renderReadingMarkdown({ materialId, metadata, sourceType, hashes, semantic, bodyBlocks, originalBlocks = [], translationState, title, includeReadingGuide = true }) {
+export function renderReadingMarkdown({ materialId, metadata, sourceType, hashes, semantic, bodyBlocks, originalBlocks = [], translationState, title, readingTitle, includeReadingGuide = true }) {
   if (!includeReadingGuide && (semantic.judgments !== null || semantic.insights?.length)) {
     throw new Error("disabled_reading_guide_must_be_empty");
   }
@@ -1082,12 +1082,13 @@ export function renderReadingMarkdown({ materialId, metadata, sourceType, hashes
     `source_url: ${yamlString(metadata.source_url)}`,
     `original_url: ${yamlString(metadata.original_url)}`,
     `translation_state: ${yamlString(translationState)}`,
+    ...(readingTitle ? [`title: ${yamlString(readingTitle)}`] : []),
     `input_sha256: ${yamlString(hashes.input)}`,
     "insights_fact_checked: false",
     "processing_status: ready",
     "---",
     "",
-    `# ${title || sourceTitle(metadata, bodyBlocks, { preferBodyHeading: translationState === "generated_translation" })}`,
+    `# ${readingTitle || title || sourceTitle(metadata, bodyBlocks, { preferBodyHeading: translationState === "generated_translation" })}`,
     ""
   ];
   if (includeReadingGuide) {
@@ -1392,8 +1393,12 @@ export async function processMaterial(request, options = {}) {
   let editorialFindings = [];
   let bestInsightRepairCandidate = null;
   let effectiveSafetyCap = safetyCap;
+  const documentHeading = /^#\s+/u.test(blocks[0]?.markdown || "") ? bodyHeadingTitle(blocks.slice(0, 1)) : "";
+  const documentTitle = metadata.split?.split_id ? metadata.title
+    : documentHeading || metadata.title || metadata.source_title;
   const producerPayload = {
     ...(translationPolicy ? { translation_policy: translationPolicy } : {}),
+    ...(translationPolicy && documentTitle ? { document_title: documentTitle } : {}),
     material_id: materialId,
     source_type: request.source_type,
     source_metadata: metadataForProducer(metadata),
@@ -1597,6 +1602,7 @@ export async function processMaterial(request, options = {}) {
     ? producerAccepted ? "generated_translation" : "unknown"
     : translationDetection.bilingual && cleaningPolicy.include_reading_guide === false ? "preserved_bilingual"
     : translationStateFor(translationDetection, alignments);
+  const bilingualTitle = translationState === "generated_translation" ? semantic.reading_title : undefined;
   if (translationState === "alignment_pending") {
     status = status === "completed" ? "completed_with_warnings" : status;
     errors.push(errorItem("translation_alignment_pending", "translation", "原文与译文尚未全部可靠对应，已保留置信度和待处理状态。", { severity: "warning" }));
@@ -1611,6 +1617,7 @@ export async function processMaterial(request, options = {}) {
     originalBlocks: cleaningPolicy.mode === "source_translation" ? blocks : [],
     translationState,
     title: readingTitle,
+    readingTitle: bilingualTitle,
     includeReadingGuide: request.processing_options?.include_reading_guide !== false && semantic.judgments !== null
   });
   const visibleAnchorAudit = auditVisibleReadingAnchors(readingMarkdown, bodyBlocks);
@@ -1668,6 +1675,7 @@ export async function processMaterial(request, options = {}) {
     translation_state: translationState,
     artifacts: {
       reading_markdown: readingMarkdown,
+      ...(bilingualTitle ? { reading_title: bilingualTitle } : {}),
       quarantine_markdown: null,
       target_zone: processingState === "degraded" ? "preprocess-review" : "local-ir-reading",
       semantic: {
