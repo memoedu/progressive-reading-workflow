@@ -660,12 +660,13 @@ export class BrowserImportBroker {
     });
   }
 
-  async findSuccessfulResultForUrl(requestedUrl, { excludeTaskId = null } = {}) {
+  async findSuccessfulResultForUrl(requestedUrl, { excludeTaskId = null, requireOriginal = false } = {}) {
     return this.withLock(async () => {
       const identity = normalizedUrlIdentity(requestedUrl);
       const task = [...this.state.tasks].reverse().find((item) => item.id !== excludeTaskId
         && item.status === "imported"
         && normalizedUrlIdentity(item.requestedUrl) === identity
+        && (!requireOriginal || Boolean(item.result?.receipt?.raw_markdown_sha256))
         && new Set(["imported", "imported_with_warnings", "idempotent_replay"]).has(String(item.result?.status || "imported"))
         && Array.isArray(item.result?.artifacts));
       return task ? sanitizePersistedValue(task.result) : null;

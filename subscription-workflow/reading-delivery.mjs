@@ -119,8 +119,7 @@ export async function deliverArticle(paths, item, name, options = {}) {
   const runner = options.readingRunner || runPreprocessingRequest;
   const run = await runner(request,{outputDir,publishPath:target,assetSourceDir:item.source_package_path,cacheDir:readingCache,
     automaticFilenameSource:item.item_url,
-    publicationSource: { url:item.item_url, archivedOriginalSha256:shareable ? originalSha256 : undefined,
-      privateContent:Boolean(options.readingRunner) },
+    publicationSource: options.readingRunner ? null : { url:item.item_url, archivedOriginalSha256:shareable ? originalSha256 : undefined },
     ...(!options.readingRunner ? {producer:await subscriptionProducer()} : {}),
     onProgress:event=>options.onPreviewProgress?.({materialId:item.material_id,status:'processing',...event})});
   accepted(run);
@@ -181,11 +180,12 @@ export async function addReadingGuide(paths,item,options = {}) {
   item.reading_guide = {status:'ready',result_path:path.join(outputDir,'result.json'),body_preserved:true,added_anchors:anchored.added_anchors,anchor_audit:anchorAudit};
   item.publication.sha256 = digest(after);
   const originalPublication = item.publication.publication_path && await readJson(item.publication.publication_path);
+  const generatedReading = !source.user_instruction && originalPublication?.markdown?.sha256 === digest(before) &&
+    digest(await fs.readFile(file)) === digest(after);
   if (!options.guideRunner) Object.assign(item.reading_guide, await synchronizeReadingPublication(paths.workflowRoot, {
     url:item.item_url, original:source.material?.markdown, archivedOriginalSha256:source.source_metadata?.shared_original_sha256,
-    privateContent:Boolean(source.user_instruction || originalPublication?.markdown?.sha256 !== digest(before) ||
-      digest(await fs.readFile(file)) !== digest(after)),
-    markdown:after, standardResult:run.result, processingOptions:readingRequest(source,item,true).processing_options
+    markdown:generatedReading ? after : undefined,
+    standardResult:generatedReading ? run.result : undefined, processingOptions:readingRequest(source,item,true).processing_options
   }));
 }
 

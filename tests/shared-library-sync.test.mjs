@@ -7,8 +7,8 @@ import { createSharedAccount, createSharedLibraryServer } from '../subscription-
 import { createSharedGitHub } from '../subscription-workflow/shared-library-github.mjs';
 import { createPublicRssSources, verifyPublicReadingSource, verifyPublicYoutubeListing } from '../subscription-workflow/shared-library-sources.mjs';
 import { syncFeedDocument } from '../rss-source/core.mjs';
-import { downloadSharedReading, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedReadingFile, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
-import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedOriginalRevisionPath, sharedReadingPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
+import { downloadSharedReading, lookupSharedReadingArtifacts, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedReadingFile, updateSharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
+import { sharedArticleUrl, sharedDigest, sharedIndexPath, sharedOriginalRevisionPath, sharedPublicWebCandidate, sharedReadingPath, sharedSchema, sharedRawUrl } from '../subscription-workflow/shared-library.mjs';
 
 const existingUrl = 'https://www.benkuhn.net/existing';
 const commit = '1'.repeat(40);
@@ -101,6 +101,21 @@ test('registered public web sources are independently verified without credentia
   assert.equal(requests, 1);
 });
 
+test('Zhihu answer and article URLs go through anonymous source verification', async () => {
+  const answer = 'https://www.zhihu.com/question/101/answer/202';
+  const post = 'https://zhuanlan.zhihu.com/p/303';
+  const profile = 'https://www.zhihu.com/people/fixture/activities';
+  for (const url of [answer, post]) {
+    assert.equal(sharedPublicWebCandidate(url), true);
+    assert.equal(await verifyPublicReadingSource(url, async (target, options) => {
+      assert.equal(target, url);
+      assert.equal(new Headers(options.headers).has('cookie'), false);
+      return new Response('Credential required', { status:403 });
+    }), null);
+  }
+  assert.equal(sharedPublicWebCandidate(profile), false);
+});
+
 test('a verified publication separates original and reading files and reuses only matching processing settings', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'public-reading-files-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -147,6 +162,14 @@ test('a verified publication separates original and reading files and reuses onl
   await updateSharedLibrarySettings(root, { action: 'login', account: 'owner', password }, fetchImpl);
 
   assert.equal((await syncSharedReading(root, { url, original: markdown }, { fetchImpl })).status, 'available');
+  const lookups = [];
+  const firstLookup = await lookupSharedReadingArtifacts(root, { url }, { fetchImpl: async (...args) => {
+    lookups.push(String(args[0]));
+    return fetchImpl(...args);
+  } });
+  assert.equal(lookups.filter(target => target === endpoint + 'article').length, 1);
+  assert.equal(firstLookup.originalBytes.toString('utf8'), markdown);
+  assert.equal(firstLookup.reading, undefined);
   const supplied = { url, original: markdown, markdown: '---\nbrowser_draft_id: private-state\n---\n\n' + reading,
     processingOptions: { translate: true, include_reading_guide: true } };
   const file = path.join(root, 'reading.md');

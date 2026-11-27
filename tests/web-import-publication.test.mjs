@@ -34,6 +34,7 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
     const root = process.env.PROGRESSIVE_READING_WORKFLOW_ROOT;
     const commit = '1'.repeat(40);
     const blobs = new Map();
+    const index = new Map();
     let firstReadback = false;
     let retryRequests = 0;
     const html = ${html.toString()};
@@ -53,7 +54,10 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
         return new Response(blob);
       }
       assert.equal(url.origin,'https://sync.fixture.example');
-      if (url.pathname.endsWith('/article')) return Response.json({status:'local_only',reason:'shared_source_not_found'});
+      if (url.pathname.endsWith('/article')) {
+        const record = index.get(JSON.parse(options.body).sha256);
+        return Response.json(record ? {status:'available',commit,record} : {status:'local_only',reason:'shared_source_not_found'});
+      }
       assert.ok(url.pathname.endsWith('/publication'));
       const {url:source,original,reading,processing_sha256,options_sha256} = JSON.parse(options.body);
       firstReadback = source.endsWith('/verified');
@@ -67,9 +71,12 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
         path:'加工版本/'+digest(source).slice(0,24)+'/reading-'+digest(reading)+'.md'
       }];
       if (readingFiles.length) blobs.set('reading-'+digest(reading)+'.md',reading);
-      return Response.json({status:'available',commit,record:{schema:'progressive-reading.shared-article/v1',
+      const record = {schema:'progressive-reading.shared-article/v1',
         url:source,title:'Fixture article',original:{path:'原稿/'+digest(source).slice(0,24)+'/'+hash+'.md',sha256:hash},
-        reading_files:readingFiles}});
+        reading_files:readingFiles};
+      index.set(digest(source), record);
+      await fs.appendFile(path.join(root,'publication-writes'),source+'\\n');
+      return Response.json({status:'available',commit,record});
     };
   `);
   const socket = net.createServer();
@@ -145,4 +152,12 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
   assert.equal(originalSynced.results[0].receipt.shared_original.original.sha256,
     snapshotResult.receipt.shared_reading.original.sha256);
   assert.equal(originalSynced.results[0].receipt.shared_original.reading,undefined);
+  const writesBefore = await fs.readFile(path.join(root, 'publication-writes'), 'utf8');
+  const repeated = await fetch(base+'/api/browser-import/requests', {method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ urls:[host+'/verified'], source:'other_reader', processing_mode:'original_text' })}).then(response=>response.json());
+  const replay = (await poll('/api/browser-import/requests/'+repeated.request_id,value=>value.terminal)).results[0];
+  assert.equal(replay.status,'idempotent_replay');
+  assert.equal(replay.receipt.shared_original.reused,true);
+  assert.equal(replay.receipt.shared_original.commit,'1'.repeat(40));
+  assert.equal(await fs.readFile(path.join(root, 'publication-writes'), 'utf8'), writesBefore);
 });
