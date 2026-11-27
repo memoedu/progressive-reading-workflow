@@ -99,7 +99,7 @@ export async function readSharedArticleIndex(root, { fetchImpl = fetch } = {}) {
   return { tree: result.sha, keys };
 }
 
-export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch, lookupOnly = false, publicSourcesOnly = false } = {}) {
+export async function resolveSharedSubscription(root, url, previous, { fetchImpl = fetch, lookupOnly = false, publicSourcesOnly = false, skipIndexLookup = false } = {}) {
   const canonical = sharedArticleUrl(url);
   if (!canonical) return null;
   const state = await settings(root);
@@ -107,6 +107,7 @@ export async function resolveSharedSubscription(root, url, previous, { fetchImpl
   const pending = previous?.status === 'pending_review';
   const publicOrigin = defaultArticleOrigins.has(new URL(canonical).origin);
   const hashOnly = lookupOnly || (!publicOrigin && (publicSourcesOnly || state.endpoint === defaultEndpoint));
+  if (skipIndexLookup && hashOnly) return null;
   let result;
   try { result = hashOnly ? await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl)
     : await request(state, pending ? 'status' : 'resolve', { url: canonical }, fetchImpl); }
@@ -229,15 +230,26 @@ async function verifiedReadingBytes(commit, item, fetchImpl) {
   return bytes;
 }
 
-export async function downloadSharedReading(root, { url, kind, processingOptions, originalSha256 }, { fetchImpl = fetch } = {}) {
+export async function lookupSharedReadingArtifacts(root, { url, kind, processingOptions, originalSha256, includeReading = true, includeOriginal = true }, { fetchImpl = fetch } = {}) {
   const canonical = sharedArticleUrl(url);
   const state = await settings(root);
   if (!canonical || !state.enabled || !state.endpoint) return null;
   const response = await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl);
   if (response.status !== 'available') return null;
   const record = sharedRecord(response.record, canonical);
-  const entry = readingEntry(record, { kind:kind || defaultReadingKind(canonical), processingOptions }, originalSha256);
-  return entry ? verifiedReadingPair(response.commit, record, entry, fetchImpl) : null;
+  const entry = includeReading && readingEntry(record, { kind:kind || defaultReadingKind(canonical), processingOptions }, originalSha256);
+  if (entry) return verifiedReadingPair(response.commit, record, entry, fetchImpl);
+  if (!includeOriginal) return null;
+  const original = originalSha256
+    ? [record.original, ...(record.original_revisions || [])].find(item => item.sha256 === originalSha256)
+    : record.original;
+  if (!original) return null;
+  const originalBytes = await verifiedReadingBytes(response.commit, original, fetchImpl);
+  return { status: 'available', commit: response.commit, title: record.title, original, originalBytes };
+}
+
+export async function downloadSharedReading(root, input, options) {
+  return lookupSharedReadingArtifacts(root, { ...input, includeOriginal: false }, options);
 }
 
 export async function syncSharedReading(root, { url, kind, original, markdown, processingOptions }, {

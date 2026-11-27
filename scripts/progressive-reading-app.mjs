@@ -20,7 +20,8 @@ import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./
 import { htmlArticleToMarkdown } from "./browser-page-markdown.mjs";
 import { BROWSER_DRAFT_BODY_LIMIT, normalizeMarkdownText } from "./markdown-text.mjs";
 import { createOriginalMarkdownBackup } from "./original-markdown-backup.mjs";
-import { downloadSharedReading, generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
+import { lookupSharedReadingArtifacts, generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings } from '../subscription-workflow/shared-library-client.mjs';
+import { reconcileReadingPublication } from '../subscription-workflow/reading-publication-replay.mjs';
 import { synchronizeReadingPublication } from '../subscription-workflow/reading-publication.mjs';
 import { readingPublicationReceipt } from '../subscription-workflow/reading-publication-outbox.mjs';
 import { sharedPublicWebCandidate, sharedReadingSource } from '../subscription-workflow/shared-library.mjs';
@@ -1248,8 +1249,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     throw new Error("invalid_url");
   }
   if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported_url_protocol");
-  const sharedReading = options.sharedReading;
-  const cachedRssMarkdown = options.cachedRssMarkdown ?? sharedReading?.originalBytes.toString('utf8');
+  const cachedRssMarkdown = options.cachedRssMarkdown ?? options.sharedReading?.originalBytes.toString('utf8');
   if (!draft.html && !draft.pageText && !cachedRssMarkdown) throw new Error("empty_page_content");
 
   const converted = cachedRssMarkdown
@@ -1261,6 +1261,11 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     title: draft.title
   });
   if (!cachedRssMarkdown) assertUrlImportBodyIntegrity(draft, converted);
+  const indexed = options.indexedOriginal;
+  const sharedReading = options.sharedReading || (options.standardize !== false && indexed?.reading &&
+    indexed.original.sha256 === createHash('sha256').update(converted.markdown).digest('hex') &&
+    !draft.userInstruction && !draft.annotations.length && !draft.qaCards.length && !draft.articleMusing &&
+    !draft.receipt && !draft.importJob?.forceReimport ? indexed : undefined);
   const standardize = options.standardize !== false && !sharedReading;
   const resolvedDestination = destination;
   const completed = resolvedDestination === "completed";
@@ -1320,8 +1325,7 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     archivedOriginalSha256: options.archivedOriginalSha256,
     archiveHintSha256: draft.sourceMetadata.shared_original_sha256,
     publicCapture: options.anonymousOriginalCapture === true && sharedPublicWebCandidate(parsed.href),
-    privateContent: Boolean(options.authenticatedSource || draft.userInstruction || draft.annotations.length ||
-      draft.qaCards.length || draft.articleMusing || reimportSnapshot || orphanState),
+    indexed: indexed && { ...indexed, reading: undefined },
     processingOptions: draft.processingOptions
   };
   const sourceSharing = standardize && process.env.NODE_ENV !== 'test'
@@ -1414,12 +1418,14 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   }
   await writeFileAtomic(target, markdown, {exclusive: Boolean(orphanState)});
   await writeFileAtomic(metadataTarget, `${JSON.stringify(metadata, null, 2)}\n`);
-  const written = preprocessing && await fs.readFile(target).catch(() => null);
+  const generatedReading = preprocessing && !draft.userInstruction && !draft.annotations.length &&
+    !draft.qaCards.length && !draft.articleMusing && !reimportSnapshot && !orphanState;
+  const written = generatedReading && await fs.readFile(target).catch(() => null);
   const sharing = process.env.NODE_ENV === 'test' ? {} : await synchronizeReadingPublication(workflowRoot, {
     ...publicationSource,
     markdown: written && createHash('sha256').update(written).digest('hex') === finalMarkdownSha256
       ? written.toString('utf8') : undefined,
-    versions: preprocessing?.shareableVersions,
+    versions: generatedReading ? preprocessing.shareableVersions : undefined,
     reused: sharedReading
   });
   return {
@@ -1497,16 +1503,24 @@ function authenticatedCookieHealth() {
   };
 }
 
-async function fetchUrlImportDraft(requestedUrl, { onProgress } = {}) {
-  if (youtubeVideoIdentity(requestedUrl)) {
-    return fetchYoutubeSubtitleDraft(requestedUrl, { liveSnapshot: liveCookieSnapshot, onProgress });
-  }
-  const shared = await resolveSharedSubscription(workflowRoot, requestedUrl, null, { publicSourcesOnly: true }).catch(() => null);
+async function fetchUrlImportDraft(requestedUrl, { onProgress, sharedArtifacts } = {}) {
+  const youtube = youtubeVideoIdentity(requestedUrl);
+  const fromIndex = sharedArtifacts?.originalBytes && {
+    status: 'available', commit: sharedArtifacts.commit, sha256: sharedArtifacts.original.sha256,
+    article: { title: sharedArtifacts.title, markdown: sharedArtifacts.originalBytes.toString('utf8') }
+  };
+  const shared = fromIndex || await resolveSharedSubscription(workflowRoot, requestedUrl, null, {
+    publicSourcesOnly: true, skipIndexLookup: sharedArtifacts !== undefined
+  }).catch(() => null);
   if (shared?.status === 'available') {
     return { requestedUrl, finalUrl: requestedUrl, redirectChain: [], fetchReceipt: { source_reused: 'shared_library' },
       draft: { id: `local-ir-url-${shortHash(requestedUrl, 16)}`, url: requestedUrl, title: shared.article.title,
         cachedRssMarkdown: shared.article.markdown, sourceType: 'url_import', sourceMetadata: { source_url: requestedUrl,
-          canonical_url: requestedUrl, source_is_original: true, shared_original_sha256: shared.sha256 } } };
+          canonical_url: requestedUrl, source_is_original: true, shared_original_sha256: shared.sha256,
+          ...(youtube ? { source_type: 'youtube_video_transcript', input_form: 'spoken_transcript' } : {}) } } };
+  }
+  if (youtube) {
+    return fetchYoutubeSubtitleDraft(requestedUrl, { liveSnapshot: liveCookieSnapshot, onProgress });
   }
   const loadAuthenticated = () => fetchUrlWithoutBrowser(requestedUrl, { cookieHeaderForUrl: runtimeCookieHeaderForUrl });
   const fetched = await (sharedPublicWebCandidate(requestedUrl)
@@ -1536,6 +1550,19 @@ async function fetchUrlImportDraft(requestedUrl, { onProgress } = {}) {
   };
 }
 
+async function sharedImportArtifacts(url, processingOptions, includeReading) {
+  if (process.env.NODE_ENV === 'test') return undefined;
+  return lookupSharedReadingArtifacts(workflowRoot, { url, processingOptions, includeReading }).catch(() => null);
+}
+
+async function reuseReadingPublication(url, existing, indexed, excludeTaskId) {
+  const replay = sourceReuseResult(url, existing);
+  if (process.env.NODE_ENV === 'test') return replay;
+  const retained = await browserImportBroker.findSuccessfulResultForUrl(url, { excludeTaskId, requireOriginal: true });
+  Object.assign(replay.receipt, await reconcileReadingPublication(workflowRoot, { url, file: existing.path, retained, indexed }));
+  return replay;
+}
+
 async function writeBrowserDraftCommit(rawBody, destination = "reading", options = {}) {
   const rawUrl = String(rawBody?.draft?.url || "").trim();
   let lockKey = rawUrl;
@@ -1546,10 +1573,14 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
   }
   const identity=sourceIdentityUrl(rawBody?.draft?.sourceMetadata,rawUrl);
   return withBrowserCommitLock(lockKey, () => withSourcePublication(workflowRoot, identity, async () => {
+    const draft = rawBody?.draft || {};
+    if (destination === 'reading' && options.indexedOriginal === undefined) {
+      options = { ...options, indexedOriginal: await sharedImportArtifacts(identity, draft.processingOptions,
+        options.standardize !== false && !draft.userInstruction) };
+    }
     if (destination === 'reading') {
       const existing = await findSourcePublication(workflowRoot, identity);
       if (existing) {
-        const draft = rawBody?.draft || {};
         const desiredRoot = draft.destinationFolder ? readingDestinationRoot(draft.destinationFolder) : browserHighlightRoot;
         const explicitReimport = draft.importJob?.forceReimport === true
           || (draft.importJob?.forceReimport === undefined && Boolean(draft.submittedAt && draft.receipt) && draft.locked === false);
@@ -1557,10 +1588,9 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
         // Other entry routes and all URL-only imports reuse the actual library path.
         const guardedReimport = draft.importJob?.forceReimport === true && Boolean(draft.importJob?.expectedPublication);
         if ((draft.sourceType === 'url_import' && !guardedReimport) || (options.standardize !== false && (!explicitReimport
-          || path.dirname(existing.path) !== path.resolve(desiredRoot)))) return sourceReuseResult(rawUrl, existing);
+          || path.dirname(existing.path) !== path.resolve(desiredRoot)))) return reuseReadingPublication(rawUrl, existing, options.indexedOriginal);
       }
     }
-    const draft = rawBody?.draft;
     if (options.reuseSiteCapture && !draft?.annotations?.length && !draft?.qaCards?.length
       && !draft?.articleMusing && !draft?.receipt && !draft?.importJob?.forceReimport) {
       const capture = await findSiteArticleCapture(workflowRoot, rawUrl);
@@ -1578,18 +1608,16 @@ async function writeBrowserDraftCommit(rawBody, destination = "reading", options
   }));
 }
 
-async function importUrlThroughStandardWorkflow(url, { userInstruction = "", destinationFolder = "", processingMode = 'standard_preprocess', processingOptions = {}, pendingInputPath = null, cachedRssDraft = null, articleSource = null, onProgress } = {}) {
+async function importUrlThroughStandardWorkflow(url, { userInstruction = "", destinationFolder = "", processingMode = 'standard_preprocess', processingOptions = {}, pendingInputPath = null, cachedRssDraft = null, articleSource = null, sharedArtifacts, onProgress } = {}) {
   if (!['standard_preprocess','original_text'].includes(processingMode)) throw new Error('unsupported_url_processing_mode');
   if (processingMode === 'standard_preprocess' && !userInstruction && !pendingInputPath && !cachedRssDraft && !articleSource &&
-      process.env.NODE_ENV !== 'test' && sharedReadingSource(url) !== 'bilibili') {
-    const shared = await downloadSharedReading(workflowRoot, { url, processingOptions }).catch(() => null);
-    if (shared) {
-      const result = await writeBrowserDraftCommit({ draft: { id: `local-ir-url-${shortHash(url, 16)}`,
-        url, title: shared.title, sourceType: 'url_import', destinationFolder,
-        sourceMetadata: { source_url: url, canonical_url: url, shared_original_sha256: shared.original.sha256 }
-      } }, 'reading', { sharedReading: shared });
-      return { ...result, requested_url: url, final_url: url, redirect_chain: [], status: 'idempotent_replay' };
-    }
+      sharedArtifacts?.reading) {
+    const shared = sharedArtifacts;
+    const result = await writeBrowserDraftCommit({ draft: { id: `local-ir-url-${shortHash(url, 16)}`,
+      url, title: shared.title, sourceType: 'url_import', destinationFolder,
+      sourceMetadata: { source_url: url, canonical_url: url, shared_original_sha256: shared.original.sha256 }
+    } }, 'reading', { sharedReading: shared });
+    return { ...result, requested_url: url, final_url: url, redirect_chain: [], status: 'idempotent_replay' };
   }
   let fetched;
   if (pendingInputPath) {
@@ -1604,7 +1632,7 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
     const source = articleSource ? await capturedArticle(workflowRoot, articleSource, url)
       : await findSiteArticleCapture(workflowRoot, url);
     if (!source) {
-      fetched = await fetchUrlImportDraft(url, { onProgress });
+      fetched = await fetchUrlImportDraft(url, { onProgress, sharedArtifacts });
     } else {
       if (articleSource) destinationFolder = taxonomyFolder(destinationFolder, source.metadata?.taxonomy);
       fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[],
@@ -1625,9 +1653,9 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
       anonymousOriginalCapture: !pendingInputPath && !cachedRssDraft && (fetched.anonymousSiteCapture === true ||
         (fetched.fetchReceipt.authenticated_fetch === false && !fetched.fetchReceipt.source_reused &&
           fetched.fetchReceipt.shared_library?.status !== 'pending_review')),
-      authenticatedSource: fetched.fetchReceipt.authenticated_fetch === true,
       archivedOriginalSha256: !pendingInputPath && !cachedRssDraft && fetched.fetchReceipt.source_reused === 'shared_library'
         ? fetched.draft.sourceMetadata.shared_original_sha256 : undefined,
+      indexedOriginal: sharedArtifacts && { ...sharedArtifacts, reading: undefined },
       missingPublicationHash:articleSource?.missing_publications?.[url]
     });
   } catch (error) {
@@ -1806,12 +1834,16 @@ async function processBackgroundImportWorker(requestId, workerIndex) {
     try {
       await withBrowserCommitLock(`url-import:${urlImportDedupeKey(task.requested_url)}`, async () => {
         const retainedRss = task.capture_mode === "page_snapshot" && task.source === "rss_auto_import";
+        const sharedArtifacts = !task.article_source && !task.pending_input_path && !task.site_import
+          ? await sharedImportArtifacts(task.requested_url, task.processing_options, !task.user_instruction &&
+            task.processing_mode !== 'original_text' && sharedReadingSource(task.requested_url) !== 'bilibili')
+          : undefined;
         if (task.capture_mode === "page_snapshot" && !retainedRss) {
           await onProgress({ stage: "capture_conversion" });
           const snapshot = await browserImportBroker.getTaskSnapshot(task.id);
           const result = await writeBrowserDraftCommit(snapshot, "reading", {
             standardize: task.processing_mode!=='original_text', onProgress, cachedRssMarkdown:snapshot.draft?.cachedRssMarkdown,
-            reuseSiteCapture: task.source === 'browser_page_snapshot'
+            reuseSiteCapture: task.source === 'browser_page_snapshot', indexedOriginal: sharedArtifacts
           });
           if(result.receipt?.quality_status==='warning')result.status='imported_with_warnings';
           await browserImportBroker.completeTask(task.id, { ok: true, result, leaseToken: task.lease_token });
@@ -1831,7 +1863,8 @@ async function processBackgroundImportWorker(requestId, workerIndex) {
         }
         const libraryPublication = task.article_source ? null : await findSourcePublication(workflowRoot, task.requested_url);
         if (libraryPublication) {
-          await browserImportBroker.completeTask(task.id, { ok: true, result: sourceReuseResult(task.requested_url, libraryPublication), leaseToken: task.lease_token });
+          const replay = await reuseReadingPublication(task.requested_url, libraryPublication, sharedArtifacts, task.id);
+          await browserImportBroker.completeTask(task.id, { ok: true, result: replay, leaseToken: task.lease_token });
           return;
         }
         const existing = task.article_source ? null : await browserImportBroker.findSuccessfulResultForUrl(task.requested_url, {
@@ -1858,6 +1891,7 @@ async function processBackgroundImportWorker(requestId, workerIndex) {
             pendingInputPath: task.pending_input_path || null,
             cachedRssDraft: retainedRss ? (await browserImportBroker.getTaskSnapshot(task.id)).draft : null,
             articleSource: task.article_source || null,
+            sharedArtifacts,
             onProgress
           });
         await browserImportBroker.completeTask(task.id, {

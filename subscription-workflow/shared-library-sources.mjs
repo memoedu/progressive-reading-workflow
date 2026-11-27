@@ -1,7 +1,7 @@
 import { sharedArticleUrl, sharedPublicWebCandidate, sharedReadingSource } from './shared-library.mjs';
 import { parseFeedDocument } from '../rss-source/core.mjs';
 import { fetchArticleContent, originalArticleTarget } from '../rss-source/article-fetch.mjs';
-import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
+import { fetchUrlWithoutBrowser, REQUIRES_BROWSER_AUTH, REQUIRES_JS_RENDER } from '../scripts/url-background-fetch.mjs';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import { youtubeVideoIdentity } from '../scripts/url-import-input.mjs';
 
@@ -53,12 +53,18 @@ export async function verifyPublicYoutubeListing(url, fetchImpl = fetch) {
 export async function verifyPublicReadingSource(url, fetchImpl = fetch, publicWebOrigins) {
   const source = sharedReadingSource(url);
   if (sharedPublicWebCandidate(url, publicWebOrigins)) {
-    const page = await fetchUrlWithoutBrowser(url, { timeoutMs: 15_000, fetchImpl: (target, options) => {
-      if (sharedArticleUrl(target) !== url) throw new Error('shared_source_redirect_not_allowed');
-      return fetchImpl(target, options);
-    } });
+    let page;
+    try {
+      page = await fetchUrlWithoutBrowser(url, { timeoutMs: 15_000, fetchImpl: (target, options) => {
+        if (sharedArticleUrl(target) !== url) throw new Error('shared_source_redirect_not_allowed');
+        return fetchImpl(target, options);
+      } });
+    } catch (error) {
+      if (source === 'zhihu' && [REQUIRES_BROWSER_AUTH, REQUIRES_JS_RENDER].includes(error.status)) return null;
+      throw error;
+    }
     if (!page.isHtml || !page.title || page.fetchReceipt.authenticated_fetch !== false ||
-        (source === 'wechat' && !page.articleHtml)) return null;
+        (['wechat', 'zhihu'].includes(source) && !page.articleHtml)) return null;
     return htmlArticleToMarkdown({ html: page.articleHtml || page.body, sourceUrl: page.finalUrl, title: page.title });
   }
   if (source !== 'bilibili') return null;

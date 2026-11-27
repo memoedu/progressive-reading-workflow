@@ -57,6 +57,8 @@ export function sharedReadingSource(url) {
   if (!canonical) return null;
   if (youtubeVideoIdentity(canonical)) return 'youtube';
   const parsed = new URL(canonical);
+  if ((parsed.hostname === 'www.zhihu.com' && /^\/question\/\d+\/answer\/\d+$/u.test(parsed.pathname)) ||
+    (parsed.hostname === 'zhuanlan.zhihu.com' && /^\/p\/\d+$/u.test(parsed.pathname))) return 'zhihu';
   if (parsed.hostname === 'mp.weixin.qq.com' && /^\/s\/[\w-]+$/u.test(parsed.pathname)) return 'wechat';
   if (parsed.hostname === 'www.bilibili.com' && /^\/video\/BV[0-9A-Za-z]{10}$/u.test(parsed.pathname)) return 'bilibili';
   return null;
@@ -67,7 +69,7 @@ const publicWebOrigins = new Set(defaultSources.public_web_origins);
 export function sharedPublicWebCandidate(url, origins = publicWebOrigins) {
   const canonical = sharedArticleUrl(url);
   if (!canonical) return false;
-  if (sharedReadingSource(canonical) === 'wechat') return true;
+  if (['wechat', 'zhihu'].includes(sharedReadingSource(canonical))) return true;
   const { origin, pathname } = new URL(canonical);
   return pathname !== '/' && origins.has(origin);
 }

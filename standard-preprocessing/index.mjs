@@ -783,9 +783,10 @@ async function publishReadingArtifactUnlocked(result, {
     await replaceFileAtomic(resolvedPublish, publishedMarkdown);
   }
   let sharing = {};
-  if (libraryRoot && process.env.NODE_ENV !== 'test') {
+  if (libraryRoot && publicationSource && process.env.NODE_ENV !== 'test') {
     const request = sourceRequest || (runDir && await fs.readFile(path.join(runDir, 'request.json'), 'utf8').then(JSON.parse).catch(() => null));
-    const written = await fs.readFile(resolvedPublish).catch(() => null);
+    const generatedReading = !guardedReplacement && !String(request?.user_instruction || '').trim() && !assetRecords.size;
+    const written = generatedReading && await fs.readFile(resolvedPublish).catch(() => null);
     const { synchronizeReadingPublication } = await import('../subscription-workflow/reading-publication.mjs');
     sharing = await synchronizeReadingPublication(libraryRoot, {
       url: sourceUrl,
@@ -794,9 +795,7 @@ async function publishReadingArtifactUnlocked(result, {
       processingOptions: request?.processing_options,
       ...publicationSource,
       markdown: written && sha256(written) === publishedMarkdownHash ? written.toString('utf8') : undefined,
-      standardResult: result,
-      privateContent: Boolean(publicationSource.privateContent || guardedReplacement || String(request?.user_instruction || '').trim() ||
-        assetRecords.size)
+      standardResult: generatedReading ? result : undefined
     });
   }
   const publication = {

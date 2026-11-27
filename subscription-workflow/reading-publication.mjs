@@ -1,4 +1,4 @@
-import { generatedSharedVersions, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
+import { generatedSharedVersions, lookupSharedReadingArtifacts, resolveSharedSubscription, sharedLibrarySettings, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
 import { sharedArticleUrl, sharedDigest, sharedPublicWebCandidate } from './shared-library.mjs';
 import { verifyPublicReadingSource } from './shared-library-sources.mjs';
 import { queueReadingPublication } from './reading-publication-outbox.mjs';
@@ -11,16 +11,17 @@ export async function synchronizeReadingPublication(root, {
   archivedOriginalSha256,
   archiveHintSha256,
   publicCapture = false,
-  privateContent = false,
   markdown,
   defer = false,
   kind,
   processingOptions,
   versions,
   standardResult,
+  indexed,
   reused = null
 }, {
   settings = sharedLibrarySettings,
+  lookupArtifacts = lookupSharedReadingArtifacts,
   verifySource = verifyPublicReadingSource,
   lookupOriginal = resolveSharedSubscription,
   syncReading = syncSharedReading,
@@ -28,7 +29,6 @@ export async function synchronizeReadingPublication(root, {
   queueRetry = queueReadingPublication
 } = {}) {
   const local = reason => ({ shared_reading: { status: 'local_only', reason } });
-  if (privateContent) return local('personal_or_existing_document');
   if (reused) {
     return { shared_reading: { status: 'available', commit: reused.commit, original: reused.original,
       reading: reused.reading, reused: true } };
@@ -39,10 +39,19 @@ export async function synchronizeReadingPublication(root, {
   let archived = originalHash === archivedOriginalSha256;
   const archiveHint = originalHash === archiveHintSha256;
   const publicWeb = sharedPublicWebCandidate(canonical);
-  if (!archived && !archiveHint && !publicCapture && !publicWeb) return local('source_not_publicly_verified');
   try {
     const state = await settings(root);
     if (!state.enabled) return local('sharing_disabled');
+    const recorded = indexed === undefined ? await lookupArtifacts(root, {
+      url: canonical, kind, processingOptions, originalSha256: originalHash, includeReading: markdown !== undefined
+    }).catch(() => null) : indexed;
+    if (recorded?.original?.sha256 === originalHash) {
+      archived = true;
+      if (markdown === undefined || recorded.reading) {
+        return { shared_reading: { status: 'available', commit: recorded.commit, original: recorded.original,
+          ...(markdown !== undefined ? { reading: recorded.reading } : {}), reused: true } };
+      }
+    }
     if (!state.signed_in) return local('shared_account_or_source_missing');
     if (!archived && archiveHint) {
       const prior = await lookupOriginal(root, canonical, null, { lookupOnly: true });
