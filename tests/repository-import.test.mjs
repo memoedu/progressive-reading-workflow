@@ -10,7 +10,7 @@ import {originalLinkEvidence,repositoryMarkdown,discoverRepository} from '../sit
 import {repositoryConfig} from '../site-import/repository-config.mjs';
 import {bindRepositoryRelations,resolveSourceRelation} from '../scripts/source-relations.mjs';
 import {sourceUrls,findSourcePublications} from '../scripts/reading-source-library.mjs';
-import {normalizeSource,writeJson} from '../subscription-workflow/config.mjs';
+import {normalizeSource,writeJson,digest} from '../subscription-workflow/config.mjs';
 import {taxonomyFolder} from '../site-import/taxonomy.mjs';
 import {scanRepositories} from '../subscription-workflow/repositories.mjs';
 import {writeRepositoryIndexes} from '../site-import/repository-indexes.mjs';
@@ -96,9 +96,10 @@ test('full tree import separates navigation and binds both local representations
   assert.equal(inventory.mapping_counts.verified,2);assert.equal(inventory.mapping_counts.local_originals,1);
   const captures=[];for(const name of await fs.readdir(path.join(directory,'sources')))captures.push(JSON.parse(await fs.readFile(path.join(directory,'sources',name),'utf8')));
   const publications=[];
-  for(const capture of captures){const file=path.join(root,'阅读区','译文',capture.metadata.repository.relative_path);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'---\nsource_url: '+JSON.stringify(capture.url)+'\noriginal_url: '+JSON.stringify(capture.metadata.original_url||'')+'\n---\n'+capture.markdown);publications.push({url:capture.url,path:file,sha256:'fixture',verified:true});}
+  for(const capture of captures){const file=path.join(root,'阅读区','译文',capture.metadata.repository.relative_path);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'---\nsource_url: '+JSON.stringify(capture.url)+'\noriginal_url: '+JSON.stringify(capture.metadata.original_url||'')+'\n---\n'+capture.markdown);publications.push({url:capture.url,path:file,sha256:digest(await fs.readFile(file)),verified:true});}
   const result=await bindRepositoryRelations(root,captures,publications);assert.equal(result.verified_relations,2);assert.equal(result.bound_local_files,1);
   const relation=await resolveSourceRelation(root,'https://writer.example/one');assert.equal(relation.original.path,originalPath);assert.equal(relation.translations.length,1);assert.equal(relation.original_fetch_required,false);
+  assert.equal(relation.translations[0].translation_changed,false);
   const missing=await resolveSourceRelation(root,'https://example.github.io/translations/author/notes/Two.html');assert.equal(missing.original_fetch_required,true);
   assert.equal(await fs.readFile(originalPath,'utf8'),original);
   assert.deepEqual(sourceUrls('---\nsource_url: "https://translation.example/one"\noriginal_url: "https://writer.example/one"\nfact_source_url: "https://writer.example/one"\n---'),['https://translation.example/one']);
@@ -110,4 +111,9 @@ test('full tree import separates navigation and binds both local representations
   await fs.appendFile(nested,'\n用户的导航备注。\n');
   await assert.rejects(writeRepositoryIndexes(root,settings,captures,publications),/repository_index_user_edit_preserved/u);
   assert.ok((await fs.readFile(nested,'utf8')).includes('用户的导航备注。'));
+  const upstream=structuredClone(captures),changed=upstream.find(c=>c.metadata.original_url==='https://writer.example/one');changed.source_response.sha256='upstream-new';
+  assert.equal((await bindRepositoryRelations(root,upstream,publications)).upstream_changes,1);
+  const preservedRelation=await resolveSourceRelation(root,'https://writer.example/one');assert.equal(preservedRelation.translations[0].revision_status,'review_required');assert.notEqual(preservedRelation.translations[0].source_sha256,'upstream-new');
+  const translationPath=preservedRelation.translations[0].translation_path;await fs.mkdir(path.join(root,'已归档原文'));const archived=path.join(root,'已归档原文','translation.md');await fs.rename(translationPath,archived);
+  assert.equal((await resolveSourceRelation(root,'https://writer.example/one')).translations[0].translation_path,archived);
 });

@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {verifySiteCollection} from '../site-import/tasks.mjs';
+import {runPath} from '../site-import/store.mjs';
+import {writeJson,digest} from '../subscription-workflow/config.mjs';
+import {verifyRepositoryImport} from '../scripts/verify-repository-import.mjs';
+
+test('already placed repository files verify while the unrelated subscription migration lock is held',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'repository-placement-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const home=path.join(root,'subscriptions');
+  await writeJson(path.join(root,'imports/subscriptions/active.json'),{home});
+  await writeJson(path.join(home,'subscriptions.json'),{schema:'progressive-reading.subscriptions/v1',revision:1,enabled:true,subscriptions:[],rss_home:path.join(root,'rss')});
+  const lock=path.join(home,'worker.lock'),lockValue={pid:process.pid,token:'other-active-job'};await writeJson(lock,lockValue);
+  const id='site-run-'+'a'.repeat(24),url='https://example.github.io/translations/author/one.html';
+  const taxonomy={repository_directory:['author']},settings={name:'Translations',destination:'译文',processing_mode:'original_text',generate_index:false,repository:{url:'https://github.com/example/translations',content_root:'src'}};
+  const file=path.join(root,'阅读区','译文','author','one.md'),markdown='# Full source\n\nComplete body.';
+  await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'---\nsource_url: '+JSON.stringify(url)+'\n---\n'+markdown);
+  const capture={url,title:'One',markdown,source_response:{sha256:digest(markdown)},metadata:{repository:{url:settings.repository.url,relative_path:'author/one.md'},taxonomy,original_link_evidence:{status:'missing',candidates:[]}}};
+  await writeJson(path.join(runPath(root,id),'sources',digest(url)+'.json'),capture);
+  const collection={inventory:{articles:[{url,title:'One',taxonomy}],article_source:{run_id:id}},results:[{requested_url:url,status:'imported',artifacts:[{kind:'markdown',path:file,sha256:digest(await fs.readFile(file))}],receipt:{processing_mode:'original_text',llm_used:false}}]};
+  const report=await verifySiteCollection(root,settings,collection,id);assert.equal(report.verified,1);assert.equal(report.organization.moved,0);
+  assert.deepEqual(JSON.parse(await fs.readFile(lock,'utf8')),lockValue);
+  const retry='site-run-'+'b'.repeat(24);collection.inventory.complete=true;collection.inventory.repository_snapshot={sha:'c'.repeat(40)};collection.verification=report;
+  await writeJson(path.join(runPath(root,retry),'run.json'),{phase:'completed',settings,collection,results:collection.results});
+  const audit=await verifyRepositoryImport(root,runPath(root,retry));assert.equal(audit.verified,1);assert.equal(audit.checks[0].body_coverage,'passed');
+  const wrong=path.join(root,'阅读区','wrong.md');await fs.rename(file,wrong);collection.results[0].artifacts[0].path=wrong;
+  await assert.rejects(verifySiteCollection(root,settings,collection,id),/该操作正在执行/u);
+});

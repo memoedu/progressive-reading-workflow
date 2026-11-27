@@ -10,7 +10,7 @@ import { readingPublicationReceipt } from '../subscription-workflow/reading-publ
 
 const assets=new Map([['/imports',['index.html','text/html']],['/imports/',['index.html','text/html']],['/imports/app.mjs',['app.mjs','text/javascript']],['/imports/style.css',['style.css','text/css']],['/import-candidates',['candidates.html','text/html']],['/import-candidates/',['candidates.html','text/html']],['/import-candidates/app.mjs',['candidates.mjs','text/javascript']]]);
 const send=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));};
-function brief(run){if(!run)return null;const {collection,results,...rest}=run;return {...rest,result_count:results?.length||0,index:collection?.verification?.index||null,excluded_count:collection?.inventory?.excluded_count||0,error:collection?.error||null};}
+function brief(run){if(!run)return null;const {collection,results,...rest}=run;return {...rest,result_count:results?.length||0,index:collection?.verification?.index||null,source_relations:collection?.verification?.source_relations||null,excluded_count:collection?.inventory?.excluded_count||0,error:collection?.error||null};}
 export async function handleImportCenter(req,res,{root,broker,runRequest,legacyJobs=()=>[]}={}) {
   const url=new URL(req.url,'http://127.0.0.1');
   if(!assets.has(url.pathname)&&!url.pathname.startsWith('/api/site-imports')&&!url.pathname.startsWith('/api/import-center')&&!url.pathname.startsWith('/api/import-candidates')&&url.pathname!=='/api/source-relations')return false;
