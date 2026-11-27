@@ -14,6 +14,7 @@ import { syncLedger, loadLedger, workflowPaths, generateSummaries, prepareSubscr
 import { processPending, discover, observe } from '../video-workflow/watch-core.mjs';
 import { RssImporter } from '../rss-import/core.mjs';
 import { syncFeedDocument } from '../rss-source/core.mjs';
+import { distinctRetainedFeedDocuments } from '../subscription-workflow/history.mjs';
 import { shortKey, rollShortReports } from '../subscription-workflow/report-archive.mjs';
 import { applyDecision } from '../rss-reading/core.mjs';
 import { recordExceptions, acknowledgeExceptions, exceptionFile } from '../subscription-workflow/exception-log.mjs';
@@ -411,7 +412,15 @@ test('expanded RSS reporting replays only in-range items from retained snapshots
     + '<item><title>In scope</title><link>https://b.test/keep</link><pubDate>2026-08-31T16:00:00Z</pubDate><content:encoded>Archived full body</content:encoded></item>'
     + '</channel></rss>';
   await fs.writeFile(path.join(snapshots,'saved.xml'),xml);
+  await fs.writeFile(path.join(snapshots,'duplicate.xml'),xml);
   const offline=()=>{throw Error('archived fulltext must not be fetched')};
+  const broken=path.join(snapshots,'broken.xml');
+  await fs.writeFile(broken,'<rss version="2.0"><channel>');
+  await fs.utimes(broken,Date.now()/1000+1,Date.now()/1000+1);
+  const failed=await replayRssHistory(f.root,f.config,{},offline);
+  assert.equal(failed.length,1);
+  assert.match(failed[0].error,/feed_parse_failed/u);
+  await fs.writeFile(broken,xml);
   const first=await replayRssHistory(f.root,f.config,{},offline);
   assert.deepEqual(first.map(result=>result.urls),[['https://b.test/keep']]);
   assert.equal(first[0].result.items[0].content_status,'fulltext_ready');
@@ -419,6 +428,30 @@ test('expanded RSS reporting replays only in-range items from retained snapshots
   source.history_mode='all';
   await writeJson(paths(f.root).config,f.config);
   assert.deepEqual((await replayRssHistory(f.root,f.config,{},offline)).map(result=>result.urls),[['https://b.test/old']]);
+});
+
+test('retained RSS deduplicates verified bytes per feed and preserves newest-first order',async()=>{
+  const f=await fixture();
+  const source='https://b.test/feed', other='https://b.test/other';
+  const saved=async (root,name,bytes,time)=>{
+    await fs.mkdir(root,{recursive:true});
+    const file=path.join(root,name);
+    await fs.writeFile(file,bytes);
+    await fs.utimes(file,time,time);
+    return file;
+  };
+  const rss=path.join(f.rssHome,'feeds',digest(source).slice(0,16));
+  const raw=path.join(f.root,'imports/rss/source-v1/runs/old/raw');
+  await saved(rss,'duplicate.xml','newest',100);
+  await saved(rss,'newest.xml','newest',400);
+  await saved(rss,'different.xml','different',300);
+  const duplicate=await saved(raw,'feed.rss.xml','newest',200);
+  await writeJson(path.join(raw,'response.json'),{requested_url:source,final_url:other,body_sha256:'stale-untrusted-receipt'});
+  const collect=feed=>Array.fromAsync(distinctRetainedFeedDocuments(f.root,f.rssHome,feed));
+  assert.deepEqual(await collect(source),['newest','different']);
+  assert.deepEqual(await collect(other),['newest']);
+  await fs.writeFile(duplicate,'repaired');
+  assert.deepEqual(await collect(source),['repaired','newest','different']);
 });
 
 test('Bilibili and Zhihu can promote previously baselined items after expanding the date scope',async()=>{
@@ -531,6 +564,49 @@ test('a source cycle appends each completed short article immediately and can re
   assert.equal(replay.failures.length,0);
   assert.equal(await fs.readFile(target,'utf8'),both);
   assert.equal((await loadLedger(f.root)).report_runs.weekly[week].short_weekly.item_count,2);
+});
+
+test('unchanged preview hits skip per-item ledger writes and a failed changed checkpoint is retried',async t=>{
+  const f=await fixture();
+  await addText(f,{url:'https://zhuanlan.zhihu.com/p/390'});
+  await addText(f,{url:'https://zhuanlan.zhihu.com/p/391'});
+  const options={previewConcurrency:1,previewRunner};
+  assert.equal((await prepareSubscriptionPreviews(f.root,'zhihu',options)).ready,2);
+
+  const original=fs.writeFile;
+  let writes=0, failAt=0;
+  t.mock.method(fs,'writeFile',async(file,...args)=>{
+    if(String(file).startsWith(f.reading.ledgerPath+'.tmp-') && ++writes===failAt) throw Error('injected checkpoint failure');
+    return original(file,...args);
+  });
+  const noCompute=()=>{throw Error('ready preview recomputed');};
+  const warm={...options,previewRunner:noCompute};
+  assert.equal((await prepareSubscriptionPreviews(f.root,'zhihu',warm)).ready,2);
+  assert.equal(writes,2,'sync and final checkpoint only');
+
+  const ledger=await loadLedger(f.root);
+  const first=Object.values(ledger.items).find(item=>item.review_preview?.status==='ready');
+  delete first.review_preview;
+  await writeJson(f.reading.ledgerPath,ledger);
+  writes=0;
+  failAt=2;
+  let recoveredBeforeEnd=false;
+  const interrupted=await prepareSubscriptionPreviews(f.root,'zhihu',{
+    ...warm,onPreviewProgress:event=>{
+      if(event.completed===2 && event.status==='ready'){
+        assert.equal(writes,3,'next ready item retried the pending checkpoint');
+        recoveredBeforeEnd=true;
+      }
+    }
+  });
+  assert.equal(interrupted.failures.length,1);
+  assert.match(interrupted.failures[0].error,/injected checkpoint failure/u);
+  assert.equal(recoveredBeforeEnd,true);
+  assert.equal((await loadLedger(f.root)).items[first.material_id].review_preview.status,'ready');
+  writes=0;
+  failAt=0;
+  assert.equal((await prepareSubscriptionPreviews(f.root,'zhihu',warm)).ready,2);
+  assert.equal(writes,2);
 });
 
 test('retrying a saved source snapshot touches only queued URLs and preserves the current feed cursor',async()=>{

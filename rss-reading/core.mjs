@@ -1062,16 +1062,22 @@ async function ensureReviewPreviews(paths, items, options = {}) {
   let cursor = 0;
   let completed = 0;
   let delivery = Promise.resolve();
+  let checkpointPending = false;
   const concurrency = Math.max(1, Math.min(3, Number(options.previewConcurrency || 2)));
   async function worker() {
     while (cursor < eligible.length) {
       const index = cursor;
       cursor += 1;
       const item = eligible[index];
+      const before = options.onArticleReady ? JSON.stringify(item) : null;
+      const markChanged = () => {
+        if (before !== null && before !== JSON.stringify(item)) checkpointPending = true;
+      };
       try {
         await ensureReviewPreview(paths, item, options);
       } catch (error) {
         item.review_preview = { status: "failed", reason: error.message };
+        markChanged();
         failures.push({ material_id: item.material_id, error: error.message });
         completed += 1;
         options.onPreviewProgress?.({ completed, total: eligible.length, materialId: item.material_id, status: "failed", error: error.message });
@@ -1080,8 +1086,20 @@ async function ensureReviewPreviews(paths, items, options = {}) {
       const completedCount = ++completed;
       if ((item.route === "short_aggregate" && options.deliverShort) || options.onArticleReady) {
         const attempt = delivery.then(async () => {
-          if (item.route === 'short_aggregate') await options.deliverShort?.(item);
-          await options.onArticleReady?.(item);
+          try {
+            if (item.route === 'short_aggregate') await options.deliverShort?.(item);
+          } finally {
+            markChanged();
+          }
+          if (checkpointPending) {
+            checkpointPending = false;
+            try {
+              await options.onArticleReady(item);
+            } catch (error) {
+              checkpointPending = true;
+              throw error;
+            }
+          }
         });
         delivery = attempt.catch(() => {});
         try {
