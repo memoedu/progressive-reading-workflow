@@ -397,7 +397,7 @@ function fileRecord(outputDir, name, content) {
   };
 }
 
-async function writeRunArtifacts(request, result, outputDir) {
+export async function writeRunArtifacts(request, result, outputDir) {
   const resolvedOutput = path.resolve(outputDir);
   await fs.mkdir(resolvedOutput, { recursive: true });
   const requestJson = `${JSON.stringify(request, null, 2)}\n`;
