@@ -144,7 +144,7 @@ async function sync(options) {
   const id = runId();
   const fetchedAt = new Date().toISOString();
   const conditionalHeaders = options.force === true ? {} : await readConditionalHeaders(outputRoot, feedUrl);
-  const fetched = await fetchText(feedUrl, { headers: conditionalHeaders });
+  const fetched = await (options.fetchFeed || fetchText)(feedUrl, { headers: conditionalHeaders });
   const response = responseMetadata(fetched.response, fetched.finalUrl);
   if (fetched.response.status === 304) {
     return writeNotModifiedRun({ outputRoot, feedUrl, fetchedAt, response, runId: id });
