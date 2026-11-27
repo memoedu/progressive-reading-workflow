@@ -1,7 +1,7 @@
 #Requires -Version 7.0
-param([Parameter(Mandatory=$true)][ValidateSet('rss','bilibili','zhihu','daily','weekly')][string]$Kind)
+param([Parameter(Mandatory=$true)][ValidateSet('rss','bilibili','zhihu','daily','weekly')][string]$Kind,[string]$WorkflowRoot)
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $PSScriptRoot
+$projectRoot = if ($WorkflowRoot) { (Resolve-Path -LiteralPath $WorkflowRoot).Path } else { Split-Path -Parent $PSScriptRoot }
 $logRoot = 'D:\Artifacts\ProgressiveReading\subscriptions\logs'
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 $log = Join-Path $logRoot ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $Kind + '.log')
@@ -44,8 +44,17 @@ if ($Kind -eq 'rss' -and (Test-Path -LiteralPath $bindingFile)) {
         } while ($true)
     }
 }
-# The normal worker remains the owner of the existing job and all review effects.
-& $node (Join-Path $PSScriptRoot 'cli.mjs') enqueue --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
+$cli = Join-Path $PSScriptRoot 'cli.mjs'
+if ($WorkflowRoot -and $Kind -eq 'rss') {
+    # Claim the original RSS job under the existing worker lock before the local app can take it.
+    & $node $cli run-scheduled-rss --root $projectRoot --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
+    if ($LASTEXITCODE -ne 0) {
+        # A busy worker can continue from the original queue without risking a second cycle.
+        & $node $cli enqueue --root $projectRoot --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
+    }
+} else {
+    & $node $cli enqueue --root $projectRoot --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
+}
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $service = Get-ScheduledTask -TaskName 'Local IR Browser Highlight' -ErrorAction Stop
 if ($service.State -ne 'Running') { Start-ScheduledTask -TaskName $service.TaskName }

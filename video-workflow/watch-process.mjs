@@ -69,7 +69,8 @@ export async function acquireSource(item,watch,jobDir,{packages=publicPackages,a
   try{
     await fs.writeFile(cookiePath,cookies.text,{flag:'wx',mode:0o600});
     const {stdout}=await execute(VIDEO_PYTHON,[
-      root+'/watch-subtitles.py','--job',jobDir+'/subtitle-job.json','--cookies-file',cookiePath],{windowsHide:true,maxBuffer:8*1024*1024});
+      root+'/watch-subtitles.py','--job',jobDir+'/subtitle-job.json','--cookies-file',cookiePath,
+      '--watch-root',WATCH_ARTIFACTS],{windowsHide:true,maxBuffer:8*1024*1024});
     await fs.writeFile(jobDir+'/subtitle-log.txt',stdout);
   }catch(error){
     const diagnostic=String(error.stderr||'');

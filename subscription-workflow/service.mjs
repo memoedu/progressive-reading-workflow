@@ -299,13 +299,14 @@ async function runJob(root, job, save) {
     faults:scopeFaults, receipt:result.receipt_path, outputs:result.outputs };
 }
 
-export async function drain(root = codeRoot) {
+export async function drain(root = codeRoot, scheduled = null) {
   const config = await loadConfig(root);
   if (!config?.enabled) return { status:'paused' };
   return withLock(path.join(paths(root).home,'worker.lock'),async()=>{
+    const target = scheduled && await enqueue(root, scheduled.kind, scheduled.cycle);
     const completed = [];
     for (;;) {
-      const job = (await jobList(root)).find(j=>['queued','running'].includes(j.status));
+      const job = (await jobList(root)).find(j=>['queued','running'].includes(j.status) && (!target || j.id === target.id));
       if (!job) break;
       const save = () => writeJson(path.join(paths(root).jobs,job.id+'.json'),job);
       job.status='running'; job.pid=process.pid; job.started_at ||= stamp(); await save();
@@ -313,8 +314,8 @@ export async function drain(root = codeRoot) {
       catch (error) { job.status='failed'; job.error=cleanError(error); await noticeFaults(root,job.kind,[{error:job.error}]); }
       job.completed_at=stamp(); delete job.current_step; await save(); completed.push({ id:job.id,kind:job.kind,status:job.status });
     }
-    return { status:'idle',completed };
-  });
+    return { status:'idle',completed, ...(target ? {job:target.id} : {}) };
+  }, { waitMs: scheduled ? 45000 : 0 });
 }
 
 export async function launchWorker(root = codeRoot) {

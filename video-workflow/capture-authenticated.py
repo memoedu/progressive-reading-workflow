@@ -58,8 +58,13 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--plan', type=Path, required=True)
     parser.add_argument('--frame-policy', choices=['timestamp_integrity','semantic'], default='timestamp_integrity')
-    parser.add_argument('--profile-dir', type=Path, default=Path(os.environ.get('PR_VIDEO_CAPTURE_PROFILE',
-        'D:/AppData/ProgressiveReading/BrowserAuth/videobook-capture-compatibility')))
+    if os.name == 'nt':
+        default_data = Path('D:/AppData')
+    else:
+        default_data = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
+    data_home = Path(os.environ.get('PROGRESSIVE_READING_DATA_HOME', default_data))
+    capture_profile = data_home / 'ProgressiveReading/BrowserAuth/videobook-capture-compatibility'
+    parser.add_argument('--profile-dir', type=Path, default=Path(os.environ.get('PR_VIDEO_CAPTURE_PROFILE', capture_profile)))
     args = parser.parse_args()
     sys.path.insert(0, str(Path(__file__).parent/'upstream/src'))
     import capture_frames as upstream
