@@ -26,6 +26,10 @@ python video-workflow/fetch-public.py code
 
 数据目录支持 `PROGRESSIVE_READING_VIDEO_HOME`，产物根目录支持 `PROGRESSIVE_READING_ARTIFACT_HOME`。既有 D 盘目录继续兼容，实际 watchlist、状态与调度回执不随源码发布。
 
+Windows 订阅目录可用 `remote-video-media.json`（`enabled`、`host`、`home`）启用 Mac 媒体计划阶段。原观看任务先在 Windows 取得带分 P 身份的字幕，再用固定主机密钥 SSH 发送字幕文件的精确版本和原模型名。Mac 运行同一媒体计划程序，其缓存位于 `~/Agent/AppData/ProgressiveReading/VideoMediaPlanning`。Windows 验证输入和回执哈希、采用计划并继续原截图、审核、出版和通知。
+
+旧媒体计划目录继续走原入口。新步骤在发出请求前验证 Mac 的代码、运行时和原生产器登录可用性。若未发出请求，原本地流程可继续。对于已发出请求的步骤，Windows 通过 `media-planning/request-sent.json` 找回同一请求，采用后写入 `ssh-result.json`。原 Windows 生产器也识别此请求标记。关掉绑定后，只有新请求回到本地，回执未知的步骤继续用原请求键读回。
+
 ## 来源和内容保护
 
 字幕元数据必须与明确的分 P 一致，临时字幕目录隔离。旧书稿和图片不能混入新来源。`run-authenticated.mjs` 将已有登录快照转换成范围受限的临时 Cookie 文件。

@@ -8,6 +8,8 @@ import { artifactPath } from '../scripts/runtime-paths.mjs';
 import{scopedNetscapeCookies}from'./run-authenticated.mjs';
 import{biliApi,canonicalUrl}from'./watch-core.mjs';
 import{importTranscript,verifyUpstream}from'./import-transcript.mjs';
+import{importIllustratedStrong}from'./illustrated-strong.mjs';
+import{boundSubscriptionMediaPlanner}from'./subscription-media-ssh.mjs';
 import{assertIllustratedWatch,watchJobDir,runWatchedIllustrated,prepareIllustratedAttempt,VIDEO_PYTHON}from'./watch-illustrated.mjs';
 const execute=promisify(execFile),root=import.meta.dirname;
 export const WATCH_ARTIFACTS=artifactPath('ProgressiveReading','video-watch');
@@ -115,7 +117,8 @@ export async function processTranscriptItem(item,{sourceDir,jobDir},{importSourc
 }
 
 export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,acquire,prepareSource=prepareWatchSource,
-  processingOptions=PROCESSING_OPTIONS,runFlow=runWatchedIllustrated,command=execute,onProgress=async()=>{}}={}){
+  processingOptions=PROCESSING_OPTIONS,runFlow=runWatchedIllustrated,mediaPlanner=boundSubscriptionMediaPlanner,
+  command=execute,onProgress=async()=>{}}={}){
   assertIllustratedWatch(watch);
   const jobDir=watchJobDir(artifactRoot,item),legacyRun=jobDir+'/run';
   let runDir=legacyRun;
@@ -138,7 +141,12 @@ export async function processWatchItem(item,watch,{artifactRoot=WATCH_ARTIFACTS,
     try{await fs.access(item.publish_path);throw Error('publication_already_exists_without_matching_receipt');}
     catch(error){if(error.code!=='ENOENT')throw error;}
     await verifyUpstream();
-    try{receipt=await runFlow({item,watch,sourceDir,runDir,processingOptions,onProgress});}
+    try{receipt=await runFlow({item,watch,sourceDir,runDir,processingOptions,onProgress,
+      importFlow:async options => {
+        const planMedia=await mediaPlanner({root:path.dirname(root),item,watch,
+          inputDir:options.inputDir,outputDir:options.outputDir});
+        return importIllustratedStrong({...options,planMedia});
+      }});}
     catch(error){
       if(error.message==='target_login_snapshot_unavailable')return {status:'waiting_source',reason:error.message};
       throw error;
