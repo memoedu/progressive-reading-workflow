@@ -25,7 +25,11 @@ const codePaths = [
 const validModel = model => /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,70}$/u.test(model || '');
 
 async function implementationSha() {
-  const hashes = await Promise.all(codePaths.map(async file => digest(await fs.readFile(path.join(import.meta.dirname,'..',file)))));
+  const hashes = await Promise.all(codePaths.map(async file => {
+    const bytes=await fs.readFile(path.join(import.meta.dirname,'..',file));
+    // JavaScript checkouts may use CRLF on Windows. Prompt and subtitle bytes stay exact.
+    return digest(file.endsWith('.mjs') ? bytes.toString('utf8').replace(/\r\n/gu,'\n') : bytes);
+  }));
   return digest(JSON.stringify([schema,...hashes]));
 }
 
