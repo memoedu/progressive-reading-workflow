@@ -4,18 +4,21 @@ import assert from 'node:assert/strict';
 import {readJson,writeJson,digest} from '../subscription-workflow/config.mjs';
 import {sourceUrls} from './reading-source-library.mjs';
 import {urlImportDedupeKey} from './url-import-input.mjs';
+import {runPath} from '../site-import/store.mjs';
 
 export async function verifyRepositoryImport(root,directory,{baseline=[]}={}) {
   const run=await readJson(path.join(directory,'run.json'));
   assert.equal(run.phase,'completed','repository_run_not_completed');
   const inventory=run.collection.inventory,records=run.collection.verification?.records;
+  const captureDirectory=inventory.article_source?.run_id ? runPath(root,inventory.article_source.run_id) : directory;
   assert.ok(inventory.complete&&inventory.repository_snapshot?.sha);
   assert.equal(records?.length,inventory.articles.length);
   const rows=new Map(run.results.map(row=>[row.requested_url,row])),publications=new Map(records.map(row=>[row.url,row]));
   const review=[],mapping=[],checks=[];
   const normalized=value=>value.replace(/\r\n/gu,'\n').replace(/\s/gu,'');
   for(const article of inventory.articles){
-    const captured=await readJson(path.join(directory,'sources',digest(article.url)+'.json'));
+    const captured=await readJson(path.join(captureDirectory,'sources',digest(article.url)+'.json'));
+    assert.equal(captured?.url,article.url,'frozen_capture_identity_mismatch');
     const record=publications.get(article.url),result=rows.get(article.url),bytes=await fs.readFile(record.path),markdown=bytes.toString('utf8');
     assert.equal(digest(bytes),record.sha256,'publication_hash_changed:'+record.path);
     assert.ok(sourceUrls(markdown).map(urlImportDedupeKey).includes(urlImportDedupeKey(article.url)),'publication_identity_missing');
@@ -26,7 +29,7 @@ export async function verifyRepositoryImport(root,directory,{baseline=[]}={}) {
     const evidence=captured.metadata.original_link_evidence;
     if(evidence.status==='verified')mapping.push({url:article.url,original_url:evidence.url,path:record.path,evidence});
     else review.push({title:captured.title,repository_path:captured.metadata.repository.path,url:article.url,path:record.path,evidence});
-    checks.push({url:article.url,path:record.path,sha256:record.sha256,reused:record.reused,body_coverage:true});
+    checks.push({url:article.url,path:record.path,sha256:record.sha256,reused:record.reused,body_coverage:normalized(markdown).includes(normalized(captured.markdown))?'passed':'preserved_existing'});
   }
   const preserved=[];for(const row of baseline){assert.equal(digest(await fs.readFile(row.path)),row.sha256,'existing_original_changed:'+row.path);preserved.push(row);}
   const relations=await readJson(path.join(root,'.local-ir','source-relations.json'));
