@@ -5,7 +5,7 @@ import { saveSourceMaterial, findExistingPublication, materialKey } from './cata
 import { RssImporter, acquireLock } from '../rss-import/core.mjs';
 import { syncAll, fetchText } from '../rss-source/cli.mjs';
 import { parseFeedDocument, syncFeedDocument } from '../rss-source/core.mjs';
-import { includesPublication, retainedFeedSnapshots } from './history.mjs';
+import { includesPublication, distinctRetainedFeedDocuments } from './history.mjs';
 import { scanCatalog } from '../rss-reading/core.mjs';
 import { discover, observe, processPending } from '../video-workflow/watch-core.mjs';
 import { existingPublications } from '../video-workflow/watch.mjs';
@@ -105,8 +105,7 @@ export async function replayRssHistory(root, config, reports, fetchPage = fetchT
   }
   for (const source of sources) {
     try {
-      for (const snapshot of await retainedFeedSnapshots(root, config.rss_home, source.url)) {
-        const xml = await fs.readFile(snapshot,'utf8');
+      for await (const xml of distinctRetainedFeedDocuments(root, config.rss_home, source.url)) {
         const parsed = await parseFeedDocument(xml,source.url);
         const urls = parsed.items.filter(item => item.item_url && !known.has(materialKey(item.item_url))
           && includesPublication(source,item.published_at)).map(item => item.item_url);

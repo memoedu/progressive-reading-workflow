@@ -35,3 +35,14 @@ export async function retainedFeedSnapshots(root, rssHome, feedUrl) {
   const dated = await Promise.all(snapshots.map(async file => ({ file, mtime: (await fs.stat(file)).mtimeMs })));
   return dated.sort((a, b) => b.mtime - a.mtime).map(entry => entry.file);
 }
+
+export async function* distinctRetainedFeedDocuments(root, rssHome, feedUrl) {
+  const seen = new Set();
+  for (const snapshot of await retainedFeedSnapshots(root, rssHome, feedUrl)) {
+    const bytes = await fs.readFile(snapshot);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (seen.has(digest)) continue;
+    seen.add(digest);
+    yield bytes.toString('utf8');
+  }
+}

@@ -5,7 +5,7 @@ import { parseFeedDocument } from '../rss-source/core.mjs';
 import { fetchText } from '../rss-source/cli.mjs';
 import { urlImportDedupeKey } from '../scripts/url-import-input.mjs';
 import { DEFAULT_HOME, loadConfig } from './config.mjs';
-import { includesPublication, retainedFeedSnapshots } from '../subscription-workflow/history.mjs';
+import { includesPublication, distinctRetainedFeedDocuments } from '../subscription-workflow/history.mjs';
 import { resolveSharedSubscription } from '../subscription-workflow/shared-library-client.mjs';
 export { DEFAULT_HOME, CONFIG_NAME, parseConfig, loadConfig } from './config.mjs';
 
@@ -168,8 +168,8 @@ export class RssImporter {
       } catch (error) { feed.status = 'failed'; feed.error = error.message; }
       if (collectHistory) {
         try {
-          for (const snapshot of await retainedFeedSnapshots(this.workflowRoot,this.home,feedUrl)) {
-            const parsed = await parseFeedDocument(await fs.readFile(snapshot,'utf8'),feedUrl);
+          for await (const xml of distinctRetainedFeedDocuments(this.workflowRoot, this.home, feedUrl)) {
+            const parsed = await parseFeedDocument(xml, feedUrl);
             for (const item of parsed.items) {
               if (!item.item_url) continue;
               const key = urlImportDedupeKey(item.item_url);
