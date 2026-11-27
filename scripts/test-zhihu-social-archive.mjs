@@ -55,6 +55,7 @@ const fetchImpl = async (url, options = {}) => {
 };
 
 assert.equal(canonicalZhihuLikeItem({ verb: "MEMBER_FOLLOW_QUESTION", target: { type: "question", id: 1 } }), null);
+assert.equal(canonicalZhihuLikeItem({ ...articleActivity(1), verb: "MEMBER_CREATE_ARTICLE" }), null);
 assert.equal(extractZhihuAnswerVoting(answerHtml("2001", 1), "2001"), 1);
 assert.equal(extractZhihuArticleVoting(articleHtml("3001", 1), "3001"), 1);
 const inventory = await discoverRecentZhihuLikes({
@@ -66,6 +67,7 @@ const inventory = await discoverRecentZhihuLikes({
 assert.equal(inventory.discovered, 10);
 assert.equal(inventory.urls.length, 10);
 assert.equal(inventory.boundary.source_url, "https://www.zhihu.com/question/1011/answer/2011");
+assert.equal(inventory.boundary_reason, "next_like");
 assert.deepEqual(new Set(inventory.items.map((item) => item.content_type)), new Set(["answer", "article"]));
 
 await assert.rejects(() => unlikeZhihuItems(inventory.items, { cookieByHostname, fetchImpl }), /explicit_account_mutation/);

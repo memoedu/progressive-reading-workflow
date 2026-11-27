@@ -9,9 +9,8 @@ const MAX_SINCE_ACTIVITY_PAGES = 200;
 export function canonicalZhihuLikeItem(activity) {
   const verb = String(activity?.verb || "");
   const target = activity?.target || {};
-  const targetType = String(target.type || "").toLowerCase();
-  const isAnswer = targetType === "answer" || /VOTEUP_ANSWER$/u.test(verb);
-  const isArticle = targetType === "article" || /VOTEUP_ARTICLE$/u.test(verb);
+  const isAnswer = verb === "MEMBER_VOTEUP_ANSWER";
+  const isArticle = verb === "MEMBER_VOTEUP_ARTICLE";
   if (!isAnswer && !isArticle) return null;
 
   const contentId = String(target.id || "").trim();
@@ -89,6 +88,9 @@ export async function discoverRecentZhihuLikes({
   if (requireFullLimit && candidates.length < normalizedLimit) {
     throw new Error(`zhihu_recent_likes_incomplete_found_${candidates.length}_unsupported_${unsupportedVoteActivities}_pages_${pagesRead}`);
   }
+  if (nextUrl && candidates.length <= normalizedLimit) {
+    throw new Error(`zhihu_recent_likes_boundary_not_reached_pages_${pagesRead}`);
+  }
 
   const items = candidates.slice(0, normalizedLimit);
   return {
@@ -100,6 +102,7 @@ export async function discoverRecentZhihuLikes({
     urls: items.map((item) => item.source_url),
     items,
     boundary: candidates[normalizedLimit] || null,
+    boundary_reason: candidates[normalizedLimit] ? "next_like" : "feed_end",
     inventory_sha256: sha256Json(items)
   };
 }
