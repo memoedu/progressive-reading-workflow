@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { groupTranscriptSegments } from '../scripts/import-youtube-subtitle-canary.mjs';
@@ -198,7 +199,7 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
       subtitle_sha256: hash(raw), transcript_sha256: hash(markdown), raw_artifact_dir: inputDir },
     spoken: !refinement, processingOptions:refinement ? {...processingOptions, input_form:'written',
       spoken_to_written:false, structure_body:false} : processingOptions, outputDir: path.join(outputDir, 'preprocess'),
-    cacheDir: path.resolve(process.env.PR_PREPROCESS_HOME || 'D:/Caches/ProgressiveReading/preprocess', 'cache'), producer:effectiveProducer });
+    cacheDir: path.resolve(process.env.PR_PREPROCESS_HOME || (process.platform === 'win32' ? 'D:/Caches/ProgressiveReading/preprocess' : path.join(os.homedir(), '.pr-preprocess')), 'cache'), producer:effectiveProducer });
   const promptsAfter = await promptHashes();
   if (JSON.stringify(promptsBefore) !== JSON.stringify(promptsAfter)) throw new Error('prompts_changed_during_run');
   if (!run.result.artifacts?.reading_markdown) throw new Error(`preprocessing_not_readable:${run.result.status}`);

@@ -45,9 +45,9 @@ function runId() {
   return `${stamp}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-function assertOutputWithinWorkspace(value) {
-  const target = path.resolve(value || defaultOutputRoot);
-  const allowedRoot = path.join(workflowRoot, "imports", "rss");
+function assertOutputWithinWorkspace(value, root = workflowRoot) {
+  const allowedRoot = path.join(root, "imports", "rss");
+  const target = path.resolve(value || path.join(allowedRoot, "source-v1"));
   const relative = path.relative(allowedRoot, target);
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("output_must_stay_inside_imports_rss");
   return target;
@@ -140,7 +140,7 @@ async function validate(options) {
 
 async function sync(options) {
   const feedUrl = await resolveFeedUrl(options);
-  const outputRoot = assertOutputWithinWorkspace(options.output || defaultOutputRoot);
+  const outputRoot = assertOutputWithinWorkspace(options.output, options.workspaceRoot);
   const id = runId();
   const fetchedAt = new Date().toISOString();
   const conditionalHeaders = options.force === true ? {} : await readConditionalHeaders(outputRoot, feedUrl);
@@ -181,7 +181,7 @@ async function subscriptions(options = {}) {
 
 async function syncAll(options = {}) {
   const configPath = resolveSubscriptionsDocument(options.config);
-  const outputRoot = assertOutputWithinWorkspace(options.output || defaultOutputRoot);
+  const outputRoot = assertOutputWithinWorkspace(options.output, options.workspaceRoot);
   const registry = await loadSubscriptionRegistry(configPath);
   const batchId = runId();
   const result = await runSubscriptionBatch({

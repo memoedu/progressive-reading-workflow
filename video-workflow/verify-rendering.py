@@ -1,5 +1,5 @@
 """Read-only standalone CommonMark/Mermaid/KaTeX render verification, not an Obsidian session."""
-import argparse,hashlib,html,json,re,subprocess,sys,urllib.request
+import argparse,hashlib,html,json,os,re,subprocess,sys,urllib.request
 from pathlib import Path
 
 def render(markdown_file,output):
@@ -29,7 +29,9 @@ def render(markdown_file,output):
     md.renderer.rules['fence']=fence
     body=md.render(text)
     for idx,row in enumerate(math):body=body.replace(row['key'],'<span class="source-math" data-math="'+str(idx)+'"></span>')
-    cache=Path(r'D:\Caches\ProgressiveReading\render-assets');cache.mkdir(parents=True,exist_ok=True)
+    default_cache = Path('D:/Caches/ProgressiveReading') if os.name == 'nt' else Path.home() / 'Library/Caches/ProgressiveReading'
+    cache = Path(os.environ.get('PROGRESSIVE_READING_CACHE_HOME', default_cache)) / 'render-assets'
+    cache.mkdir(parents=True, exist_ok=True)
     libs={'mermaid-10.6.1.min.js':'https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js','katex-0.16.11.min.js':'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js'}
     for name,url in libs.items():
         file=cache/name
@@ -47,8 +49,7 @@ await Promise.all([...document.images].map(async image=>{try{await image.decode(
 }catch(e){renderErrors.push({kind:'runtime',error:String(e)});}window.auditDone=true;})();</script></body></html>'''
     for key,value in [('BASE',markdown_file.parent.as_uri()+'/'),('BODY',body),('MERMAID',(cache/'mermaid-10.6.1.min.js').as_uri()),('KATEX',(cache/'katex-0.16.11.min.js').as_uri()),('PAYLOAD',payload)]:document=document.replace(key,value)
     output.mkdir(parents=True,exist_ok=True);file=output/'preview.html';file.write_text(document,'utf-8')
-    python=r'D:\Caches\ProgressiveReading\videobook-python\Scripts\python.exe'
-    subprocess.run([python,str(Path(__file__).resolve()),'--browser',str(file),'--output',str(output)],check=True)
+    subprocess.run([sys.executable,str(Path(__file__).resolve()),'--browser',str(file),'--output',str(output)],check=True)
 
 def browser(file,output):
     from playwright.sync_api import sync_playwright

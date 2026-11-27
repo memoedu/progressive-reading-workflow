@@ -28,9 +28,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--job',type=Path,required=True)
     parser.add_argument('--cookies-file',type=Path,required=True)
+    parser.add_argument('--watch-root',type=Path,default=Path('D:/Artifacts/ProgressiveReading/video-watch'))
     args=parser.parse_args()
     job=json.loads(args.job.read_text('utf-8'));out=Path(job['source_dir']).resolve()
-    if not out.is_relative_to(Path('D:/Artifacts/ProgressiveReading/video-watch').resolve()):
+    if not out.is_relative_to(args.watch_root.resolve()):
         raise ValueError('subtitle_artifact_outside_watch_root')
     out.mkdir(parents=True,exist_ok=True)
     sys.path.insert(0,str(Path(__file__).parent/'upstream/src'))

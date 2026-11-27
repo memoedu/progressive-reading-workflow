@@ -81,7 +81,7 @@ export async function scanRss(root, cycle, { retryOnly = false } = {}) {
   const scanned = await withAutoImporter(root, async (importer, config) => {
     await importer.scan(autoConfig(config, true), { force: true }); return importer.summary(autoConfig(config, true));
   }, feedOptions);
-  const reports = await syncAll({ config: path.join(config.rss_home, 'RSS 自动导入.md'), force:true, ...feedOptions,
+  const reports = await syncAll({ config: path.join(config.rss_home, 'RSS 自动导入.md'), force:true, ...feedOptions, workspaceRoot: root,
     sharedArticleFetcher: (url, previous) => resolveSharedSubscription(root, url, previous) });
   const history = await replayRssHistory(root, config, reports);
   const sourceRetries = [...history, ...await retryBlockedReportSources(root, cycle, {

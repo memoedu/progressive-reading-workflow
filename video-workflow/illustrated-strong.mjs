@@ -104,7 +104,9 @@ export async function importIllustratedStrong({inputDir,outputDir,publishPath,co
   await fs.mkdir(outputDir,{recursive:true});
   const planDir=path.join(outputDir,'media-planning');
   if(!planMedia)planMedia=async()=>{
-    await command(process.env.PR_AUDIO_PYTHON||'D:/AppData/AudioWorkflow/python/Scripts/python.exe',
+    const audioPython = process.env.PR_AUDIO_PYTHON ||
+      (process.platform === 'win32' ? 'D:/AppData/AudioWorkflow/python/Scripts/python.exe' : pythonPath);
+    await command(audioPython,
       ['-u',path.join(root,'plan-upstream-media.py'),'--input',path.join(inputDir,'transcript.json'),'--output',planDir]);
     return readJson(path.join(planDir,'plan.json'));
   };
