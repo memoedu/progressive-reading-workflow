@@ -25,23 +25,25 @@ function Verify-Capture([string]$File) {
 }
 
 if ($Acknowledge) {
-    $verified = Verify-Capture $destination
     $jobId = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
         [Text.Encoding]::UTF8.GetBytes("rss:$Cycle"))).ToLowerInvariant().Substring(0,32)
     $job = Get-Content -Raw -LiteralPath (Join-Path $SubscriptionsHome "jobs/$jobId.json") | ConvertFrom-Json
+    $capture = Get-Content -Raw -LiteralPath $destination | ConvertFrom-Json
+    $sha256 = $job.steps.scan.result.remoteCapture.sha256
     if ($job.id -ne $jobId -or $job.kind -ne 'rss' -or $job.cycle -ne $Cycle -or
-        $job.status -notin @('completed','completed_with_issues') -or $job.steps.scan.result.remoteCapture.sha256 -ne $verified.sha256) {
+        $job.status -notin @('completed','completed_with_issues') -or $sha256 -notmatch '^[a-f0-9]{64}$' -or
+        $capture.cycle -ne $Cycle -or $capture.sha256 -ne $sha256) {
         throw 'The original Windows job has not recorded consumption of this capture.'
     }
     $observed = & ssh @sshOptions $MacHost "$remote consumed $macData $Cycle"
     if ($LASTEXITCODE -ne 0) { throw 'Consumption state could not be read from the Mac.' }
     if ($observed -ne 'null') {
         $receipt = $observed | ConvertFrom-Json
-        if ($receipt.sha256 -ne $verified.sha256 -or $receipt.jobId -ne $jobId) { throw 'Consumption receipt conflicts with the Windows job.' }
+        if ($receipt.sha256 -ne $sha256 -or $receipt.jobId -ne $jobId) { throw 'Consumption receipt conflicts with the Windows job.' }
         $observed
         return
     }
-    & ssh @sshOptions $MacHost "$remote ack $macData $Cycle $($verified.sha256) $jobId"
+    & ssh @sshOptions $MacHost "$remote ack $macData $Cycle $sha256 $jobId"
     if ($LASTEXITCODE -ne 0) { throw 'Consumption acknowledgement outcome is unknown. Repeat this command to read its stored result.' }
     return
 }
