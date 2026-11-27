@@ -155,6 +155,7 @@ export async function appendActivity(root, receipt, { date = localDate(), now = 
 }
 
 export async function notify(root, key, title, body) {
+  if (process.env.PROGRESSIVE_READING_DISABLE_NOTIFICATIONS === '1') return;
   const p = paths(root), file = path.join(p.home,'notifications.json');
   return withLock(file+'.lock', async () => {
     const state = await readJson(file, { sent: {} });
