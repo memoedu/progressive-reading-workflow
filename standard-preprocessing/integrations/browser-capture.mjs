@@ -1,4 +1,5 @@
 import { buildPreprocessRequest, runPreprocessingRequest, standardWorkflowOptions } from "../index.mjs";
+import { runBrowserPreprocessOverSsh } from './browser-preprocess-ssh.mjs';
 
 export function browserCaptureProcessingOptions(action, overrides = {}) {
   if (!['save', 'import'].includes(action)) throw new Error('unsupported_browser_capture_action');
@@ -19,12 +20,19 @@ export async function preprocessBrowserCapture({
     processingOptions: standardWorkflowOptions(processingOptions)
   });
   // Stage processors own bounded retries. Re-running the workflow here multiplies calls.
-  const run = await runPreprocessingRequest(request, { outputDir, publishPath, assetSourceDir, cacheDir, producer, onProgress });
+  const host = process.env.PROGRESSIVE_READING_BROWSER_PREPROCESS_SSH_HOST?.trim();
+  const directSave = ['spoken_to_written', 'structure_body', 'translate', 'include_reading_guide']
+    .every(option => request.processing_options[option] === false);
+  const remote = host && !directSave && !producer && !publishPath && !assetSourceDir;
+  const run = remote
+    ? await runBrowserPreprocessOverSsh(request, { host, outputDir, onProgress })
+    : await runPreprocessingRequest(request, { outputDir, publishPath, assetSourceDir, cacheDir, producer, onProgress });
   return {
     ...run,
     workflow_attempts: [{
       attempt: 1, status: run.result.status, processing_state: run.result.processing_state,
       target_zone: run.result.artifacts?.target_zone || null,
+      ...(remote ? { compute_transport: 'ssh' } : {}),
       model_calls: run.result.receipt?.model?.calls || 0
     }]
   };
