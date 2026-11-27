@@ -106,19 +106,19 @@ export async function collectActivity(root) {
 }
 
 function markdownLabel(value) { return String(value || '').replace(/[\[\]\r\n]/gu,' '); }
-export async function appendActivity(root, receipt) {
+export async function appendActivity(root, receipt, { date = localDate(), now = Date.now() } = {}) {
   const p = paths(root), events = await collectActivity(root), config = await loadConfig(root);
   const ledger = await readJson(path.join(root,'imports','rss-reading','review-ledger.v1.json'), { items: {} });
   let targets = [receipt.outputs.daily, receipt.outputs.long_weekly].filter(Boolean);
   if (!targets.length && receipt.mode !== 'weekly') {
-    const file = path.join(p.summaryRoot, `${localDate()} 订阅 日报.md`);
+    const file = path.join(p.summaryRoot, `${date} 订阅 日报.md`);
     await fs.mkdir(path.dirname(file), { recursive:true });
-    if (!existsSync(file)) await fs.writeFile(file, `# ${localDate()} 订阅${receipt.mode === 'weekly' ? '周报' : '日报'}\n\n本期没有新的长文候选。\n`);
+    if (!existsSync(file)) await fs.writeFile(file, `# ${date} 订阅${receipt.mode === 'weekly' ? '周报' : '日报'}\n\n本期没有新的长文候选。\n`);
     targets = [{ path:file, item_count:0 }]; receipt.outputs.daily = targets[0];
   }
   for (const target of targets) {
     const isWeekly=target===receipt.outputs.long_weekly;
-    const cutoff = isWeekly ? Date.now()-7*86400000 : Date.parse(localDate()+'T00:00:00+08:00');
+    const cutoff = isWeekly ? now - 7 * 86400000 : Date.parse(date + 'T00:00:00+08:00');
     const recent = events.filter(e => Date.parse(e.observed_at) >= cutoff);
     const lines = ['<!-- subscriptions:activity -->','## 本期新增入库',''];
     if (!recent.length) lines.push('本期暂无新增入库。');
@@ -142,9 +142,10 @@ export async function appendActivity(root, receipt) {
     await fs.writeFile(target.path,content); target.sha256 = digest(content);
     ledger.report_runs ||= {daily:{},weekly:{}};
     if (isWeekly) {
-      ledger.report_runs.weekly[weekKey()] ||= {generated_at:stamp()};
-      ledger.report_runs.weekly[weekKey()].long_weekly = {path:target.path,sha256:target.sha256};
-    } else ledger.report_runs.daily[localDate()] = {path:target.path,sha256:target.sha256,generated_at:stamp()};
+      const week = weekKey(date);
+      ledger.report_runs.weekly[week] ||= {generated_at:stamp()};
+      ledger.report_runs.weekly[week].long_weekly = {path:target.path,sha256:target.sha256};
+    } else ledger.report_runs.daily[date] = {path:target.path,sha256:target.sha256,generated_at:stamp()};
   }
   const ledgerFile=path.join(root,'imports','rss-reading','review-ledger.v1.json');
   await writeJson(ledgerFile,ledger);

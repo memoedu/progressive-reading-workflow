@@ -21,6 +21,7 @@ import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
 import {fetchArticleContent} from '../rss-source/article-fetch.mjs';
 import {scanRepositories} from './repositories.mjs';
 import { resolveSharedSubscription } from './shared-library-client.mjs';
+import { readCapturedFeeds } from './remote-feed-stage.mjs';
 
 export function autoConfig(config, onlyRss = false) {
   const subscriptions = config.subscriptions.filter(s => s.enabled && s.kind!=='github_repository' && !s.kind.startsWith('bilibili_') && s.mode !== 'reports' && (!onlyRss || s.kind === 'rss'))
@@ -31,9 +32,9 @@ export function autoConfig(config, onlyRss = false) {
     current_feed_only: true, poll_minutes: 1440, max_in_flight: 2, retry_minutes: 60, destination_folder: 'RSS' };
 }
 
-export async function withAutoImporter(root, action) {
+export async function withAutoImporter(root, action, importerOptions = {}) {
   const config = await loadConfig(root), release = await acquireLock(config.rss_home);
-  try { const importer = await new RssImporter({ home: config.rss_home, workflowRoot: root }).load(); return await action(importer, config); }
+  try { const importer = await new RssImporter({ home: config.rss_home, workflowRoot: root, ...importerOptions }).load(); return await action(importer, config); }
   finally { await release(); }
 }
 
@@ -64,6 +65,14 @@ export async function retryAuto(root, kind, cycle) {
 }
 
 export async function scanRss(root, cycle, { retryOnly = false } = {}) {
+  const config = await loadConfig(root);
+  const captureFile = !retryOnly && /^scheduled-\d{4}-\d{2}-\d{2}$/u.test(cycle)
+    ? path.join(paths(root).home, 'remote-rss', cycle, 'capture.json') : null;
+  const capture = captureFile && await readCapturedFeeds(captureFile, cycle, config).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  const feedOptions = capture ? { fetchFeed: capture.fetchFeed } : {};
   const repositories=await scanRepositories(root,cycle);
   if (retryOnly) {
     const sourceRetries = await retryBlockedReportSources(root, cycle);
@@ -71,16 +80,16 @@ export async function scanRss(root, cycle, { retryOnly = false } = {}) {
   }
   const scanned = await withAutoImporter(root, async (importer, config) => {
     await importer.scan(autoConfig(config, true), { force: true }); return importer.summary(autoConfig(config, true));
-  });
-  const config = await loadConfig(root);
-  const reports = await syncAll({ config: path.join(config.rss_home, 'RSS 自动导入.md'), force:true,
+  }, feedOptions);
+  const reports = await syncAll({ config: path.join(config.rss_home, 'RSS 自动导入.md'), force:true, ...feedOptions,
     sharedArticleFetcher: (url, previous) => resolveSharedSubscription(root, url, previous) });
   const history = await replayRssHistory(root, config, reports);
   const sourceRetries = [...history, ...await retryBlockedReportSources(root, cycle, {
     results: [...reports.results, ...history.filter(item => item.result).map(item => ({result:item.result}))]
   })];
   const retry = await retryAuto(root, 'rss', cycle);
-  return { repositories,errors:repositories.errors,auto: scanned, reports, retry, sourceRetries };
+  return { repositories,errors:repositories.errors,auto: scanned, reports, retry, sourceRetries,
+    ...(capture ? { remoteCapture: { sha256: capture.sha256, fetchedAt: capture.fetchedAt } } : {}) };
 }
 
 export async function replayRssHistory(root, config, reports, fetchPage = fetchText) {

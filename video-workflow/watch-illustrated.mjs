@@ -12,7 +12,11 @@ import {automateBoardCorrection} from './automate-board-correction.mjs';
 export const WATCH_WORKFLOW='illustrated';
 export const WATCH_MODEL='gpt-6.1-sol';
 export const WATCH_FRAME_POLICY='timestamp_integrity';
-export const VIDEO_PYTHON=process.env.PROGRESSIVE_READING_VIDEO_PYTHON || 'D:/Caches/ProgressiveReading/videobook-python/Scripts/python.exe';
+export const VIDEO_PYTHON = process.env.PROGRESSIVE_READING_VIDEO_PYTHON ||
+  (process.platform === 'win32' ? 'D:/Caches/ProgressiveReading/videobook-python/Scripts/python.exe' : 'python3');
+const audioPrompt = process.env.PROGRESSIVE_READING_AUDIO_REFINE_PROMPT ||
+  (process.platform === 'win32' ? 'D:/Projects/AudioWorkflow/prompts/refine.md'
+    : path.resolve(import.meta.dirname, '../../AudioWorkflow/prompts/refine.md'));
 const execute=promisify(execFile),root=import.meta.dirname;
 const read=async file=>JSON.parse(await fs.readFile(file,'utf8'));
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -24,7 +28,7 @@ export const watchJobDir=(artifactRoot,item,mode='illustrated')=>path.join(artif
 // source, prompt or setting gets its own attempt, preserving earlier evidence.
 export async function prepareIllustratedAttempt({item,watch,sourceDir,runDir,processingOptions={}}){
   const prompt=await fs.readFile(path.join(root,'../standard-preprocessing/prompts/强结构化整理.md'));
-  if(!sameStrongPrompt(prompt,await fs.readFile('D:/Projects/AudioWorkflow/prompts/refine.md')))throw Error('strong_prompt_alignment_mismatch');
+  if(!sameStrongPrompt(prompt,await fs.readFile(audioPrompt)))throw Error('strong_prompt_alignment_mismatch');
   const transcript=await fs.readFile(path.join(sourceDir,'transcript.json'));
   const implementation=await Promise.all(['watch-illustrated.mjs','illustrated-strong.mjs','import-transcript.mjs','automate-board-correction.mjs'].map(name=>fs.readFile(path.join(root,name))));
   const identity={version:'video-watch-illustrated/v2',entry:'importIllustratedStrong',provider:'codex_exec',model:watch.model,
