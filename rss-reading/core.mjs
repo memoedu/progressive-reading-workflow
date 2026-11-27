@@ -614,9 +614,51 @@ function historicalReviewNotice(item) {
     : "> 本页为历史快照；本条当前没有活跃审批入口。";
 }
 
-function longReviewBlock(item, index, options = {}) {
+
+function generatedAnalysis(item) {
   const preview = item.review_preview || {};
   const ready = preview.status === "ready";
+  return [
+    `**${directArticle(item) ? '内容概述' : '一句话核心'}**：${ready && preview.core ? firstSentence(preview.core, 360) : "概述正在生成。"}`,
+    `**为什么值得读**：${ready ? `${humanValue(preview.value_level)}；${firstSentence(preview.value_reason, 180)}` : "待判断"}`,
+    `**可能新增量**：${ready ? firstSentence(preview.novelty || preview.core, 180) : "待判断"}`,
+    `**预计阅读成本**：${readingCost(item.meaningful_length)}`,
+    `**建议读法**：${ready ? readingRoute(preview.continue_reading?.level) : "待判断"}`,
+  ];
+}
+
+function reportDraftInput(items) {
+  return items.map(item => {
+    const p = item.review_preview || {};
+    return { id: item.material_id, direct: directArticle(item), length: item.meaningful_length,
+      preview: { status:p.status, core:p.core, value_level:p.value_level, value_reason:p.value_reason,
+        novelty:p.novelty, continue_reading: {level:p.continue_reading?.level} } };
+  });
+}
+
+export function renderGeneratedReportDraft(input) {
+  if (!Array.isArray(input) || input.length > 3000) throw new Error('report_draft_shape_invalid');
+  return input.map(row => {
+    if (!row || typeof row.id !== 'string') throw new Error('report_draft_item_invalid');
+    return { id:row.id, analysis:generatedAnalysis({route:'long_review',
+      reading_options:{direct_reading:row.direct === true}, meaningful_length:row.length, review_preview:row.preview}) };
+  });
+}
+
+function checkedReportDraft(input, draft) {
+  if (!Array.isArray(draft) || input.length !== draft.length) throw new Error('report_draft_length_invalid');
+  const labels = ['为什么值得读', '可能新增量', '预计阅读成本', '建议读法'];
+  const entries = draft.map((row, i) => {
+    const expected = [input[i].direct ? '内容概述' : '一句话核心', ...labels];
+    if (row?.id !== input[i].id || !Array.isArray(row.analysis) || row.analysis.length !== expected.length ||
+      row.analysis.some((line, n) => typeof line !== 'string' || line.length > 1000 ||
+        /[\r\n]/u.test(line) || !line.startsWith(`**${expected[n]}**：`))) throw new Error('report_draft_output_invalid');
+    return [row.id, row.analysis];
+  });
+  return new Map(entries);
+}
+
+function longReviewBlock(item, index, options = {}) {
   const actions = options.active === false ? [
     historicalReviewNotice(item)
   ] : directArticle(item) ? [
@@ -639,11 +681,7 @@ function longReviewBlock(item, index, options = {}) {
     "",
     `**当前状态**：${decisionLabel(item)}`,
     item.available_revision ? '> 来源有更新；当前卡片与已入库正文保持原版本。' : '',
-    `**${directArticle(item) ? '内容概述' : '一句话核心'}**：${ready && preview.core ? firstSentence(preview.core, 360) : "概述正在生成。"}`,
-    `**为什么值得读**：${ready ? `${humanValue(preview.value_level)}；${firstSentence(preview.value_reason, 180)}` : "待判断"}`,
-    `**可能新增量**：${ready ? firstSentence(preview.novelty || preview.core, 180) : "待判断"}`,
-    `**预计阅读成本**：${readingCost(item.meaningful_length)}`,
-    `**建议读法**：${ready ? readingRoute(preview.continue_reading?.level) : "待判断"}`,
+    ...(options.analysis || generatedAnalysis(item)),
     item.legacy_decision_id ? `**历史记录**：旧账本中已有决定；为避免把历史勾选冒充当前发布授权，本次仍需明确勾选。` : "",
     publicationMetadata(item.published_at),
     "<!-- rss-reading:end -->"
@@ -1154,7 +1192,7 @@ async function writeSummary(target, content, itemCount, snapshots = null) {
   return { path: target, sha256: sha256(normalized), item_count: itemCount };
 }
 
-async function renderDailySummary(target, date, longItems, blockedItems, shortCount, saved = new Map()) {
+async function renderDailySummary(target, date, longItems, blockedItems, shortCount, saved = new Map(), analysis = null) {
   const lines = [
     `# ${date} ${path.basename(path.dirname(target)) === '订阅' ? '订阅' : 'RSS'} 长文日报`,
     "",
@@ -1167,7 +1205,7 @@ async function renderDailySummary(target, date, longItems, blockedItems, shortCo
   for (const [source, sourceItems] of groupBySource(longItems)) {
     lines.push(`## ${source}`, "");
     sourceItems.forEach((item, index) => lines.push(mergeReviewCard(longReviewBlock(item, index + 1, {
-      active: saved.sourceSnapshots ? true : isActiveReviewAt(item, target)
+      active: saved.sourceSnapshots ? true : isActiveReviewAt(item, target), analysis:analysis?.get(item.material_id)
     }),saved.get(item.material_id)), ""));
   }
   if (blockedItems.length) {
@@ -1262,7 +1300,7 @@ async function deliverShortToWeekUnlocked(paths, ledger, item, week) {
   await writeJson(paths.ledgerPath, ledger);
 }
 
-async function renderLongWeekly(target, week, items, blockedItems = [], saved = new Map()) {
+async function renderLongWeekly(target, week, items, blockedItems = [], saved = new Map(), analysis = null) {
   const lines = [
     `# ${week} ${path.basename(path.dirname(target)) === '订阅' ? '订阅' : 'RSS'} 长文周报`,
     "",
@@ -1274,7 +1312,7 @@ async function renderLongWeekly(target, week, items, blockedItems = [], saved = 
   if (!items.length) lines.push("本期没有活跃未决长文。", "");
   for (const [source, sourceItems] of groupBySource(items)) {
     lines.push(`## ${source}`, "");
-    sourceItems.forEach((item, index) => lines.push(mergeReviewCard(longReviewBlock(item, index + 1, { active: true }),saved.get(item.material_id)), ""));
+    sourceItems.forEach((item, index) => lines.push(mergeReviewCard(longReviewBlock(item, index + 1, { active: true, analysis:analysis?.get(item.material_id) }),saved.get(item.material_id)), ""));
   }
   if (blockedItems.length) {
     lines.push("## 正文受限或尚未就绪", "", "以下未决条目继续等待来源层解除阻塞，当前不能审批入库。", "");
@@ -1426,6 +1464,19 @@ export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, op
       : undefined
   });
   const obsidianLinks = paths.unified ? await refreshObsidianLinks(paths,items,options) : null;
+  let analysis = null, renderReceipt = null;
+  if (paths.unified && !shortOnly && options.renderDraft) {
+    const sourceVersion = await fileSha256(paths.ledgerPath);
+    const input = reportDraftInput(uniqueItems([...dailyItems, ...weeklyLong]));
+    try {
+      const remote = await options.renderDraft(input);
+      analysis = checkedReportDraft(input, remote.draft);
+      renderReceipt = { ...remote.receipt, items:input.length };
+    } catch {
+      renderReceipt = { executor:'windows_fallback', items:input.length };
+    }
+    if (await fileSha256(paths.ledgerPath) !== sourceVersion) throw Error('review_ledger_changed_during_draft');
+  }
   if(paths.unified && !shortOnly)await verifyReviewSources(savedCards);
   const legacyCounts = ledger.legacy_import.counts;
   const batch = await latestBatch(paths);
@@ -1440,7 +1491,7 @@ export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, op
   let longWeekly = null;
   let shortWeekly = null;
   if (runDaily && (dailyItems.length || dailyBlocked.length)) {
-    daily = await renderDailySummary(dailyPath, date, dailyItems, dailyBlocked, items.filter((item) => item.route === "short_aggregate" && item.delivery?.short_weekly_revision !== item.source_revision).length,savedCards);
+    daily = await renderDailySummary(dailyPath, date, dailyItems, dailyBlocked, items.filter((item) => item.route === "short_aggregate" && item.delivery?.short_weekly_revision !== item.source_revision).length,savedCards,analysis);
     for (const item of dailyItems) {
       item.delivery.long_daily_revision = item.source_revision;
       item.delivery.active_review_path=dailyPath;
@@ -1480,7 +1531,7 @@ export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, op
         item.delivery.active_review_path = longWeeklyPath;
         item.delivery.long_weekly_key = week;
       }
-      longWeekly = await renderLongWeekly(longWeeklyPath, week, weeklyLong, weeklyBlocked,savedCards);
+      longWeekly = await renderLongWeekly(longWeeklyPath, week, weeklyLong, weeklyBlocked,savedCards,analysis);
       for (const supersededPath of supersededDailyPaths) {
         const reportDate = /^(\d{4}-\d{2}-\d{2}) (?:RSS|订阅) 日报\.md$/u.exec(path.basename(supersededPath))?.[1];
         if (!reportDate) continue;
@@ -1538,6 +1589,7 @@ export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, op
     },
     legacy_conservation: legacyCounts,
     review_previews: preview,
+    ...(renderReceipt ? {draft_render:renderReceipt} : {}),
     decision_actions: decisionActions,
     legacy_output_migration: {
       manifest_path: paths.legacyOutputManifestPath,

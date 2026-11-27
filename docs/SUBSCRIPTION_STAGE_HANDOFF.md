@@ -18,3 +18,9 @@ RSS 纯采集可以由另一台设备执行。现有 Windows 任务和原周期 
 `node subscription-workflow/remote-report-stage.mjs <stage-home> <daily|weekly> <cycle>` 复用报表渲染和活动汇总。计算前后验证冻结输入，产物包含哈希及业务完成状态。Windows 可用 `receive-report-candidate.ps1` 把候选和回执取回隔离目录，重复领取读回同一组文件。
 
 候选回执的 `publishable: false` 标记正式门禁。应用到正式流程前需匹配 Windows 当前审核快照，并对账本、审核卡和档案的并发编辑做一致性校验。候选账本用于核对。
+
+## 日报和长文周报的定期草稿
+
+Windows 既有日、周报可启用订阅数据目录的 `remote-report-render.json`，其中 `enabled`、`host` 和 `home` 分别选择开关、固定 SSH 别名和 Mac 主目录。原生 Windows 任务仍使用原周期键，在原订阅 worker 锁内执行。
+
+Mac 只计算阅读概述、价值、新增量、阅读成本与读法五个字段。请求不包含正文、手工笔记、勾选、账号凭据、审核账本或其路径。返回回执绑定该周期的请求和结果哈希。Windows 在继续写入前复核账本哈希和卡片快照，再按原规则合并、归档和通知。远端草稿无法读取或校验失败时，Windows 使用同一渲染函数回退。账本或卡片已变更时，该轮停止提交。候选选择和短文周报的正文仍由 Windows 处理。

@@ -5,6 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { paths, codeRoot, loadConfig, readJson, writeJson, withLock, digest, platform } from './config.mjs';
 import { scanRss, scanVideos, scanZhihu, advanceAuto, withAutoImporter } from './adapters.mjs';
+import { boundReportDraft } from './report-draft-transport.mjs';
 import { generateSummaries, prepareSubscriptionPreviews, processMarkdownDecisions } from '../rss-reading/core.mjs';
 import { publicationMetadata } from './publication-time.mjs';
 import { recordExceptions, acknowledgeExceptions, exceptionFile } from './exception-log.mjs';
@@ -286,7 +287,8 @@ async function runJob(root, job, save) {
   }
   const scopeFaults = await step('apply-source-scopes',()=>applyPendingScopes(root,job.cycle,progress));
   await step('decisions',()=>processMarkdownDecisions(root));
-  const receipt = await step('report',()=>generateSummaries(root,{ mode:job.kind, executeDecisions:false, ingestSummaries:false, onPreviewProgress:progress }));
+  const receipt = await step('report',async()=>generateSummaries(root,{ mode:job.kind,
+    executeDecisions:false, ingestSummaries:false, onPreviewProgress:progress, renderDraft:await boundReportDraft(root,job.cycle) }));
   const result = await step('activity',()=>appendActivity(root,receipt));
   await step('notify',async()=>{
     const outputs=Object.entries(result.outputs).filter(([key,value])=>key!=='ledger'&&value?.sha256);
@@ -297,7 +299,7 @@ async function runJob(root, job, save) {
     return {done:true};
   });
   return { status:receipt.status === 'completed' && !scopeFaults.length ? 'completed' : 'completed_with_issues',
-    faults:scopeFaults, receipt:result.receipt_path, outputs:result.outputs };
+    faults:scopeFaults, receipt:result.receipt_path, outputs:result.outputs, ...(result.draft_render ? {draftRender:result.draft_render} : {}) };
 }
 
 export async function drain(root = codeRoot, scheduled = null) {
