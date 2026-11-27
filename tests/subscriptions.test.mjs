@@ -1,3 +1,4 @@
+import { renderGeneratedReportDraft } from '../rss-reading/core.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -821,4 +822,26 @@ test('a later source fetch failure preserves a verified cached body and its sele
   item.decision='dismissed';item.review_preview={status:'ready'};await writeJson(f.reading.ledgerPath,before.ledger);
   await saveSourceMaterial(f.root,f.source,{url:record.url,title:'测试文章'},null,{errors:[{message:'temporarily unavailable'}]});
   const after=(await syncLedger(f.root)).ledger.items[record.material_id];assert.equal(after.eligible_for_preprocess,true);assert.equal(after.content_status,'fulltext_ready');assert.equal(after.decision,'dismissed');assert.equal(after.preprocess_request_path,item.preprocess_request_path);assert.ok(after.source_refresh_failure);
+});
+
+test('remote report drafting sees preview fields only and preserves Windows review notes',async()=>{
+  const f=await fixture();
+  const material=await addText(f);
+  const options={date:'2026-11-06',week:'2026-W45',mode:'daily',ingestSummaries:false,executeDecisions:false,previewRunner};
+  const first=await generateSummaries(f.root,options);
+  const file=first.outputs.daily.path;
+  const before=await fs.readFile(file,'utf8');
+  const annotated=before.replace('<!-- rss-reading:end -->','人工审阅记录只保存在 Windows。\n<!-- rss-reading:end -->');
+  await fs.writeFile(file,annotated);
+  const result=await generateSummaries(f.root,{...options,renderDraft:async input=>{
+    assert.equal(input[0].id,material.material_id);
+    assert.doesNotMatch(JSON.stringify(input),/人工审阅记录只保存在 Windows|出版授权|https?:/);
+    return {draft:renderGeneratedReportDraft(input),receipt:{executor:'mac'}};
+  }});
+  assert.equal(result.draft_render.executor,'mac');
+  assert.match(await fs.readFile(file,'utf8'),/人工审阅记录只保存在 Windows/);
+  await assert.rejects(generateSummaries(f.root,{...options,renderDraft:async input=>{
+    await fs.appendFile(f.reading.ledgerPath,'\n');
+    return {draft:renderGeneratedReportDraft(input),receipt:{executor:'mac'}};
+  }}),/review_ledger_changed_during_draft/);
 });

@@ -47,9 +47,12 @@ export async function main(argv=process.argv.slice(2)) {
   if(command==='activate')return withLock(paths(root).config+'.lock',async()=>{const config=await loadConfig(root);if(!config)throw new Error('请先初始化');await initializeActivity(root);config.enabled=true;config.revision++;await writeJson(paths(root).config,config);return {status:'active'};});
   if(command==='status')return status(root);
   if(command==='drain')return drain(root);
-  if(command==='run-scheduled-rss') {
-    if (!/^scheduled-\d{4}-\d{2}-\d{2}$/u.test(options.key || '')) throw new Error('Invalid scheduled RSS period');
-    return drain(root, {kind:'rss', cycle:options.key});
+  if(command==='run-scheduled-rss' || command==='run-scheduled-report') {
+    const kind = command==='run-scheduled-rss' ? 'rss' : options.kind;
+    if (!['rss','daily','weekly'].includes(kind) || !/^scheduled-\d{4}-\d{2}-\d{2}$/u.test(options.key || '')) {
+      throw new Error('Invalid scheduled subscription period');
+    }
+    return drain(root, {kind, cycle:options.key});
   }
   if(command==='import-video') {
     if (!(await loadConfig(root))?.enabled) throw new Error('后台队列已暂停');
