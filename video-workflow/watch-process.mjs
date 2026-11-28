@@ -10,6 +10,7 @@ import{biliApi,canonicalUrl}from'./watch-core.mjs';
 import{importTranscript,verifyUpstream}from'./import-transcript.mjs';
 import{importIllustratedStrong}from'./illustrated-strong.mjs';
 import{boundSubscriptionMediaPlanner}from'./subscription-media-ssh.mjs';
+import{adoptWatchSubtitleTrack}from'./watch-subtitle-stage.mjs';
 import{assertIllustratedWatch,watchJobDir,runWatchedIllustrated,prepareIllustratedAttempt,VIDEO_PYTHON}from'./watch-illustrated.mjs';
 const execute=promisify(execFile),root=import.meta.dirname;
 export const WATCH_ARTIFACTS=artifactPath('ProgressiveReading','video-watch');
@@ -58,6 +59,11 @@ export async function acquireSource(item,watch,jobDir,{packages=publicPackages,a
   if(!page)throw Error('subscribed_cid_removed');
   const url=canonicalUrl(item.bvid,page.page);
   item.url=url;item.part=page.page;item.parts=view.pages.length;
+  if(view.bvid===item.bvid){
+    const remote=await adoptWatchSubtitleTrack(path.dirname(root),
+      {...item,duration:page.duration||view.duration},watch,jobDir);
+    if(remote)return remote;
+  }
   const snapshot=new LiveCookieSnapshot({workflowRoot:path.dirname(root),dataRoot:defaultCookieDataRoot(path.dirname(root))});
   snapshot.refresh({force:true});
   if(!snapshot.health().loaded||!snapshot.headerForUrl(url))return {status:'waiting_source',reason:'target_login_snapshot_unavailable'};
