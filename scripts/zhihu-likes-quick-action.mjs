@@ -6,9 +6,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resultView } from "./browser-import-web/client.mjs";
 import { sourceUrls } from "./reading-source-library.mjs";
 import { urlImportDedupeKey } from "./url-import-input.mjs";
+import { withLock } from "../subscription-workflow/config.mjs";
 
 const destinationFolder = "知乎/知乎点赞";
 const importRoute = "/api/browser-import/requests";
+const likesRoute = "/api/social-archive/zhihu/recent-likes";
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 async function readJson(file) {
@@ -46,8 +48,10 @@ async function localJson(port, route, body) {
 
 function validLike(item) {
   const url = item?.source_url || "";
-  return (item?.verb === "MEMBER_VOTEUP_ANSWER" && /^https:\/\/www\.zhihu\.com\/question\/\d+\/answer\/\d+$/u.test(url))
-    || (item?.verb === "MEMBER_VOTEUP_ARTICLE" && /^https:\/\/zhuanlan\.zhihu\.com\/p\/\d+$/u.test(url));
+  const answer = /^https:\/\/www\.zhihu\.com\/question\/\d+\/answer\/(\d+)$/u.exec(url);
+  const article = /^https:\/\/zhuanlan\.zhihu\.com\/p\/(\d+)$/u.exec(url);
+  return (item?.verb === "MEMBER_VOTEUP_ANSWER" && item.content_type === "answer" && answer?.[1] === item.content_id)
+    || (item?.verb === "MEMBER_VOTEUP_ARTICLE" && item.content_type === "article" && article?.[1] === item.content_id);
 }
 
 function validateInventory(inventory, limit) {
@@ -71,10 +75,11 @@ function validateInventory(inventory, limit) {
 async function freezeInventory(request, file, limit) {
   let frozen = await readJson(file);
   if (!frozen) {
-    const { items, urls, boundary, boundary_reason, pages_read, requested, inventory_sha256 } = await request(
-      "/api/social-archive/zhihu/recent-likes", { action: "preview", limit }
+    const { items, urls, boundary, boundary_reason, pages_read, requested, inventory_sha256, profile_token } = await request(
+      likesRoute, { action: "preview", limit }
     );
-    const inventory = { items, urls, boundary, boundary_reason, pages_read, requested, inventory_sha256 };
+    if (!/^[0-9A-Za-z_-]+$/u.test(profile_token || "")) throw new Error("zhihu_inventory_account_missing");
+    const inventory = { items, urls, boundary, boundary_reason, pages_read, requested, inventory_sha256, profile_token };
     validateInventory(inventory, limit);
     frozen = { inventory, sha256: sha256(JSON.stringify(inventory)), frozen_at: new Date().toISOString() };
     try {
@@ -89,7 +94,8 @@ async function freezeInventory(request, file, limit) {
   return frozen.inventory;
 }
 
-async function verifyBodies(readingRoot, results) {
+async function verifyBodies(readingRoot, results, verified = []) {
+  const previouslyVerified = new Map(verified.map(row => [row.url, row]));
   const expected = new Map();
   const bodies = [];
   for (const result of results) {
@@ -108,14 +114,18 @@ async function verifyBodies(readingRoot, results) {
     const aliases = [result.requested_url, result.final_url, result.source_metadata?.canonical_url]
       .filter(Boolean).map(urlImportDedupeKey);
     const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, "").trim();
-    if (!body || !keys.some(key => aliases.includes(key)) || sha256(data) !== view.hash) {
+    const prior = previouslyVerified.get(result.requested_url);
+    const currentHash = sha256(data);
+    const sameVerifiedFile = prior?.path === file && prior.sha256 === view.hash;
+    if (!body || !keys.some(key => aliases.includes(key)) || (currentHash !== view.hash && !sameVerifiedFile)) {
       throw new Error("standard_import_body_identity_or_hash_mismatch");
     }
     for (const alias of aliases) {
       if (expected.has(alias) && expected.get(alias) !== file) throw new Error("reading_area_duplicate_source_url");
       expected.set(alias, file);
     }
-    bodies.push({ url: result.requested_url, path: file, sha256: view.hash, status: result.status, existing_body_reused: reused });
+    bodies.push({ url: result.requested_url, path: file, sha256: view.hash, status: result.status, existing_body_reused: reused,
+      ...(currentHash !== view.hash && { current_sha256: currentHash }) });
   }
 
   for (const entry of await fs.readdir(readingRoot, { recursive: true, withFileTypes: true })) {
@@ -135,7 +145,62 @@ async function verifyBodies(readingRoot, results) {
   return bodies;
 }
 
-export async function runQuickAction(input, { limit, dataRoot, readingRoot, request, waitMs = 3_300_000, pollMs = 4000 }) {
+function verifiedStates(result, items) {
+  const states = [...(result?.verification?.answer_states || []), ...(result?.verification?.article_states || [])];
+  const expected = new Map(items.map(item => [item.source_url, item.content_id]));
+  if (states.length !== expected.size || new Set(states.map(row => row.source_url)).size !== expected.size ||
+    states.some(row => !expected.has(row.source_url) || String(row.content_id) !== expected.get(row.source_url) ||
+      ![-1, 0, 1].includes(row.voting))) {
+    throw new Error("zhihu_exact_vote_state_unverified");
+  }
+  return states;
+}
+
+async function cleanVerifiedLikes(request, inventory, runDir, expectedProfile) {
+  const file = path.join(runDir, "cleanup-receipt.json");
+  const previous = await readJson(file);
+  if (previous?.inventorySha256 && previous.inventorySha256 !== inventory.inventory_sha256) throw new Error("zhihu_cleanup_checkpoint_mismatch");
+  const profile = expectedProfile || inventory.profile_token || previous?.profile_token;
+  if (!/^[0-9A-Za-z_-]+$/u.test(profile || "")) throw new Error("zhihu_cleanup_account_missing");
+  if ((inventory.profile_token && inventory.profile_token !== profile) || (previous?.profile_token && previous.profile_token !== profile)) {
+    throw new Error("zhihu_cleanup_account_mismatch");
+  }
+  if (previous?.status === "cleanup_verified") {
+    if (verifiedStates(previous, inventory.items).every(row => row.voting === 0)) return previous;
+    throw new Error("zhihu_cleanup_checkpoint_unverified");
+  }
+  const profileFields = profile ? { profile_token: profile } : {};
+  const operations = [...(previous?.operations || [])];
+  const save = (status, details = {}) => writeJson(file, {
+    status, inventorySha256: inventory.inventory_sha256, profile_token: profile, operations, ...details
+  });
+  try {
+    // Read every target before changing any platform state. A 403 or missing voting field is a stop condition.
+    const state = await request(likesRoute, { action: "state", items: inventory.items, ...profileFields });
+    const before = verifiedStates(state, inventory.items);
+    const activeUrls = new Set(before.filter(row => row.voting === 1).map(row => row.source_url));
+    const active = inventory.items.filter(item => activeUrls.has(item.source_url));
+    for (let index = 0; index < active.length; index += 5) {
+      const items = active.slice(index, index + 5);
+      const response = await request(likesRoute, { action: "unlike", items, ...profileFields, allow_account_mutation: true, readback: "account" });
+      operations.push(...(response.operations || []));
+      await save("cleanup_pending", { verification: response.verification });
+      if (response.status !== "cleanup_verified" || verifiedStates(response, items).some(row => row.voting !== 0)) {
+        throw new Error(response.verification_error || "zhihu_cleanup_not_verified");
+      }
+    }
+    const final = active.length ? await request(likesRoute, { action: "state", items: inventory.items, ...profileFields }) : state;
+    const states = verifiedStates(final, inventory.items);
+    if (states.some(row => row.voting !== 0)) throw new Error("zhihu_cleanup_final_readback_not_neutral");
+    await save("cleanup_verified", { verification: final.verification, boundary: inventory.boundary, boundary_reason: inventory.boundary_reason });
+    return readJson(file);
+  } catch (error) {
+    await save("cleanup_unverified", { error: error.message });
+    throw error;
+  }
+}
+
+export async function runQuickAction(input, { limit, dataRoot, readingRoot, request, expectedProfile, waitMs = 3_300_000, pollMs = 4000 }) {
   if (typeof input?.operationId !== "string" || !input.operationId.trim() || input.operationId.length > 512
     || input.text !== "" || !input.fields || Array.isArray(input.fields)
     || typeof input.fields !== "object" || Object.keys(input.fields).length) {
@@ -146,6 +211,11 @@ export async function runQuickAction(input, { limit, dataRoot, readingRoot, requ
   }
   const runId = sha256(input.operationId);
   const runDir = path.join(dataRoot, "SocialReading", "zhihu-likes", runId);
+  return withLock(path.join(runDir, "operation.lock"), () =>
+    runArchive(input, { limit, readingRoot, request, expectedProfile, waitMs, pollMs, runDir, runId }));
+}
+
+async function runArchive(input, { limit, readingRoot, request, expectedProfile, waitMs, pollMs, runDir, runId }) {
   const receiptPath = path.join(runDir, "operation-receipt.json");
   const health = await request("/api/highlights/health");
   if (health.status !== "ok") throw new Error("progressive_reading_service_unavailable");
@@ -154,8 +224,11 @@ export async function runQuickAction(input, { limit, dataRoot, readingRoot, requ
   const inventory = await freezeInventory(request, path.join(runDir, "inventory.json"), limit);
   const clientRequestId = `zhihu-likes-quick-${runId}`;
   const checkpointPath = path.join(runDir, "standard-request.json");
+  const standardReceiptPath = path.join(runDir, "standard-receipt.json");
+  const importReceiptPath = path.join(runDir, "import-verification.json");
   let submitted = await readJson(checkpointPath);
   let result;
+  let bodies;
   try {
     if (!submitted) {
       const accepted = await request(importRoute, {
@@ -170,24 +243,34 @@ export async function runQuickAction(input, { limit, dataRoot, readingRoot, requ
       throw new Error("standard_import_checkpoint_mismatch");
     }
     const deadline = Date.now() + waitMs;
-    let terminal;
-    do {
-      terminal = await request(`${importRoute}/${encodeURIComponent(submitted.requestId)}`);
-      if (terminal.request_id !== submitted.requestId) throw new Error("standard_import_request_id_mismatch");
-      if (terminal.terminal === true) break;
-      if (Date.now() < deadline) await delay(pollMs);
-    } while (Date.now() < deadline);
-    await writeJson(path.join(runDir, "standard-receipt.json"), terminal);
+    let terminal = await readJson(standardReceiptPath);
+    if (terminal?.terminal !== true) {
+      do {
+        terminal = await request(`${importRoute}/${encodeURIComponent(submitted.requestId)}`);
+        if (terminal.request_id !== submitted.requestId) throw new Error("standard_import_request_id_mismatch");
+        if (terminal.terminal === true) break;
+        if (Date.now() < deadline) await delay(pollMs);
+      } while (Date.now() < deadline);
+      await writeJson(standardReceiptPath, terminal);
+    }
+    if (terminal.request_id !== submitted.requestId) throw new Error("standard_import_request_id_mismatch");
 
     const byUrl = new Map((terminal.results || []).map(row => [row.requested_url, row]));
     const results = inventory.urls.map(url => byUrl.get(url));
     const complete = terminal.terminal === true && terminal.status === "completed" && terminal.results?.length === limit
       && results.every(row => row && ["imported", "idempotent_replay"].includes(row.status));
     if (complete) {
-      const bodies = await verifyBodies(root, results);
+      const prior = await readJson(importReceiptPath) || await readJson(receiptPath);
+      const priorBodies = prior?.state === "completed" && prior.operationId === input.operationId &&
+        prior.requestId === submitted.requestId && prior.inventorySha256 === inventory.inventory_sha256 && prior.bodies?.length === limit
+        ? prior.bodies : [];
+      bodies = await verifyBodies(root, results, priorBodies);
+      await writeJson(importReceiptPath, { state: "completed", operationId: input.operationId, requestId: submitted.requestId,
+        inventorySha256: inventory.inventory_sha256, bodies });
+      const cleanup = await cleanVerifiedLikes(request, inventory, runDir, expectedProfile);
       const reused = bodies.filter(row => row.existing_body_reused).length;
-      const detail = `已逐条回读最新 ${limit} 条知乎点赞，${limit - reused} 条落入「知乎/知乎点赞」，${reused} 条复用阅读区已有正文。`;
-      result = { state: "completed", detail, bodies };
+      const detail = `已逐条回读最新 ${limit} 条知乎点赞，${limit - reused} 条落入「知乎/知乎点赞」，${reused} 条复用阅读区已有正文。知乎端已确认 ${limit} 条均取消点赞。`;
+      result = { state: "completed", detail, bodies, cleanup: { status: cleanup.status, verified: limit } };
     } else {
       const ready = results.filter(row => row && ["imported", "idempotent_replay"].includes(row.status)).length;
       result = terminal.terminal === true
@@ -195,7 +278,8 @@ export async function runQuickAction(input, { limit, dataRoot, readingRoot, requ
         : { state: "unknown", detail: `标准导入仍在运行（${ready}/${limit}）。回执 ${submitted.requestId}。` };
     }
   } catch (error) {
-    result = { state: "unknown", detail: `导入结果待核对。${error.message}` };
+    result = { state: "unknown", detail: bodies ? `已核对 ${bodies.length} 条导入，取消点赞待核对。${error.message}`
+      : `导入结果待核对。${error.message}`, ...(bodies && { bodies }) };
   }
   const receipt = { ...result, operationId: input.operationId, inventorySha256: inventory.inventory_sha256,
     requestId: submitted?.requestId, destinationFolder, recordedAt: new Date().toISOString() };

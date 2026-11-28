@@ -80,9 +80,9 @@ npm run social-archive:zhihu-likes -- --limit <N> --unlike --receipt <receipt.js
 npm run social-archive:zhihu-likes-since -- --since <YYYY-MM-DD> --unlike --import --destination-folder "知乎/知乎点赞"
 ```
 
-决策工作台「快捷操作 → 直接执行 → 导入知乎最新 20 条点赞」调用 `scripts/zhihu-likes-quick-action.mjs`。它通过现有登录态快照读取最近的回答和文章点赞，冻结 URL 及下一条边界，并使用共享标准导入队列。新正文写入 `知乎/知乎点赞`，阅读区内已有正文按来源复用。操作只读取知乎点赞，标准导入完成且逐条回读文件、来源 URL 和哈希后才返回 `completed`。
+决策工作台「快捷操作 → 直接执行 → 导入知乎最新 20 条点赞」调用 `scripts/zhihu-likes-quick-action.mjs`。它通过现有登录态快照确定知乎账号，冻结回答、文章和下一条边界，并提交共享标准导入队列。新正文写入 `知乎/知乎点赞`，阅读区内已有正文按来源复用。标准导入完成后，先逐条核对本地文件、来源 URL 和哈希，再读回冻结清单上的投票状态，对仍处于点赞状态的条目分批取消。逐条读回中性状态后返回 `completed`。
 
-本机命令可指定 1 至 50 条。Bridge 以 JSON stdin 传入稳定 `operationId`，脚本在渐进阅读数据根的 `SocialReading/zhihu-likes/<操作 ID 哈希>` 下保存冻结清单、标准队列回执和正文验收。手动核对同一次操作时，使用原 `operationId` 和条数回读既有请求。等待超时由 Bridge 记为结果待核对，标准队列继续维护原请求。
+本机命令可指定 1 至 50 条。Bridge 以 JSON stdin 传入稳定 `operationId`，脚本在渐进阅读数据根的 `SocialReading/zhihu-likes/<操作 ID 哈希>` 下保存冻结清单、标准队列回执、正文验收和取消点赞回执。使用原 `operationId` 和条数可续跑同一清单，逐条回读后只处理仍处于点赞状态的条目。平台账号、状态读取或取消后的回读失败时，回执保留已核对结果，Bridge 显示结果待核对。
 
 ```powershell
 '{"operationId":"<稳定操作身份>","text":"","fields":{}}' |

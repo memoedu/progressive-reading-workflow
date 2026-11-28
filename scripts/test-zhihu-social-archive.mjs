@@ -128,6 +128,28 @@ const exactActiveVerification = await verifyZhihuLikesRemoved({
 assert.equal(exactActiveVerification.status, "failed");
 assert.equal(exactActiveVerification.remaining.length, 1);
 assert.equal(requests.filter((item) => item.method === "POST").length, 10);
+const largeAnswerId = "2074442036441067634";
+const largeAnswer = { content_type: "answer", content_id: largeAnswerId,
+  source_url: `https://www.zhihu.com/question/123/answer/${largeAnswerId}` };
+const voteOptions = { removedItems: [largeAnswer], cookieHeaderForUrl, attempts: 1, readAccountState: true };
+const apiReadback = await verifyZhihuLikesRemoved({
+  ...voteOptions,
+  fetchImpl: async (url) => {
+    assert.equal(new URL(url).pathname, `/api/v4/answers/${largeAnswerId}`);
+    return new Response(`{"id":${largeAnswerId},"type":"answer","relationship":{"voting":0}}`);
+  }
+});
+assert.equal(apiReadback.answer_states[0].voting, 0);
+assert.equal(apiReadback.status, "verified");
+await assert.rejects(verifyZhihuLikesRemoved({
+  ...voteOptions,
+  fetchImpl: async (url) => new URL(url).pathname.startsWith("/api/")
+    ? new Response(`{"id":${largeAnswerId},"type":"answer","relationship":{"voting":null}}`)
+    : new Response("", { status: 403 })
+}), /zhihu_content_state_http_403/);
+await assert.rejects(unlikeZhihuItems([largeAnswer], {
+  allowAccountMutation: true, cookieHeaderForUrl, fetchImpl: async () => Response.json({ voting: null, success: true })
+}), /zhihu_unlike_response_unverified/);
 const snapshotInventory = await discoverRecentZhihuLikes({
   limit: 10,
   cookieHeaderForUrl,
@@ -176,7 +198,7 @@ assert.equal(
   `用以下 2 个 URL 跑标准导入 Canary：\n${inventory.urls[0]}\n${inventory.urls[1]}`
 );
 
-console.log(JSON.stringify({ result: "passed", tests: 33 }, null, 2));
+console.log(JSON.stringify({ result: "passed", tests: 37 }, null, 2));
 
 function answerActivity(number) {
   return {

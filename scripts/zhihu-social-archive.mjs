@@ -204,7 +204,7 @@ export async function unlikeZhihuItems(items, {
       method: "POST",
       json: request.json
     });
-    const verified = Number(payload?.voting) === 0
+    const verified = payload?.voting === 0
       || payload?.is_upped === false
       || payload?.reaction_state === false;
     operations.push({
@@ -215,7 +215,7 @@ export async function unlikeZhihuItems(items, {
       http_status: 200,
       response_verified: verified,
       response_state: {
-        voting: Number.isFinite(Number(payload?.voting)) ? Number(payload.voting) : null,
+        voting: Number.isInteger(payload?.voting) ? payload.voting : null,
         is_upped: typeof payload?.is_upped === "boolean" ? payload.is_upped : null,
         reaction_state: typeof payload?.reaction_state === "boolean" ? payload.reaction_state : null,
         success: typeof payload?.success === "boolean" ? payload.success : null
@@ -233,7 +233,8 @@ export async function verifyZhihuLikesRemoved({
   cookieHeaderForUrl,
   fetchImpl = globalThis.fetch,
   attempts = 5,
-  readbackDelaysMs = [2000, 5000, 10000, 20000]
+  readbackDelaysMs = [2000, 5000, 10000, 20000],
+  readAccountState = false
 }) {
   const answerItems = (removedItems || []).filter((item) => item.content_type === "answer");
   const articleItems = (removedItems || []).filter((item) => item.content_type === "article");
@@ -243,12 +244,14 @@ export async function verifyZhihuLikesRemoved({
     lastAnswerVerification = await verifyZhihuAnswerStates(answerItems, {
       cookieByHostname,
       cookieHeaderForUrl,
-      fetchImpl
+      fetchImpl,
+      readAccountState
     });
     lastArticleVerification = await verifyZhihuArticleStates(articleItems, {
       cookieByHostname,
       cookieHeaderForUrl,
-      fetchImpl
+      fetchImpl,
+      readAccountState
     });
     const remaining = [...lastAnswerVerification.remaining, ...lastArticleVerification.remaining];
     if (remaining.length === 0) {
@@ -277,19 +280,50 @@ export async function verifyZhihuLikesRemoved({
   };
 }
 
+export async function verifyZhihuArchiveAccount(profileToken, options) {
+  const signedInProfile = await resolveProfileToken(undefined, options);
+  if (profileToken && profileToken !== signedInProfile) throw new Error("zhihu_cleanup_account_mismatch");
+  return signedInProfile;
+}
+
+async function getZhihuAccountVoting(item, options) {
+  if (!["answer", "article"].includes(item.content_type) || !/^\d+$/u.test(String(item.content_id))) {
+    throw new Error("zhihu_cleanup_item_invalid");
+  }
+  const isAnswer = item.content_type === "answer";
+  const url = new URL(`https://www.zhihu.com/api/v4/${isAnswer ? "answers" : "articles"}/${item.content_id}`);
+  url.searchParams.set("include", isAnswer ? "relationship" : "voting");
+  const body = await requestZhihuJson(url.href, { ...options, retryDelaysMs: [], preserveLongIds: true });
+  if (String(body?.id) !== String(item.content_id) || body?.type !== item.content_type) {
+    throw new Error("zhihu_vote_entity_mismatch");
+  }
+  const voting = isAnswer ? body.relationship?.voting : body.voting;
+  if (![-1, 0, 1].includes(voting)) throw new Error("zhihu_vote_field_missing");
+  return voting;
+}
+
+async function readExactVoting(item, pageUrl, options, readAccountState) {
+  if (readAccountState) {
+    try {
+      return await getZhihuAccountVoting(item, options);
+    } catch (error) {
+      if (!["zhihu_vote_field_missing", "zhihu_http_403", "zhihu_http_404"].includes(error.message)) throw error;
+    }
+  }
+  const html = await requestZhihuPageText(pageUrl, { ...options, ...(readAccountState && { retryDelaysMs: [] }) });
+  return item.content_type === "answer" ? extractZhihuAnswerVoting(html, item.content_id)
+    : extractZhihuArticleVoting(html, item.content_id);
+}
+
 async function verifyZhihuAnswerStates(items, {
   cookieByHostname,
   cookieHeaderForUrl,
-  fetchImpl
+  fetchImpl,
+  readAccountState
 }) {
   const states = [];
   for (const item of items) {
-    const html = await requestZhihuPageText(item.source_url, {
-      cookieByHostname,
-      cookieHeaderForUrl,
-      fetchImpl
-    });
-    const voting = extractZhihuAnswerVoting(html, item.content_id);
+    const voting = await readExactVoting(item, item.source_url, { cookieByHostname, cookieHeaderForUrl, fetchImpl }, readAccountState);
     states.push({ source_url: item.source_url, content_id: item.content_id, voting });
     if (fetchImpl === globalThis.fetch) await delay(250);
   }
@@ -302,18 +336,14 @@ async function verifyZhihuAnswerStates(items, {
 async function verifyZhihuArticleStates(items, {
   cookieByHostname,
   cookieHeaderForUrl,
-  fetchImpl
+  fetchImpl,
+  readAccountState
 }) {
   const states = [];
   for (const item of items) {
     const url = `https://zhuanlan.zhihu.com/p/${item.content_id}`;
     try {
-      const html = await requestZhihuPageText(url, {
-        cookieByHostname,
-        cookieHeaderForUrl,
-        fetchImpl
-      });
-      const voting = extractZhihuArticleVoting(html, item.content_id);
+      const voting = await readExactVoting(item, url, { cookieByHostname, cookieHeaderForUrl, fetchImpl }, readAccountState);
       states.push({ source_url: item.source_url, content_id: item.content_id, voting, state: "readable" });
     } catch (error) {
       if (error?.code !== "ZHIHU_CONTENT_MIGRATED_PROJECT") throw error;
@@ -339,7 +369,7 @@ export function extractZhihuAnswerVoting(html, contentId) {
   if (!answer || String(answer.id || "") !== String(contentId) || answer.type !== "answer") {
     throw new Error("zhihu_answer_entity_missing");
   }
-  const voting = Number(answer.relationship?.voting);
+  const voting = answer.relationship?.voting;
   if (!Number.isInteger(voting)) throw new Error("zhihu_answer_voting_state_invalid");
   return voting;
 }
@@ -350,7 +380,7 @@ export function extractZhihuArticleVoting(html, contentId) {
   if (!article || String(article.id || "") !== String(contentId) || article.type !== "article") {
     throw new Error("zhihu_article_entity_missing");
   }
-  const voting = Number(article.voting);
+  const voting = article.voting;
   if (!Number.isInteger(voting)) throw new Error("zhihu_article_voting_state_invalid");
   return voting;
 }
@@ -359,10 +389,14 @@ function extractZhihuInitialState(html) {
   const match = String(html || "").match(/<script[^>]+id=["']js-initialData["'][^>]*>([\s\S]*?)<\/script>/iu);
   if (!match) throw new Error("zhihu_initial_state_missing");
   try {
-    return JSON.parse(match[1]);
+    return JSON.parse(match[1], keepExactContentId);
   } catch {
     throw new Error("zhihu_initial_state_invalid");
   }
+}
+
+function keepExactContentId(key, value, context) {
+  return key === "id" && typeof value === "number" && !Number.isSafeInteger(value) ? context.source : value;
 }
 
 export function buildProgressiveReadingHandoffCommand(urls) {
@@ -394,7 +428,8 @@ export async function requestZhihuJson(url, {
   method = "GET",
   json = null,
   retryDelaysMs = [1000, 3000, 8000, 20000],
-  allowAnonymous = false
+  allowAnonymous = false,
+  preserveLongIds = false
 }) {
   const parsed = new URL(url);
   const columnRead = parsed.origin === 'https://zhuanlan.zhihu.com' && method === 'GET'
@@ -427,7 +462,7 @@ export async function requestZhihuJson(url, {
     const text = await response.text();
     if (response.ok) {
       try {
-        return JSON.parse(text || "{}");
+        return JSON.parse(text || "{}", preserveLongIds ? keepExactContentId : undefined);
       } catch {
         throw new Error("zhihu_json_response_invalid");
       }
