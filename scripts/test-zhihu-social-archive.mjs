@@ -147,6 +147,14 @@ const importReadback = await verifyZhihuLikesRemoved({
 });
 assert.equal(importReadback.answer_states[0].voting, 0);
 assert.equal(importReadback.status, "verified");
+let voteReads = 0;
+const delayedReadback = await verifyZhihuLikesRemoved({
+  ...voteOptions, attempts: 3, readbackDelaysMs: [0, 0],
+  fetchImpl: async () => answerPage(voteReads++ === 0 ? 1 : 0)
+});
+assert.equal(delayedReadback.status, "verified");
+assert.equal(delayedReadback.attempt, 2);
+assert.equal(voteReads, 2);
 await assert.rejects(verifyZhihuLikesRemoved({
   ...voteOptions, fetchImpl: async () => answerPage(null)
 }), /zhihu_answer_voting_state_invalid/);
@@ -204,7 +212,7 @@ assert.equal(
   `用以下 2 个 URL 跑标准导入 Canary：\n${inventory.urls[0]}\n${inventory.urls[1]}`
 );
 
-console.log(JSON.stringify({ result: "passed", tests: 37 }, null, 2));
+console.log(JSON.stringify({ result: "passed", tests: 40 }, null, 2));
 
 function answerActivity(number) {
   return {

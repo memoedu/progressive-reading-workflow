@@ -3057,7 +3057,7 @@ async function handle(req, res) {
           profileToken: body.profile_token,
           removedItems: items,
           cookieHeaderForUrl: runtimeCookieHeaderForUrl,
-          ...(accountReadback && { attempts: 1, readAccountState: true })
+          ...(accountReadback && { attempts: 3, readbackDelaysMs: [2000, 5000], readAccountState: true })
         });
       } catch (error) {
         return sendJson(res, 200, {
