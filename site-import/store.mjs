@@ -39,7 +39,7 @@ export function normalizeSiteSource(value,previous={}) {
   return {...previous,id:previous.id || 'site-'+randomUUID(),name,url,scope,destination,processing_mode:mode,
     translation_mode:translation,generate_guide:value.generate_guide ?? previous.generate_guide ?? false,
     include_paths:patterns('include_paths'),exclude_paths:patterns('exclude_paths'),instruction,
-    generate_index:value.generate_index ?? previous.generate_index ?? true,subscribe_rss:value.subscribe_rss ?? previous.subscribe_rss ?? false,infer_topics:value.infer_topics ?? previous.infer_topics ?? false,
+    generate_index:value.generate_index ?? previous.generate_index ?? true,subscribe_rss:value.subscribe_rss ?? previous.subscribe_rss ?? !previous.id,infer_topics:value.infer_topics ?? previous.infer_topics ?? false,
     ...((value.repository || previous.repository)?{repository:repositoryConfig(value.repository || previous.repository,url)}:{}),
     created_at:previous.created_at || now(),updated_at:now()};
 }
