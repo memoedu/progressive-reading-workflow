@@ -13,7 +13,7 @@ import LocalIrDocumentCore from "../document-core/index.mjs";
 import { preprocessBrowserCapture, browserCaptureProcessingOptions } from "../standard-preprocessing/integrations/browser-capture.mjs";
 import { preprocessNetworkMarkdown } from "../standard-preprocessing/integrations/network-import.mjs";
 import { PROCESSOR_VERSION as standardPreprocessProcessorVersion } from "../standard-preprocessing/lib/core.mjs";
-import { bilingualReadingFilename, generatedReadingTitle } from "../standard-preprocessing/lib/reading-filename.mjs";
+import { bilingualReadingFilename, sharedReadingTitle } from "../standard-preprocessing/lib/reading-filename.mjs";
 import { GUIDE_COVERAGE_VERSION } from '../standard-preprocessing/lib/guide-coverage.mjs';
 import { loadProducerConfig as loadUnifiedProducerConfig, requestProducerText } from '../standard-preprocessing/lib/producer.mjs';
 import { classifyStandardImportQuality, readingDocumentPathCandidates } from "./standard-import-quality.mjs";
@@ -1326,7 +1326,9 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
     : null;
-  const readingTitle = preprocessing?.readingTitle || (sharedReading && generatedReadingTitle(sharedReading.readingBytes.toString("utf8")));
+  const sharedMarkdown = sharedReading?.readingBytes.toString("utf8");
+  const sharedTitle = sharedReading && sharedReadingTitle(sharedMarkdown);
+  const readingTitle = preprocessing?.readingTitle || sharedTitle;
   if (!reimportSnapshot && !orphanState && !await pathExists(target)) {
     const filename = bilingualReadingFilename(readingTitle, `--浏览器加工--${shortHash(parsed.href)}.md`);
     if (filename) {
@@ -1343,8 +1345,9 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
     preserveCapturedBody: originalImport && Boolean(cachedRssMarkdown)
   });
   const markdown = sharedReading ? ["---", `source_url: ${yamlString(parsed.href)}`,
-    `source_title: ${yamlString(draft.title)}`, 'import_method: shared_standard_reading', 'status: imported', '---', '',
-    sharedReading.readingBytes.toString('utf8'), ''].join('\n') : preprocessing ? updateFrontmatterFields(preprocessing.markdown, { status: completed ? 'done' : 'imported' }) : (originalImport ? updateFrontmatterFields(originalMarkdown, {
+    `source_title: ${yamlString(draft.title)}`, 'import_method: shared_standard_reading', 'status: imported',
+    ...(sharedTitle ? ['translation_state: generated_translation'] : []), '---', '',
+    sharedMarkdown, ''].join('\n') : preprocessing ? updateFrontmatterFields(preprocessing.markdown, { status: completed ? 'done' : 'imported' }) : (originalImport ? updateFrontmatterFields(originalMarkdown, {
     import_method:'url_original_text',processing_mode:'original_text',processing_status:'original',llm_used:false
   }) : originalMarkdown);
   const rawMarkdownSha256 = createHash("sha256").update(converted.markdown).digest("hex");

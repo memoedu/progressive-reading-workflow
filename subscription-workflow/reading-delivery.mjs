@@ -13,7 +13,7 @@ import { ExternalProducer, loadBatchProducerConfig } from '../standard-preproces
 import { downloadSharedReading } from './shared-library-client.mjs';
 import { synchronizeReadingPublication } from './reading-publication.mjs';
 import { findSourcePublication, withSourcePublication } from '../scripts/reading-source-library.mjs';
-import { generatedReadingTitle, readingTitlePublicationPath } from '../standard-preprocessing/lib/reading-filename.mjs';
+import { sharedReadingTitle, readingTitlePublicationPath } from '../standard-preprocessing/lib/reading-filename.mjs';
 
 export async function subscriptionProducer(config = null) {
   return new ExternalProducer({...config || await loadBatchProducerConfig(),AI_PRODUCER_PROVIDER:'codex_exec'});
@@ -100,8 +100,10 @@ export async function deliverArticle(paths, item, name, options = {}) {
         const existing = await findSourcePublication(paths.workflowRoot, item.item_url);
         if (existing) return { ...existing, status:'published', preserved_existing:true };
         const reading = shared.readingBytes.toString('utf8');
-        const markdown = `---\nsource_url: ${JSON.stringify(item.item_url)}\nimport_method: shared_standard_reading\n---\n\n${reading}\n`;
-        const output = readingTitlePublicationPath(target, generatedReadingTitle(reading), item.item_url);
+        const title = sharedReadingTitle(reading);
+        const translationState = title ? 'translation_state: generated_translation\n' : '';
+        const markdown = `---\nsource_url: ${JSON.stringify(item.item_url)}\nimport_method: shared_standard_reading\n${translationState}---\n\n${reading}\n`;
+        const output = readingTitlePublicationPath(target, title, item.item_url);
         await fs.mkdir(path.dirname(output), { recursive:true });
         await fs.writeFile(output, markdown, { flag:'wx' });
         const sharing = await synchronizeReadingPublication(paths.workflowRoot, { reused: shared });

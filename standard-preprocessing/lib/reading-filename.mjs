@@ -36,6 +36,14 @@ export function generatedReadingTitle(markdown) {
   return /^\s*# ([^\r\n]+)/u.exec(String(markdown).slice(header[0].length))?.[1] || null;
 }
 
+export function sharedReadingTitle(markdown) {
+  const text = String(markdown).replaceAll('\r\n', '\n');
+  const title = /^# ([^\n]+)\n/u.exec(text)?.[1];
+  const body = text.indexOf('\n## 正文\n');
+  const original = text.indexOf('\n---\n\n## 原文\n', body);
+  return title && bilingualReadingFilename(title) && body >= 0 && original > body ? title : null;
+}
+
 export function readingTitlePublicationPath(target, title, sourceUrl) {
   const suffix = sourceUrl ? "--" + createHash("sha256").update(sourceUrl).digest("hex").slice(0, 10) + ".md" : ".md";
   const filename = bilingualReadingFilename(title, suffix);
