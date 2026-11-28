@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { sharedReadingOptionsKey, sharedReadingProcessingKey } from '../subscription-workflow/shared-library-client.mjs';
 import { setTimeout } from 'node:timers/promises';
 
 const html = pathname => '<html><head><meta charset="utf-8"><title>Publication ' + pathname +
@@ -26,6 +27,9 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
     endpoint, session_endpoint:endpoint, token:'fixture-only'
   }));
   const hook = path.join(root,'fetch-fixture.mjs');
+  const translatedOptions = {input_form:'written',content_profile:'natural_language',spoken_to_written:false,
+    structure_body:false,include_reading_guide:false,translation_mode:'terminology'};
+  const translatedBody = '# 样本文档｜Fixture article\n\n---\n\n## 正文\n\n这是用于导入验证的译文。\n\n---\n\n## 原文\n\nThis is the fixture original.';
   await fs.writeFile(hook,`
     import assert from 'node:assert/strict';
     import fs from 'node:fs/promises';
@@ -35,12 +39,27 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
     const commit = '1'.repeat(40);
     const blobs = new Map();
     const index = new Map();
+    const digest = value => createHash('sha256').update(value).digest('hex');
+    const source = '${host}/translated';
+    const original = 'This is the fixture original.';
+    const translatedBody = ${JSON.stringify(translatedBody)};
+    const originalSha256 = digest(original);
+    const readingSha256 = digest(translatedBody);
+    blobs.set(originalSha256+'.md',original);
+    blobs.set('reading-'+readingSha256+'.md',translatedBody);
+    index.set(digest(source), {schema:'progressive-reading.shared-article/v1',url:source,title:'Fixture article',
+      original:{path:'原稿/'+digest(source).slice(0,24)+'/'+originalSha256+'.md',sha256:originalSha256},
+      reading_files:[{original_sha256:originalSha256,sha256:readingSha256,
+        path:'加工版本/'+digest(source).slice(0,24)+'/reading-'+readingSha256+'.md',
+        processing_sha256:'${sharedReadingProcessingKey({processingOptions:translatedOptions})}',
+        options_sha256:'${sharedReadingOptionsKey({processingOptions:translatedOptions})}'}]});
     let firstReadback = false;
     let retryRequests = 0;
     const html = ${html.toString()};
     globalThis.fetch = async (input, options) => {
       const url = new URL(input);
       if (url.origin === '${host}') {
+        assert.notEqual(url.pathname, '/translated', 'A shared translation should not fetch the public site again');
         return new Response(html(url.pathname),{headers:{'Content-Type':'text/html; charset=utf-8'}});
       }
       if (url.origin === 'https://raw.githubusercontent.com') {
@@ -162,5 +181,18 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
   assert.equal(replay.status,'idempotent_replay');
   assert.equal(replay.receipt.shared_original.reused,true);
   assert.equal(replay.receipt.shared_original.commit,'1'.repeat(40));
+  assert.equal(await fs.readFile(path.join(root, 'publication-writes'), 'utf8'), writesBefore);
+
+  const downloaded = await fetch(base+'/api/browser-import/requests', {method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({urls:[host+'/translated'], source:'other_reader', processing_mode:'standard_preprocess',
+      processing_options:translatedOptions})}).then(response=>response.json());
+  const downloadedResult = (await poll('/api/browser-import/requests/'+downloaded.request_id,value=>value.terminal)).results[0];
+  assert.equal(downloadedResult.status, 'idempotent_replay');
+  assert.equal(downloadedResult.receipt.shared_reading.reused, true);
+  const translated = downloadedResult.artifacts.find(item=>item.kind==='markdown');
+  assert.match(path.basename(translated.path), /^样本文档｜Fixture article--浏览器加工--/u);
+  const downloadedMarkdown = await fs.readFile(translated.path,'utf8');
+  assert.match(downloadedMarkdown, /^translation_state: generated_translation$/mu);
+  assert.ok(downloadedMarkdown.trimEnd().endsWith(translatedBody));
   assert.equal(await fs.readFile(path.join(root, 'publication-writes'), 'utf8'), writesBefore);
 });
