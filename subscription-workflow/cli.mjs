@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { codeRoot, initialize, paths, loadConfig, writeJson, withLock } from './config.mjs';
+import { codeRoot, initialize, paths, loadConfig, writeJson, withLock, syncSavedRssRegistry } from './config.mjs';
 import { JOB_KINDS, enqueue, enqueueVideoRequest, launchWorker, drain, status, initializeActivity, localDate } from './service.mjs';
 import { downloadSharedReading, downloadSharedVersion, resolveSharedMaterial, syncSharedReading } from './shared-library-client.mjs';
 import { sharedDigest, sharedReadingSource } from './shared-library.mjs';
@@ -44,7 +44,19 @@ export async function main(argv=process.argv.slice(2)) {
     return {...receipt,output};
   }
   if(command==='init') {const config=await initialize(root);await initializeActivity(root);return {status:'initialized',enabled:config.enabled,subscriptions:config.subscriptions.length};}
-  if(command==='activate')return withLock(paths(root).config+'.lock',async()=>{const config=await loadConfig(root);if(!config)throw new Error('请先初始化');await initializeActivity(root);config.enabled=true;config.revision++;await writeJson(paths(root).config,config);return {status:'active'};});
+  if(command==='activate'){
+    const p=paths(root);
+    await withLock(p.config+'.lock',async()=>{
+      const config=await loadConfig(root);
+      if(!config)throw new Error('请先初始化');
+      await initializeActivity(root);
+      config.enabled=true;
+      config.revision++;
+      await writeJson(p.config,config);
+    });
+    await syncSavedRssRegistry(p.home);
+    return {status:'active'};
+  }
   if(command==='status')return status(root);
   if(command==='drain')return drain(root);
   if(command==='run-scheduled-rss' || command==='run-scheduled-report') {

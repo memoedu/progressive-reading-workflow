@@ -11,6 +11,10 @@ RSS 纯采集可以由另一台设备执行。现有 Windows 任务和原周期 
 
 回退时先停源端日历触发，再对照已采集和已消费周期。Windows 可对后续没有捕获文件的周期继续采集。已验证的文件可以保留为原始输入。
 
+Windows 订阅页面保存或删除来源、CLI 激活订阅后，沿现有 `remote-rss-binding.json` 把启用状态、配置修订和启用 RSS 的 ID、URL 发送到 Mac 原注册表。原配置先提交，SSH 使用固定主机密钥。Mac 在注册表锁内按修订号原子写入，重复版本必须具有相同投影，更旧的版本被拒绝。投影不含其他类型来源、账号或报表数据。
+
+SSH 失败时，下一次原配置保存或原 RSS 领取会读取 Windows 已保存的最新配置并重试。Mac 已冻结的周期输入保持原样。如果接收时才追回新配置，旧版捕获仍按原规则校验，无法使用时由 Windows 本轮采集。只读对账用 `node subscription-workflow/rss-registry-sync.mjs <Windows订阅数据目录> verify`，返回两端一致的修订、源数及投影哈希。
+
 ## 日报和周报
 
 候选输入位于 `<stage-home>/<cycle>/<kind>/input`，分为 `workspace`、`state`、`rss`、`video` 四个子目录，另以 `roots.json` 记录四个原 Windows 输入根。已有正文的正式传输由阅读同步负责。冻结输入排除 Local IR 与浏览器凭据。
