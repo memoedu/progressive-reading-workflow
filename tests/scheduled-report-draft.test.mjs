@@ -85,6 +85,15 @@ test('the original renderer uses the sealed result only for its freshly selected
   assert.equal(fallbacks,1);
   const job={id:id('weekly'),kind:'weekly',cycle,status:'completed',result:{draftRender:result.receipt}};
   const confirm=(_binding,_op,kind,period,receipt)=>confirmSealedReportDraft(home,kind,period,receipt);
+  const output=path.join(root,'weekly.md');
+  await fs.writeFile(output,'draft');
+  job.result.outputs={long_weekly:{path:output,sha256:digest('draft')}};
+  await fs.appendFile(output,'manual note');
+  assert.equal(await settleReportDraft(root,job,confirm),undefined);
+  await fs.writeFile(output,'draft');
+  await writeJson(paths(root).config,{...cfg,revision:41});
+  assert.equal(await settleReportDraft(root,job,confirm),undefined);
+  await writeJson(paths(root).config,{...cfg,revision:40});
   assert.deepEqual(await settleReportDraft(root,job,confirm),await settleReportDraft(root,job,confirm));
 });
 

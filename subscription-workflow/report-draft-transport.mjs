@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -76,6 +77,11 @@ export async function settleReportDraft(root,job,send=stageExchange) {
   if(!['completed','completed_with_issues'].includes(job.status) || r?.origin!=='scheduled_capture')return;
   const binding=await reportBinding(root);
   if(binding?.scheduledCapture!==true)return;
+  if((await loadConfig(root))?.revision!==r.revision)return;
+  for(const key of ['daily','long_weekly']){
+    const output=job.result.outputs?.[key];
+    if(output?.sha256 && digest(await fs.readFile(output.path))!==output.sha256)return;
+  }
   return send(binding,'ack',job.kind,job.cycle,{jobId:job.id,planSha256:r.planSha256,resultSha256:r.resultSha256});
 }
 
