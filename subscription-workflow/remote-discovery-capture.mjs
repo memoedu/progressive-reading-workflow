@@ -88,8 +88,8 @@ function validateCapture(kind,cycle,envelope) {
   return envelope;
 }
 
-async function generate(kind,request) {
-  if(kind==='zhihu') return (await import('./zhihu-discovery-stage.mjs')).generateNativeZhihuDiscovery(request);
+async function generate(kind,request,options) {
+  if(kind==='zhihu') return (await import('./zhihu-discovery-stage.mjs')).generateNativeZhihuDiscovery(request,options);
   return (await import('./video-discovery-stage.mjs')).generateVideoDiscovery(request);
 }
 
@@ -105,10 +105,12 @@ export async function captureDiscovery(home,kind,cycle,registry,{ produce=genera
     if (!saved) await writeJson(files.input,planned);
     let sealed=await readJson(files.capture);
     if (!sealed) {
-      const result=await produce(kind,planned);
+      const reportBodies=kind==='zhihu' && await (await import('./report-zhihu-body-capture.mjs')).collectZhihuReportBodies(home,planned).catch(()=>null);
+      const result=await produce(kind,planned,reportBodies && {onMaterial:reportBodies.observe} || undefined);
       const payload={schema,kind,cycle,requestSha256:hash(planned),result,finishedAt:new Date().toISOString()};
       sealed=validateCapture(kind,cycle,{...payload,sha256:hash(payload)});
       if (Buffer.byteLength(JSON.stringify(sealed))>maxBytes-65536) fail('capture_size_limit');
+      if(reportBodies)await reportBodies.seal(sealed).catch(()=>null);
       await writeJson(files.capture,sealed);
     }
     validateCapture(kind,cycle,sealed);
@@ -127,7 +129,9 @@ export async function readSealedDiscovery(home,kind,cycle,request) {
   if (!receipt) return null;
   const sealed=validateCapture(kind,cycle,await readJson(files.capture));
   if (receipt.sha256!==sealed.sha256 || receipt.resultSha256!==sealed.result.resultSha256 ||
-      receipt.status!=='completed' || sealed.requestSha256!==hash(request)) fail('capture_mismatch');
+      receipt.status!=='completed' || receipt.kind!==kind || receipt.cycle!==cycle ||
+      receipt.revision!==request.revision || receipt.finishedAt!==sealed.finishedAt ||
+      receipt.sources!==(request.sources || request.watches)?.length || sealed.requestSha256!==hash(request)) fail('capture_mismatch');
   return sealed;
 }
 

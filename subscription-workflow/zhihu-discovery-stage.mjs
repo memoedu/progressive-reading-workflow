@@ -76,11 +76,11 @@ function validateColumn(column, url) {
   }
 }
 
-async function collectColumn(url, readChromeJson) {
+async function collectColumn(url, readChromeJson, onMaterial) {
   const endpoint = '/api/columns/' + zhihuColumnIdentity(url).id;
   const pages = [];
   let offset = 0;
-  const column = await discoverZhihuColumn(url, { strictCounts:false, includeAnswers:true,
+  const column = await discoverZhihuColumn(url, { strictCounts:false, includeAnswers:true,onMaterial,
     requestJson: async href => {
       const target = new URL(href);
       if (target.origin !== columnOrigin || target.hash || target.username || target.password) fail('invalid_endpoint');
@@ -102,13 +102,17 @@ async function collectColumn(url, readChromeJson) {
   return result;
 }
 
-export async function generateZhihuDiscovery(request, readChromeJson) {
-  validateRequest(request);
+async function confirmNativeSession(readChromeJson) {
   const account = await readChromeJson(accountEndpoint);
   if (!account || account.is_anonymous === true || account.error || !/^[A-Za-z0-9_-]{2,128}$/u.test(String(account.id || '')))
     fail('native_session_unavailable');
+}
+
+export async function generateZhihuDiscovery(request, readChromeJson, {onMaterial}={}) {
+  validateRequest(request);
+  await confirmNativeSession(readChromeJson);
   const columns = [];
-  for (const url of request.sources) columns.push(await collectColumn(url,readChromeJson));
+  for (const url of request.sources) columns.push(await collectColumn(url,readChromeJson,onMaterial && (item=>onMaterial(url,item))));
   return {schema,requestSha256:hash(request),resultSha256:hash(columns),columns};
 }
 
@@ -171,8 +175,7 @@ async function readChromeFactory() {
       await execute('/usr/bin/osascript',[path.join(import.meta.dirname,'zhihu-chrome-tab.applescript'),url,output],
         {timeout:26000,maxBuffer:8192});
       if ((await fs.stat(output)).size > maxBytes) fail('response_too_large');
-      return JSON.parse(await fs.readFile(output,'utf8'),(key,value,context)=>
-        typeof value==='number' && !Number.isSafeInteger(value) && /^-?\d+$/u.test(context?.source || '') ? context.source : value);
+      return await fs.readFile(output,'utf8');
     } finally {
       await fs.unlink(output).catch(error=>{if(error.code!=='ENOENT')throw error;});
       await fs.rmdir(scratch);
@@ -180,11 +183,14 @@ async function readChromeFactory() {
   };
 }
 
-export async function generateNativeZhihuDiscovery(request) {
+const nativeJson=read=>async url=>JSON.parse(await read(url),(key,value,context)=>
+  typeof value==='number' && !Number.isSafeInteger(value) && /^-?\d+$/u.test(context?.source || '') ? context.source : value);
+
+export async function generateNativeZhihuDiscovery(request, options) {
   if (process.platform !== 'darwin') fail('mac_required');
-  const readChromeJson = await readChromeFactory();
+  const readChromeJson = nativeJson(await readChromeFactory());
   return withLock(path.join(dataPath('ProgressiveReading','ZhihuDiscovery'),'chrome.lock'),
-    ()=>generateZhihuDiscovery(request,readChromeJson));
+    ()=>generateZhihuDiscovery(request,readChromeJson,options));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

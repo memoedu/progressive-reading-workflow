@@ -66,10 +66,10 @@ async function writeJsonAtomic(filePath, value) {
   await fs.rename(temporary, filePath);
 }
 
-async function fetchText(url, { headers = {}, timeoutMs = 60000, maxBytes = 12 * 1024 * 1024 } = {}) {
+async function fetchText(url, { headers = {}, timeoutMs = 60000, maxBytes = 12 * 1024 * 1024, redirect = "follow" } = {}) {
   const normalized = normalizeUrl(url);
   const response = await fetch(normalized, {
-    redirect: "follow",
+    redirect,
     headers: { "User-Agent": userAgent, Accept: "application/atom+xml,application/rss+xml,application/xml,text/xml,text/html;q=0.8,*/*;q=0.5", ...headers },
     signal: AbortSignal.timeout(timeoutMs)
   });
