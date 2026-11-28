@@ -31,7 +31,7 @@ function itemIdentity(item) {
 }
 
 export async function discoverZhihuColumn(value, { cookieHeaderForUrl, fetchImpl = fetch, onProgress = async () => {}, maxPages = 1000,
-  strictCounts = true, includeAnswers = false, onWarning = async () => {}, requestJson = requestZhihuJson } = {}) {
+  strictCounts = true, includeAnswers = false, onWarning = async () => {}, requestJson = requestZhihuJson, onMaterial } = {}) {
   const column = zhihuColumnIdentity(value);
   if (!column) throw new Error("zhihu_column_url_invalid");
   const options = { cookieHeaderForUrl, retryDelaysMs: [],
@@ -59,11 +59,14 @@ export async function discoverZhihuColumn(value, { cookieHeaderForUrl, fetchImpl
       const questionId = item.question?.id;
       if (item.type === 'answer' && (!/^\d+$/u.test(String(questionId)) || (typeof questionId !== 'string' && !Number.isSafeInteger(questionId)))) throw new Error('zhihu_column_answer_identity_invalid');
       const publishedAt = publicationDateFromSeconds(item.created ?? item.created_time) ?? previous?.published_at;
-      materials.set(identity, { key: `zhihu:${item.type === 'answer' ? 'answers' : 'articles'}:${id}`,
+      const entry = { key: `zhihu:${item.type === 'answer' ? 'answers' : 'articles'}:${id}`,
         url: item.type === 'article' ? `https://zhuanlan.zhihu.com/p/${id}` : `https://www.zhihu.com/question/${questionId}/answer/${id}`,
         title: String(item.type === 'article' ? item.title || '' : item.question.title || ''), author: item.author?.name || previous?.author,
         published_at: publishedAt || null, revision: String(item.updated ?? item.updated_time ?? ''),
-        html: item.content_need_truncated ? null : item.content || previous?.html || null });
+        html: item.content_need_truncated ? null : item.content || previous?.html || null };
+      materials.set(identity, entry);
+      onMaterial?.({...entry,html:item.content_need_truncated===false && item.is_paid!==true &&
+        item.is_private!==true && item.is_accessible!==false && typeof item.content==='string' ? item.content : null});
     }
   };
   let next = nextPage(`/api/columns/${column.id}/items?limit=20&offset=0`, column.id);

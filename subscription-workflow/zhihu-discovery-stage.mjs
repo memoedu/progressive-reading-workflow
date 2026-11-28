@@ -76,11 +76,11 @@ function validateColumn(column, url) {
   }
 }
 
-async function collectColumn(url, readChromeJson) {
+async function collectColumn(url, readChromeJson, onMaterial) {
   const endpoint = '/api/columns/' + zhihuColumnIdentity(url).id;
   const pages = [];
   let offset = 0;
-  const column = await discoverZhihuColumn(url, { strictCounts:false, includeAnswers:true,
+  const column = await discoverZhihuColumn(url, { strictCounts:false, includeAnswers:true,onMaterial,
     requestJson: async href => {
       const target = new URL(href);
       if (target.origin !== columnOrigin || target.hash || target.username || target.password) fail('invalid_endpoint');
@@ -102,11 +102,15 @@ async function collectColumn(url, readChromeJson) {
   return result;
 }
 
-export async function generateZhihuDiscovery(request, readChromeJson) {
-  validateRequest(request);
+async function confirmNativeSession(readChromeJson) {
   const account = await readChromeJson(accountEndpoint);
   if (!account || account.is_anonymous === true || account.error || !/^[A-Za-z0-9_-]{2,128}$/u.test(String(account.id || '')))
     fail('native_session_unavailable');
+}
+
+export async function generateZhihuDiscovery(request, readChromeJson) {
+  validateRequest(request);
+  await confirmNativeSession(readChromeJson);
   const columns = [];
   for (const url of request.sources) columns.push(await collectColumn(url,readChromeJson));
   return {schema,requestSha256:hash(request),resultSha256:hash(columns),columns};
@@ -171,8 +175,7 @@ async function readChromeFactory() {
       await execute('/usr/bin/osascript',[path.join(import.meta.dirname,'zhihu-chrome-tab.applescript'),url,output],
         {timeout:26000,maxBuffer:8192});
       if ((await fs.stat(output)).size > maxBytes) fail('response_too_large');
-      return JSON.parse(await fs.readFile(output,'utf8'),(key,value,context)=>
-        typeof value==='number' && !Number.isSafeInteger(value) && /^-?\d+$/u.test(context?.source || '') ? context.source : value);
+      return await fs.readFile(output,'utf8');
     } finally {
       await fs.unlink(output).catch(error=>{if(error.code!=='ENOENT')throw error;});
       await fs.rmdir(scratch);
@@ -180,11 +183,63 @@ async function readChromeFactory() {
   };
 }
 
+const nativeJson=read=>async url=>JSON.parse(await read(url),(key,value,context)=>
+  typeof value==='number' && !Number.isSafeInteger(value) && /^-?\d+$/u.test(context?.source || '') ? context.source : value);
+
 export async function generateNativeZhihuDiscovery(request) {
   if (process.platform !== 'darwin') fail('mac_required');
-  const readChromeJson = await readChromeFactory();
+  const readChromeJson = nativeJson(await readChromeFactory());
   return withLock(path.join(dataPath('ProgressiveReading','ZhihuDiscovery'),'chrome.lock'),
     ()=>generateZhihuDiscovery(request,readChromeJson));
+}
+
+function sameRevision(left,right) {
+  return left?.key===right.key && left.url===right.url && Boolean(right.revision) && left.revision===right.revision;
+}
+
+// Only bodies selected from a verified discovery seal reach this entry. The
+// browser session stays in Chrome and its temporary response is always removed.
+export async function readNativeZhihuReportBodies(groups) {
+  if(process.platform!=='darwin')fail('mac_required');
+  const readChromeJson=nativeJson(await readChromeFactory());
+  return withLock(path.join(dataPath('ProgressiveReading','ZhihuDiscovery'),'chrome.lock'),async()=>{
+    await confirmNativeSession(readChromeJson);
+    const results=new Map();
+    for(const {url,items} of groups){
+      const wanted=new Map(items.filter(validMaterial).map(item=>[item.key,item]));
+      const observed=new Map(), changed=new Set(), conflicting=new Set(), result=new Map();
+      results.set(url,result);
+      try{
+        if(!isSource(url))fail('invalid_request');
+        await collectColumn(url,readChromeJson,row=>{
+          const item=wanted.get(row.key);
+          if(!item)return;
+          const current=observed.get(row.key);
+          if(row.revision && !sameRevision(row,item))changed.add(row.key);
+          if(sameRevision(row,item) && row.html && current?.html && sameRevision(current,item) && row.html!==current.html){
+            conflicting.add(row.key);
+          }
+          if(!current || (sameRevision(row,item) && row.html))observed.set(row.key,row);
+        });
+      }catch{
+        for(const item of wanted.values())result.set(item.key,{reason:'zhihu_report_column_unavailable'});
+        continue;
+      }
+      for(const item of wanted.values()){
+        const row=observed.get(item.key);
+        if(conflicting.has(item.key)){
+          result.set(item.key,{reason:'zhihu_report_article_body_conflict'});
+        }else if(changed.has(item.key) || !sameRevision(row,item)){
+          result.set(item.key,{reason:row ? 'zhihu_report_article_revision_changed' : 'zhihu_report_article_missing_in_column'});
+        }else if(row.html){
+          result.set(item.key,{html:row.html,method:'zhihu_column_embedded_body',url:row.url,revision:row.revision});
+        }else{
+          result.set(item.key,{reason:'zhihu_report_column_body_incomplete'});
+        }
+      }
+    }
+    return results;
+  },{waitMs:5000});
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

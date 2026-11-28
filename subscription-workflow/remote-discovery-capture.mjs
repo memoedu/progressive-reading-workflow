@@ -127,7 +127,9 @@ export async function readSealedDiscovery(home,kind,cycle,request) {
   if (!receipt) return null;
   const sealed=validateCapture(kind,cycle,await readJson(files.capture));
   if (receipt.sha256!==sealed.sha256 || receipt.resultSha256!==sealed.result.resultSha256 ||
-      receipt.status!=='completed' || sealed.requestSha256!==hash(request)) fail('capture_mismatch');
+      receipt.status!=='completed' || receipt.kind!==kind || receipt.cycle!==cycle ||
+      receipt.revision!==request.revision || receipt.finishedAt!==sealed.finishedAt ||
+      receipt.sources!==(request.sources || request.watches)?.length || sealed.requestSha256!==hash(request)) fail('capture_mismatch');
   return sealed;
 }
 

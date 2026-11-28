@@ -4,6 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as pause} from 'node:timers/promises';
 import {SCHEDULE,digest,loadConfig,paths,readJson,withLock,writeJson} from './config.mjs';
+import {zhihuColumnIdentity} from '../scripts/import-rule-catalog.mjs';
 
 export const reportPlanSchema='progressive-reading.scheduled-report-draft/v1';
 const reportKinds=['daily','weekly'], sourceKinds=['rss','zhihu','bilibili'];
@@ -45,7 +46,7 @@ function exact(object,keys) {
 }
 
 function validatePlan(plan,kind,cycle) {
-  if(!exact(plan,['schema','kind','cycle','revision','frozenAt','ledgerSha256','coverage','missingPreviews','input','rssCheckpoint']) ||
+  if(!exact(plan,['schema','kind','cycle','revision','frozenAt','ledgerSha256','coverage','missingPreviews','input','rssCheckpoint','zhihuCheckpoint']) ||
      plan.schema!==reportPlanSchema || plan.kind!==kind || plan.cycle!==cycle ||
      !Number.isSafeInteger(plan.revision) || plan.revision<1 || !Number.isFinite(Date.parse(plan.frozenAt)) ||
      !shaPattern.test(plan.ledgerSha256||'') || !Number.isSafeInteger(plan.missingPreviews) || plan.missingPreviews<0 ||
@@ -68,6 +69,13 @@ function validatePlan(plan,kind,cycle) {
     !Array.isArray(checkpoint.sources) || !checkpoint.sources.every(s=>
       exact(s,['id','url','kind','enabled','mode','history_mode','earliest_date','direct_reading','generate_guide','translation_mode']) &&
         s.kind==='rss' && s.enabled===true && /^https?:\/\//u.test(s.url || ''))))fail('rss_checkpoint_invalid');
+  const zhihu=plan.zhihuCheckpoint;
+  if(zhihu!==undefined && (!checkpoint || !exact(zhihu,['sources']) || !Array.isArray(zhihu.sources) ||
+    zhihu.sources.length>30 || new Set(zhihu.sources.map(source=>source.url)).size!==zhihu.sources.length ||
+    !zhihu.sources.every(s=>exact(s,['id','url','kind','enabled','mode','history_mode','earliest_date','direct_reading',
+      'generate_guide','translation_mode','baseline_ready','seen']) && s.kind==='zhihu_column' && s.mode==='reports' &&
+      s.enabled===true && typeof s.baseline_ready==='boolean' && Array.isArray(s.seen) && s.seen.every(key=>shaPattern.test(key)) &&
+      typeof s.url==='string' && Boolean(zhihuColumnIdentity(s.url)))))fail('zhihu_checkpoint_invalid');
   if(Buffer.byteLength(JSON.stringify(plan))>limit)fail('plan_too_large');
 }
 
@@ -116,19 +124,30 @@ export async function sealReportDraft(home,kind,cycle,{now,render}={}) {
     const earlier=matchesRevision ? [...plan.input] : [];
     const issue=!plan?'missing_plan':!matchesRevision?'stale_revision':plan.coverage.some(row=>!row.jobId)?'source_checkpoint_missing':
       plan.missingPreviews?'previews_missing':null;
-    let rssReplay=null;
+    const replays={};
     if(matchesRevision && issue && plan.rssCheckpoint && plan.coverage.some(row=>row.kind==='rss' && !row.jobId)){
       const {replayReportRss}=await import('./report-rss-replay.mjs');
-      const replay=await replayReportRss(home,plan).catch(()=>({status:'waiting_input',reason:'rss_replay_unavailable',items:[],pending:[]}));
-      const {items,...details}=replay;
-      rssReplay={...details,items:items.map(({input,bodyFile,previewFile,...evidence})=>evidence)};
-      earlier.push(...items.filter(item=>!earlier.some(row=>row.id===item.id)).map(item=>item.input));
+      replays.rssReplay=await replayReportRss(home,plan).catch(()=>({status:'waiting_input',reason:'rss_replay_unavailable',items:[],pending:[]}));
+    }
+    if(matchesRevision && issue && plan.zhihuCheckpoint?.sources.length && plan.coverage.some(row=>row.kind==='zhihu' && !row.jobId)){
+      const {replayReportZhihu}=await import('./report-zhihu-replay.mjs');
+      replays.zhihuReplay=await replayReportZhihu(home,plan).catch(()=>({status:'waiting_input',reason:'zhihu_replay_unavailable',items:[],pending:[]}));
+    }
+    const replayProofs={};
+    const seen=new Set(earlier.map(row=>row.id)), seenKeys=new Set();
+    for(const [name,{items,...details}] of Object.entries(replays)){
+      replayProofs[name]={...details,items:items.map(({input,bodyFile,requestFile,previewFile,...evidence})=>evidence)};
+      for(const item of items)if(!seen.has(item.id) && !seenKeys.has(item.key)){
+        seen.add(item.id);
+        seenKeys.add(item.key);
+        earlier.push(item.input);
+      }
     }
     const input=earlier;
-    const status=!issue?'draft_ready':rssReplay?.items.length?'provisional_draft':'waiting_input';
+    const status=!issue?'draft_ready':Object.values(replays).some(replay=>replay.items.length)?'provisional_draft':'waiting_input';
     if(prior && prior.planSha256===planSha256 && prior.reason===issue && hash(prior.macSources)===hash(evidence.macSources) &&
        prior.revision===Math.max(plan?.revision||0,evidence.revision) && prior.status===status &&
-       prior.inputSha256===hash(input) && hash(prior.rssReplay ?? null)===hash(rssReplay)) {
+       prior.inputSha256===hash(input) && ['rssReplay','zhihuReplay'].every(name=>hash(prior[name]??null)===hash(replayProofs[name]??null))) {
       const draft=await readJson(f.draft);
       if(hash(draft)!==prior.resultSha256)fail('draft_changed');
       return prior;
@@ -139,7 +158,7 @@ export async function sealReportDraft(home,kind,cycle,{now,render}={}) {
       revision:Math.max(plan?.revision||0,evidence.revision),jobId:jobId(kind,cycle),
       planSha256,inputSha256:hash(input),resultSha256:hash(draft),items:input.length,macSources:evidence.macSources,
       missingSources:plan?.coverage.filter(row=>!row.jobId).map(row=>row.kind) ?? null,missingPreviews:plan?.missingPreviews ?? null,
-      ...(rssReplay ? {rssReplay} : {}),
+      ...replayProofs,
       startedAt:started.toISOString(),finishedAt:(now ?? new Date()).toISOString(),publishable:false};
     await writeJson(f.draft,draft);
     await writeJson(f.receipt,receipt);
@@ -192,10 +211,16 @@ export async function collectReportPlans(root,now=new Date()) {
   const {plans,knownUrls}=await prepareScheduledReportDrafts(root,periods);
   const {materialKey}=await import('./catalog.mjs');
   const knownKeys=[...new Set(knownUrls.map(url=>digest(materialKey(url))))].sort();
-  const sources=cfg.subscriptions.filter(s=>s.enabled && s.kind==='rss').map(
-    ({id,url,kind,enabled,mode,history_mode,earliest_date,direct_reading,generate_guide,translation_mode})=>
-      ({id,url,kind,enabled,mode,history_mode,earliest_date,direct_reading,generate_guide,translation_mode}));
-  const rssCheckpoint={knownKeys,sources};
+  const sourceProjection=({id,url,kind,enabled,mode,history_mode,earliest_date,direct_reading,generate_guide,translation_mode})=>
+    ({id,url,kind,enabled,mode,history_mode,earliest_date,direct_reading,generate_guide,translation_mode});
+  const rssCheckpoint={knownKeys,sources:cfg.subscriptions.filter(s=>s.enabled && s.kind==='rss').map(sourceProjection)};
+  const cursorFile=path.join(p.home,'zhihu-state.json');
+  const cursor=await readJson(cursorFile,{});
+  const zhihuCheckpoint={sources:cfg.subscriptions.filter(s=>s.enabled && s.kind==='zhihu_column' && s.mode==='reports').map(source=>{
+    const prior=cursor.sources?.[source.id];
+    return {...sourceProjection(source),baseline_ready:Boolean(prior?.baseline_at),
+      seen:[...new Set((source.history_mode==='latest' ? prior?.seen || [] : []).map(url=>digest(materialKey(url))))].sort()};
+  })};
   const frozenAt=new Date().toISOString();
   if((await readJson(p.config))?.revision!==cfg.revision)fail('config_changed');
   const scopes=await readJson(path.join(p.home,'applied-source-scopes.json'),{});
@@ -213,7 +238,7 @@ export async function collectReportPlans(root,now=new Date()) {
         !j.steps.scan.result?.reports?.results?.some(result=>!result.ok) && !j.steps.scan.result?.auto?.feeds?.some(feed=>feed.error);
       return {kind:source,jobId:ready?id:null,sha256:ready?digest(raw):null};
     }));
-    return {schema:reportPlanSchema,kind,cycle,revision:cfg.revision,frozenAt,ledgerSha256,coverage,missingPreviews,input,rssCheckpoint};
+    return {schema:reportPlanSchema,kind,cycle,revision:cfg.revision,frozenAt,ledgerSha256,coverage,missingPreviews,input,rssCheckpoint,zhihuCheckpoint};
   }));
 }
 

@@ -16,7 +16,8 @@ const item=(slug,body)=>`<item><title>${slug}</title><guid>${slug}</guid><link>h
 const encoded=`<content:encoded><![CDATA[<p>${content}</p>]]></content:encoded>`;
 const xml=`<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>
 <title>Source</title><link>https://example.com/</link>
-${item('known',encoded)}${item('new',encoded)}${item('teaser','<description>只有摘要</description>')}</channel></rss>`;
+${item('known',encoded)}${item('new',encoded)}${['teaser','wrong','forbidden','truncated']
+  .map(slug=>item(slug,`<description>${slug} 的摘要</description>`)).join('')}</channel></rss>`;
 const plan={cycle,revision:4,coverage:[{kind:'rss',jobId:null,sha256:null}],
   rssCheckpoint:{sources:[feed,lost],knownKeys:[digest(materialKey('https://example.com/known'))]}};
 
@@ -24,13 +25,22 @@ test('replay uses same-cycle verified XML and body identity, skips known items a
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'report-rss-replay-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
   const home=path.join(root,'report'), capture=path.join(root,'SubscriptionFeedCapture');
-  const run=()=>replayReportRss(home,plan,{preparePreview:preview});
-  let calls=0;
+  const run=()=>replayReportRss(home,plan,{preparePreview:preview,fetchPage});
+  let calls=0, fetches=0;
+  async function fetchPage(url,options){
+    fetches++;
+    assert.equal(options.redirect,'manual');
+    if(url.endsWith('/forbidden'))throw Error('http_403');
+    const canonical=url.endsWith('/wrong')?'https://example.com/unrelated':url;
+    const text=url.endsWith('/truncated')?'摘录…… <a class="more-link">阅读全文</a>':content;
+    return {text:`<html><head><link rel="canonical" href="${canonical}"></head><body><article><p>${text}</p></article></body></html>`,
+      finalUrl:url,response:new Response(null)};
+  }
   async function preview(_work,entry){
     calls++;
     const evidence=await fs.readFile(entry.preprocess_request_path);
     assert.equal(digest(evidence),entry.preprocess_request_sha256);
-    assert.match(entry.item_url,/\/new$/u);
+    assert.match(entry.item_url,/\/(?:new|teaser)$/u);
     const file=entry.preprocess_request_path+'.preview';
     await fs.writeFile(file,'verified preview');
     entry.review_preview={result_path:file};
@@ -44,11 +54,14 @@ test('replay uses same-cycle verified XML and body identity, skips known items a
   }});
   const first=await run();
   assert.equal(first.status,'provisional_draft');
-  assert.equal(first.items.length,1);
+  assert.equal(first.items.length,2);
   assert.equal(first.items[0].key,digest(materialKey('https://example.com/new')));
-  assert.deepEqual(first.pending.map(entry=>entry.reason),['sealed_feed_has_no_verified_fulltext','sealed_feed_failed']);
+  assert.equal(first.items[1].bodyMethod,'item-page-readability');
+  assert.deepEqual(first.pending.map(entry=>entry.reason),['report_article_identity_unverified','report_article_access_restricted',
+    'report_article_body_incomplete','sealed_feed_failed']);
   assert.deepEqual(await run(),first);
-  assert.equal(calls,1);
+  assert.equal(calls,2);
+  assert.equal(fetches,4);
   assert.equal((await replayReportRss(home,{...plan,revision:5},{preparePreview:preview})).reason,'rss_capture_incomplete_or_wrong_revision');
   await fs.appendFile(first.items[0].bodyFile,'edit');
   assert.equal((await run()).reason,'rss_replayed_artifact_changed');
