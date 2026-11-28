@@ -5,7 +5,7 @@ import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { pilotArticleUrl, sharedArticleUrl, sharedDigest, sharedSchema, sharedVariantPath, variantKind,
-  sharedIndexPath, sharedMaterialRecord, sha256Pattern } from './shared-library.mjs';
+  sharedIndexPath, sharedMarkdownMaxBytes, sharedMaterialRecord, sha256Pattern } from './shared-library.mjs';
 import { createPublicRssSources, localOnly } from './shared-library-sources.mjs';
 import { createSharedGitHub } from './shared-library-github.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
@@ -15,6 +15,7 @@ import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-b
 const scryptAsync = promisify(scrypt);
 const prefix = '/progressive-reading-sync/';
 const maximumBytes = 1024 * 1024;
+const markdownJsonMaxBytes = 4 * 1024 * 1024;
 const sessionAge = 30 * 86400_000;
 const identifier = /^[a-z0-9_-]{1,48}$/iu;
 
@@ -26,11 +27,14 @@ function json(res, status, payload) {
 
 async function readBody(req, limit = 8192) {
   if (!/^application\/json(?:;|$)/iu.test(req.headers['content-type'] || '')) throw new Error('shared_json_required');
+  if (Number(req.headers['content-length']) > limit) throw new Error('shared_request_too_large');
   req.setEncoding('utf8');
   let body = '';
+  let bytes = 0;
   for await (const chunk of req) {
+    bytes += Buffer.byteLength(chunk);
+    if (bytes > limit) throw new Error('shared_request_too_large');
     body += chunk;
-    if (Buffer.byteLength(body) > limit) throw new Error('shared_request_too_large');
   }
   const input = JSON.parse(body);
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('shared_invalid_request');
@@ -136,7 +140,7 @@ export function createSharedLibraryServer({
     const markdown = article.markdown;
     const title = String(article.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);
     const bytes = Buffer.byteLength(markdown || '');
-    if (bytes < 200 || bytes > 700000 || markdown.length > 300000 ||
+    if (bytes < 200 || bytes > sharedMarkdownMaxBytes ||
         publicArchiveContainsPrivateData(title, markdown, config.private_email_sha256) ||
         !await scan(markdown + '\n' + title)) throw new Error('shared_material_not_publication_ready');
     const sourceHash = sharedDigest(markdown);
@@ -151,7 +155,7 @@ export function createSharedLibraryServer({
     const url = sharedArticleUrl(input.url);
     const { kind, markdown, original_sha256: originalSha256 } = input;
     if (!url || !variantKind(kind) || !sha256Pattern.test(originalSha256 || '') || typeof markdown !== 'string' ||
-        markdown.trim().length < 80 || markdown.startsWith('---') || Buffer.byteLength(markdown) > 600000) {
+        markdown.trim().length < 80 || markdown.startsWith('---') || Buffer.byteLength(markdown) > sharedMarkdownMaxBytes) {
       throw new Error('shared_invalid_version');
     }
     const current = await github.lookup(url);
@@ -171,7 +175,7 @@ export function createSharedLibraryServer({
     const inputs = reading === undefined ? [original] : [original, reading];
     if (!url || (reading !== undefined && !sha256Pattern.test(processingSha256 || '')) ||
       (optionsSha256 !== undefined && (reading === undefined || !sha256Pattern.test(optionsSha256))) || inputs.some(markdown =>
-      typeof markdown !== 'string' || !markdown.trim() || markdown.startsWith('---') || Buffer.byteLength(markdown) > 700000)) {
+      typeof markdown !== 'string' || !markdown.trim() || markdown.startsWith('---') || Buffer.byteLength(markdown) > sharedMarkdownMaxBytes)) {
       throw new Error('shared_invalid_reading');
     }
     const heading = /^#\s+([^\n]+)/mu.exec(original)?.[1];
@@ -210,13 +214,13 @@ export function createSharedLibraryServer({
         if (!sessions.verify(req.headers.authorization)) return json(res, 401, { error: 'shared_login_required' });
         if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
         if (!allowed(req, 'variant', 12)) return json(res, 429, { error: 'shared_submission_rate_limited' });
-        return json(res, 200, await saveVersion(await readBody(req, 1024 * 1024)));
+        return json(res, 200, await saveVersion(await readBody(req, markdownJsonMaxBytes)));
       }
       if (action === 'publication') {
         if (!sessions.verify(req.headers.authorization)) return json(res, 401, { error: 'shared_login_required' });
         if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
         if (!allowed(req, 'publication', 12)) return json(res, 429, { error: 'shared_submission_rate_limited' });
-        return json(res, 200, await saveReading(await readBody(req, 2 * 1024 * 1024)));
+        return json(res, 200, await saveReading(await readBody(req, 2 * markdownJsonMaxBytes)));
       }
       const input = await readBody(req);
       if (route.pathname === prefix + 'session') {

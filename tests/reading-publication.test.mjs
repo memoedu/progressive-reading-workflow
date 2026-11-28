@@ -81,6 +81,24 @@ test('a temporary failure persists one retry and exposes the verified terminal r
   assert.equal(sent,1);
 });
 
+test('a legacy size rejection can replay the identical Markdown under the expanded limit', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'reading-publication-size-replay-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const input = { url, original: original.repeat(13_000) };
+  const { shared_reading: first } = await synchronizeReadingPublication(temp, input);
+  const eventId = first.sync_id;
+  await retryReadingPublications(temp, { eventId, settings,
+    syncReading: async () => ({ status: 'local_only', reason: 'shared_invalid_reading' }) });
+  const { shared_reading: replay } = await synchronizeReadingPublication(temp, input);
+  assert.deepEqual(replay, { status: 'queued', sync_id: eventId });
+  const receipt = await retryReadingPublications(temp, { eventId, settings, syncReading: async (_root, request) => {
+    assert.equal(sharedDigest(request.original), sharedDigest(input.original));
+    return { status: 'available' };
+  } });
+  assert.deepEqual(receipt, { status: 'available', sync_id: eventId });
+  assert.deepEqual((await synchronizeReadingPublication(temp, input)).shared_reading, receipt);
+});
+
 test('a locally reused article synchronizes only the provable missing artifacts', async t => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'reading-publication-replay-'));
   t.after(() => fs.rm(temp, { recursive:true, force:true }));

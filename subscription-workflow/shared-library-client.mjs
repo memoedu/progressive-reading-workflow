@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
-import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedReadingSource, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
+import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMarkdownMaxBytes, sharedMaterialRecord, sharedReadingSource, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 import { standardWorkflowOptions } from '../standard-preprocessing/index.mjs';
 import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-preprocessing/lib/core.mjs';
@@ -69,7 +69,7 @@ export async function updateSharedLibrarySettings(root, input, fetchImpl = fetch
   }, { waitMs: 2000 });
 }
 
-async function articleBytes(response, maxBytes = 700000) {
+async function articleBytes(response, maxBytes = sharedMarkdownMaxBytes) {
   if (!response.ok) throw new Error('shared_download_failed');
   const chunks = [];
   let length = 0;
@@ -126,7 +126,6 @@ export async function resolveSharedSubscription(root, url, previous, { fetchImpl
   const bytes = await articleBytes(response);
   if (sharedDigest(bytes) !== original.original.sha256) throw new Error('shared_download_hash_mismatch');
   const markdown = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-  if (markdown.length > 300000) throw new Error('shared_download_too_large');
   return { status: 'available', commit: result.commit, sha256: original.original.sha256, path: original.original.path,
     article: { markdown, title: original.title || '', shared_original_sha256: original.original.sha256 } };
 }

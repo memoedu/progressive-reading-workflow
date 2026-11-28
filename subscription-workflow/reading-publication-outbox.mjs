@@ -1,15 +1,24 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readJson, withLock, writeJson } from './config.mjs';
-import { sharedLibrarySettings, sharedReadingOptionsKey, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
-import { sha256Pattern, sharedDigest } from './shared-library.mjs';
+import { publicReadingBody, sharedLibrarySettings, sharedReadingOptionsKey, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
+import { sha256Pattern, sharedDigest, sharedMarkdownMaxBytes } from './shared-library.mjs';
 
 const directory = root => path.join(root, '.local-ir', 'shared-reading-publications');
 const recordPath = (root, id) => path.join(directory(root), id + '.json');
 const retryDelay = attempts => Math.min(60, 2 ** Math.min(attempts - 1, 6)) * 60_000;
 const formerEligibilityReasons = new Set(['source_not_publicly_verified', 'public_source_body_mismatch',
   'video_source_not_publicly_verified', 'personal_or_existing_document']);
-const currentReceipt = record => record && !formerEligibilityReasons.has(record.receipt?.reason) ? record.receipt : null;
+function currentReceipt(record, request) {
+  const receipt = record?.receipt;
+  if (!receipt || formerEligibilityReasons.has(receipt.reason)) return null;
+  if (receipt.status === 'local_only' && receipt.reason === 'shared_invalid_reading') {
+    const bodies = request.markdown === undefined ? [request.original] : [request.original, publicReadingBody(request.markdown)];
+    if (bodies.every(body => body.trim() && !body.startsWith('---') && Buffer.byteLength(body) <= sharedMarkdownMaxBytes) &&
+        bodies.some(body => Buffer.byteLength(body) > 700_000)) return null;
+  }
+  return receipt;
+}
 
 function publicationId(request) {
   return sharedDigest(JSON.stringify([
@@ -23,10 +32,10 @@ export async function queueReadingPublication(root, request, receipt, now = Date
   const id = publicationId(request);
   const file = recordPath(root, id);
   const existing = await readJson(file);
-  if (currentReceipt(existing)) return existing.receipt;
+  if (currentReceipt(existing, request)) return existing.receipt;
   return withLock(file + '.lock', async () => {
     const previous = await readJson(file);
-    if (currentReceipt(previous)) return previous.receipt;
+    if (currentReceipt(previous, request)) return previous.receipt;
     const saved = { ...receipt, sync_id: id };
     const attempts = receipt.status === 'queued' ? 0 : 1;
     await writeJson(file, { attempts, retry_at: attempts ? now + retryDelay(attempts) : now, request, receipt: saved });

@@ -5,6 +5,7 @@ import defaultSources from '../config/shared-library-server-sources.example.json
 export const sharedRepository = 'memoedu/progressive-reading-library';
 export const pilotOrigin = 'https://www.benkuhn.net';
 export const sharedSchema = 'progressive-reading.shared-article/v1';
+export const sharedMarkdownMaxBytes = 2_000_000;
 export const sharedDigest = value => createHash('sha256').update(value).digest('hex');
 export const sha256Pattern = /^[0-9a-f]{64}$/u;
 export const commitPattern = /^[0-9a-f]{40}$/u;

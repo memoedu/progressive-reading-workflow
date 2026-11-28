@@ -40,6 +40,8 @@ node subscription-workflow/cli.mjs sync-shared-material --sha256 '<原件哈希>
 
 独立同步进程在 127.0.0.1:43182 运行，经 HTTPS 路由访问。部署文件见 [systemd 单元](../subscription-workflow/deploy/shared-library.service) 和 [nginx 片段](../subscription-workflow/deploy/shared-library.nginx.conf)。源文件和依赖从已验证的 Git 提交构建。生产配置由 systemd LoadCredential 读取，路径为 /etc/progressive-reading-sync/config.json。
 
+共享原稿及加工 Markdown 分别最多 2 MB（2,000,000 个 UTF-8 字节）。上传原稿和加工稿的同一请求使用 8 MiB 的 JSON 上限，单独上传译文或导读使用 4 MiB。下载时按单篇字节数和索引哈希核验。
+
 服务器配置字段包括 `port`、`trust_proxy`、`gitleaks`、`accounts`、`session_secret`、`private_email_sha256` 和 `github`。`github` 包含 `appId`、`installationId`、`keyPath`。将 GitHub App 安装到公开资料库并授予 Contents 和 Pull requests 写权限。私钥通过 systemd 独立凭据提供。账号记录的 salt 和 hash 由 `createSharedAccount` 生成。移除或替换账号后，重启同步进程使对应会话失效。`trust_proxy` 只用于由 nginx 覆盖 X-Real-IP 的回环部署。
 
 将[来源配置示例](../config/shared-library-server-sources.example.json)的字段合并到服务器配置。`public_rss` 声明公开 feed、可接受的文章域名和分类目录。`public_materials` 的每条记录包含 `url`、`extension`、`sha256` 和 `bytes`，并可用 `article_url` 关联文章索引及加工版本。仅登记已验证的匿名原件下载地址，单件不超过 25 MiB。
