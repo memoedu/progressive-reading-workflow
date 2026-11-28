@@ -13,6 +13,7 @@ import { prepareWatchSource, processWatchItem, WATCH_ARTIFACTS } from '../video-
 import { WATCH_WORKFLOW, WATCH_MODEL, WATCH_FRAME_POLICY } from '../video-workflow/watch-illustrated.mjs';
 import { LiveCookieSnapshot } from '../scripts/live-cookie-snapshot.mjs';
 import { discoverZhihuColumn } from '../scripts/zhihu-column-import.mjs';
+import { boundZhihuDiscovery } from './zhihu-discovery-stage.mjs';
 import { requestZhihuJson } from '../scripts/zhihu-social-archive.mjs';
 import { defaultCookieDataRoot } from '../scripts/live-cookie-snapshot.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
@@ -301,17 +302,23 @@ export async function discoverAuthor(source, options = {}, request = requestZhih
   return [...new Map(items.map(i => [i.url,i])).values()];
 }
 
-export async function scanZhihu(root, cycle, { access = zhihuAccess, discoverColumn = discoverZhihuColumn, discoverMember = discoverAuthor, fetchPage = fetchUrlWithoutBrowser, retryOnly = false } = {}) {
-  const config = await loadConfig(root), file = path.join(paths(root).home, 'zhihu-state.json');
+export async function scanZhihu(root, cycle, { access = zhihuAccess, discoverColumn = discoverZhihuColumn, discoverMember = discoverAuthor,
+  fetchPage = fetchUrlWithoutBrowser, discoverRemote = boundZhihuDiscovery, retryOnly = false } = {}) {
+  const config = await loadConfig(root), {home} = paths(root), file = path.join(home, 'zhihu-state.json');
   const state = await readJson(file, { sources: {}, entries: {} }), options = access(root), errors = [], warnings = [];
-  for (const source of config.subscriptions.filter(s => s.enabled && s.kind.startsWith('zhihu_'))) {
+  const configuredSources = config.subscriptions.filter(s => s.enabled && s.kind.startsWith('zhihu_'));
+  const remote = retryOnly ? null : await discoverRemote(home,cycle,config.revision,configuredSources.filter(source=>source.kind==='zhihu_column'));
+  const fallbackBodies = new Map();
+  for (const source of configuredSources) {
     const previous = state.sources[source.id];
     if (retryOnly && !previous?.error) continue;
     try {
       const sourceWarnings = [];
       const discoveryOptions = { ...options, strictCounts:false, includeAnswers:true,
         onWarning: warning => { const entry = { ...warning, subscription_id: source.id, url: source.url, title: source.name }; sourceWarnings.push(entry); warnings.push(entry); } };
-      const column = source.kind === 'zhihu_column' ? await discoverColumn(source.url, discoveryOptions) : null;
+      const captured = remote?.columns?.get(source.url);
+      if (captured) for (const warning of captured.warnings) await discoveryOptions.onWarning(warning);
+      const column = source.kind === 'zhihu_column' ? captured || await discoverColumn(source.url, discoveryOptions) : null;
       const listed = column ? column.materials || column.articles : await discoverMember(source, discoveryOptions);
       const seen = new Set(previous?.seen || []);
       const backfill = ['since','all'].includes(source.history_mode);
@@ -346,7 +353,20 @@ export async function scanZhihu(root, cycle, { access = zhihuAccess, discoverCol
         if (shared?.status === 'pending_review') throw new Error('共享资料库投稿待合并');
         let markdown = article?.markdown;
         if (!markdown) {
-          const page = item.html ? { body: item.html, isHtml: true, title: item.title, finalUrl: item.url } : await fetchPage(item.url, options);
+          const embedded = html => ({ body:html,isHtml:true,title:item.title,finalUrl:item.url });
+          const page = item.html ? embedded(item.html) : await fetchPage(item.url,options).catch(async error=>{
+            // The Mac returns discovery metadata. Keep Windows' original
+            // column-embedded body available when the individual page fails.
+            for (const source of reports.filter(source=>remote?.columns?.has(source.url))) {
+              if (!fallbackBodies.has(source.url)) fallbackBodies.set(source.url,discoverColumn(source.url,
+                {...options,strictCounts:false,includeAnswers:true}).catch(()=>null));
+              const local=await fallbackBodies.get(source.url);
+              const matching=local?.materials?.find(entry=>entry.key===item.key && entry.url===item.url &&
+                (!item.revision || item.revision===entry.revision) && entry.html);
+              if (matching) return embedded(matching.html);
+            }
+            throw error;
+          });
           markdown = page.isHtml ? htmlArticleToMarkdown({ html: page.body, sourceUrl: page.finalUrl, title: item.title }).markdown : page.body;
         }
         for (const source of reports) await saveSourceMaterial(root, source, item, markdown, shared ? { shared_library: receipt } : {});
@@ -362,5 +382,6 @@ export async function scanZhihu(root, cycle, { access = zhihuAccess, discoverCol
     await writeJson(file, state);
   }
   await writeJson(file, state);
-  return { checked_at: new Date().toISOString(), subscriptions: Object.keys(state.sources).length, errors, warnings, retry: await retryAuto(root, 'zhihu', cycle) };
+  return { checked_at: new Date().toISOString(), subscriptions: Object.keys(state.sources).length, errors, warnings,
+    ...(remote ? {discovery:remote.receipt} : {}), retry: await retryAuto(root, 'zhihu', cycle) };
 }
