@@ -132,21 +132,27 @@ const largeAnswerId = "2074442036441067634";
 const largeAnswer = { content_type: "answer", content_id: largeAnswerId,
   source_url: `https://www.zhihu.com/question/123/answer/${largeAnswerId}` };
 const voteOptions = { removedItems: [largeAnswer], cookieHeaderForUrl, attempts: 1, readAccountState: true };
-const apiReadback = await verifyZhihuLikesRemoved({
+const answerPage = voting => new Response(`<!doctype html><html><head><title>Fixture answer</title></head>
+  <body><script id="js-initialData">{"initialState":{"entities":{"answers":{"${largeAnswerId}":{"id":${largeAnswerId},"type":"answer","relationship":{"voting":${voting}}}}}}}</script>
+  <article><h1>A fixture answer</h1><p>${"This is the text in the fixture answer. ".repeat(20)}</p></article></body></html>`,
+  {headers: {"content-type": "text/html"}});
+const importReadback = await verifyZhihuLikesRemoved({
   ...voteOptions,
-  fetchImpl: async (url) => {
-    assert.equal(new URL(url).pathname, `/api/v4/answers/${largeAnswerId}`);
-    return new Response(`{"id":${largeAnswerId},"type":"answer","relationship":{"voting":0}}`);
+  fetchImpl: async (url, request) => {
+    assert.equal(url, largeAnswer.source_url);
+    assert.equal(request.headers["User-Agent"], "ProgressiveReading-LocalFetcher/1.0");
+    assert.ok(request.headers.Cookie);
+    return answerPage(0);
   }
 });
-assert.equal(apiReadback.answer_states[0].voting, 0);
-assert.equal(apiReadback.status, "verified");
+assert.equal(importReadback.answer_states[0].voting, 0);
+assert.equal(importReadback.status, "verified");
 await assert.rejects(verifyZhihuLikesRemoved({
-  ...voteOptions,
-  fetchImpl: async (url) => new URL(url).pathname.startsWith("/api/")
-    ? new Response(`{"id":${largeAnswerId},"type":"answer","relationship":{"voting":null}}`)
-    : new Response("", { status: 403 })
-}), /zhihu_content_state_http_403/);
+  ...voteOptions, fetchImpl: async () => answerPage(null)
+}), /zhihu_answer_voting_state_invalid/);
+await assert.rejects(verifyZhihuLikesRemoved({
+  ...voteOptions, fetchImpl: async () => new Response("", {status: 403})
+}), /http_403_authentication_or_access_required/);
 await assert.rejects(unlikeZhihuItems([largeAnswer], {
   allowAccountMutation: true, cookieHeaderForUrl, fetchImpl: async () => Response.json({ voting: null, success: true })
 }), /zhihu_unlike_response_unverified/);

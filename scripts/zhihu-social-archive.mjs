@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import https from "node:https";
+import { fetchUrlWithoutBrowser } from "./url-background-fetch.mjs";
 
 export const ZHIHU_SOCIAL_ARCHIVE_SCHEMA = "local-ir.zhihu-social-archive/v1";
 const ACTIVITY_PAGE_SIZE = 20;
@@ -286,31 +287,34 @@ export async function verifyZhihuArchiveAccount(profileToken, options) {
   return signedInProfile;
 }
 
-async function getZhihuAccountVoting(item, options) {
-  if (!["answer", "article"].includes(item.content_type) || !/^\d+$/u.test(String(item.content_id))) {
-    throw new Error("zhihu_cleanup_item_invalid");
-  }
-  const isAnswer = item.content_type === "answer";
-  const url = new URL(`https://www.zhihu.com/api/v4/${isAnswer ? "answers" : "articles"}/${item.content_id}`);
-  url.searchParams.set("include", isAnswer ? "relationship" : "voting");
-  const body = await requestZhihuJson(url.href, { ...options, retryDelaysMs: [], preserveLongIds: true });
-  if (String(body?.id) !== String(item.content_id) || body?.type !== item.content_type) {
-    throw new Error("zhihu_vote_entity_mismatch");
-  }
-  const voting = isAnswer ? body.relationship?.voting : body.voting;
-  if (![-1, 0, 1].includes(voting)) throw new Error("zhihu_vote_field_missing");
-  return voting;
-}
-
 async function readExactVoting(item, pageUrl, options, readAccountState) {
+  let html;
   if (readAccountState) {
-    try {
-      return await getZhihuAccountVoting(item, options);
-    } catch (error) {
-      if (!["zhihu_vote_field_missing", "zhihu_http_403", "zhihu_http_404"].includes(error.message)) throw error;
+    const id = String(item.content_id);
+    const target = new URL(pageUrl);
+    const sourceId = target.origin === "https://www.zhihu.com" && item.content_type === "answer"
+      ? /^\/question\/\d+\/answer\/(\d+)$/u.exec(target.pathname)?.[1]
+      : target.origin === "https://zhuanlan.zhihu.com" && item.content_type === "article"
+        ? /^\/p\/(\d+)$/u.exec(target.pathname)?.[1] : null;
+    if (sourceId !== id || target.username || target.password || target.search || target.hash) {
+      throw new Error("zhihu_cleanup_item_invalid");
     }
+    const { cookieHeaderForUrl, cookieByHostname, fetchImpl } = options;
+    const cookie = typeof cookieHeaderForUrl === "function" ? await cookieHeaderForUrl(target.href)
+      : cookieByHostname?.get?.(target.hostname) || cookieByHostname?.get?.("zhihu.com");
+    if (!cookie) throw new Error("zhihu_cookie_not_synced");
+    // Use the same authenticated transport as the URL importer to read the exact vote entity on the source page.
+    const source = await fetchUrlWithoutBrowser(target.href, {
+      cookieHeaderForUrl: url => url === target.href ? cookie : null, fetchImpl, maxRedirects: 0
+    });
+    if (!source.isHtml || source.finalUrl !== target.href || !source.fetchReceipt.authenticated_fetch ||
+        source.fetchReceipt.anonymous_retry_after_cookie_reflection) {
+      throw new Error("zhihu_vote_source_unverified");
+    }
+    html = source.body;
+  } else {
+    html = await requestZhihuPageText(pageUrl, options);
   }
-  const html = await requestZhihuPageText(pageUrl, { ...options, ...(readAccountState && { retryDelaysMs: [] }) });
   return item.content_type === "answer" ? extractZhihuAnswerVoting(html, item.content_id)
     : extractZhihuArticleVoting(html, item.content_id);
 }
@@ -428,8 +432,7 @@ export async function requestZhihuJson(url, {
   method = "GET",
   json = null,
   retryDelaysMs = [1000, 3000, 8000, 20000],
-  allowAnonymous = false,
-  preserveLongIds = false
+  allowAnonymous = false
 }) {
   const parsed = new URL(url);
   const columnRead = parsed.origin === 'https://zhuanlan.zhihu.com' && method === 'GET'
@@ -462,7 +465,7 @@ export async function requestZhihuJson(url, {
     const text = await response.text();
     if (response.ok) {
       try {
-        return JSON.parse(text || "{}", preserveLongIds ? keepExactContentId : undefined);
+        return JSON.parse(text || "{}");
       } catch {
         throw new Error("zhihu_json_response_invalid");
       }
