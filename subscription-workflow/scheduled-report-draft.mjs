@@ -96,8 +96,9 @@ async function sourceEvidence(home,cycle) {
     ? [{kind:sourceKinds[index],sha256:receipt.sha256 ?? receipt.captureSha256 ?? null}] : [])};
 }
 
-export async function sealReportDraft(home,kind,cycle,{now=new Date(),render}={}) {
-  if(now<dueAt(kind,cycle))fail('not_due');
+export async function sealReportDraft(home,kind,cycle,{now,render}={}) {
+  const started=now ?? new Date();
+  if(started<dueAt(kind,cycle))fail('not_due');
   const f=cycleFiles(home,kind,cycle);
   return withLock(f.lock,async()=>{
     const plan=await readJson(f.input), evidence=await sourceEvidence(home,cycle);
@@ -134,7 +135,7 @@ export async function sealReportDraft(home,kind,cycle,{now=new Date(),render}={}
       planSha256,inputSha256:hash(input),resultSha256:hash(draft),items:input.length,macSources:evidence.macSources,
       missingSources:plan?.coverage.filter(row=>!row.jobId).map(row=>row.kind) ?? null,missingPreviews:plan?.missingPreviews ?? null,
       ...(rssReplay ? {rssReplay} : {}),
-      finishedAt:now.toISOString(),publishable:false};
+      startedAt:started.toISOString(),finishedAt:(now ?? new Date()).toISOString(),publishable:false};
     await writeJson(f.draft,draft);
     await writeJson(f.receipt,receipt);
     return receipt;
