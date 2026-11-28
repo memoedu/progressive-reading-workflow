@@ -55,6 +55,8 @@ Windows 缺席时，Mac 可用上一份同修订 RSS 检查点和当期已验证
 
 Windows 报告绑定的 `scheduledCapture: true` 启用正式领取。原作业在原锁内重新筛选，核对配置修订、完整输入哈希及回执，再按原规则保留人工卡片、勾选与笔记。只有 Windows 作业成功落盘后，才用原作业 ID 回送消费确认。缺少可消费草稿或内容变动时沿用原即时 SSH 和 Windows 本地渲染。将 `scheduledCapture` 设为 `false` 可回退原即时渲染。Windows 独占短文周报、审核、正式归档与通知。
 
+首次确认采用当前计划、订阅修订和产物哈希。同周期已记录消费后，完全相同的作业 ID、计划及产物哈希可读回原回执，即使来源已升修订或 Windows 报告后来有人工修改。不同计划不能覆盖已记录的消费。
+
 ### 隔离回放
 
 候选输入位于 `<stage-home>/<cycle>/<kind>/input`，分为 `workspace`、`state`、`rss`、`video` 四个子目录，另以 `roots.json` 记录四个原 Windows 输入根。已有正文的正式传输由阅读同步负责。冻结输入排除 Local IR 与浏览器凭据。

@@ -78,7 +78,7 @@ export async function putReportPlan(home,kind,cycle,plan) {
     const previous=await readJson(f.input);
     if(previous && hash(previous)===planSha256)return {status:'already_current',planSha256};
     const consumed=await readJson(f.consumed);
-    if(consumed && plan.revision<=(consumed.revision ?? previous?.revision ?? 0))fail('already_consumed');
+    if(consumed)fail('already_consumed');
     if(previous && (plan.revision<previous.revision ||
       (plan.revision===previous.revision && Date.parse(plan.frozenAt)<=Date.parse(previous.frozenAt))))fail('stale_plan');
     await writeJson(f.input,plan);
@@ -101,11 +101,16 @@ export async function sealReportDraft(home,kind,cycle,{now,render}={}) {
   if(started<dueAt(kind,cycle))fail('not_due');
   const f=cycleFiles(home,kind,cycle);
   return withLock(f.lock,async()=>{
-    const plan=await readJson(f.input), evidence=await sourceEvidence(home,cycle);
+    const plan=await readJson(f.input);
     const planSha256=plan ? hash(plan) : null;
     const consumed=await readJson(f.consumed);
     const prior=await readJson(f.receipt);
-    if(consumed?.planSha256===planSha256 && plan?.revision>=evidence.revision)return prior;
+    if(consumed){
+      if(prior?.status==='draft_ready' && prior.planSha256===consumed.planSha256 &&
+        prior.resultSha256===consumed.resultSha256)return prior;
+      fail('already_consumed');
+    }
+    const evidence=await sourceEvidence(home,cycle);
     if(plan)validatePlan(plan,kind,cycle);
     const matchesRevision=plan && plan.revision>=evidence.revision;
     const earlier=matchesRevision ? [...plan.input] : [];
@@ -157,13 +162,19 @@ export async function receiveSealedReportDraft(home,kind,cycle,{revision,inputSh
 export async function confirmSealedReportDraft(home,kind,cycle,confirmation) {
   const f=cycleFiles(home,kind,cycle);
   return withLock(f.lock,async()=>{
+    if(confirmation?.jobId!==jobId(kind,cycle) || !shaPattern.test(confirmation.planSha256||'') ||
+      !shaPattern.test(confirmation.resultSha256||''))fail('confirmation_mismatch');
+    const prior=await readJson(f.consumed);
+    if(prior) {
+      if(prior.kind===kind && prior.cycle===cycle && prior.jobId===confirmation.jobId &&
+        prior.planSha256===confirmation.planSha256 && prior.resultSha256===confirmation.resultSha256)return prior;
+      fail('already_consumed');
+    }
     const saved=await readJson(f.receipt), plan=await readJson(f.input);
     if(saved?.status!=='draft_ready' || saved.planSha256!==confirmation.planSha256 ||
-       saved.resultSha256!==confirmation.resultSha256 || confirmation.jobId!==jobId(kind,cycle))fail('confirmation_mismatch');
+       saved.resultSha256!==confirmation.resultSha256)fail('confirmation_mismatch');
     if(!plan || plan.revision!==saved.revision || hash(plan)!==saved.planSha256 ||
       saved.revision<(await sourceEvidence(home,cycle)).revision || hash(await readJson(f.draft))!==saved.resultSha256)fail('confirmation_stale');
-    const prior=await readJson(f.consumed);
-    if(prior?.planSha256===saved.planSha256)return prior;
     const record={kind,cycle,jobId:saved.jobId,revision:saved.revision,planSha256:saved.planSha256,
       resultSha256:saved.resultSha256,consumedAt:new Date().toISOString()};
     await writeJson(f.consumed,record);
