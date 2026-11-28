@@ -47,6 +47,14 @@ Mac 的两个只读 LaunchAgent 可分别于北京时间 07:00 和 08:00 封存�
 
 ## 日报和周报
 
+原 Windows 来源任务在终态落盘后，由现有报告运行包按原日报和周报筛选规则投递候选预览字段。已准备的稿件必须和原正文请求、已保存预览的哈希一致。候选只包含短预览、版本哈希和来源检查点。
+
+Mac 的 `org.memoedu.progressive-reading.daily-draft` 每日 09:00 运行，`org.memoedu.progressive-reading.weekly-draft` 每周日 21:00 运行，均为北京时间。使用 `python3 subscription-workflow/configure-mac-report-draft.py daily` 或 `weekly` 安装。回执在 `~/Agent/AppData/ProgressiveReading/SubscriptionReportDrafts/<daily|weekly>/<scheduled-YYYY-MM-DD>/receipt.json`。已交齐同周期来源和预览时记录 `draft_ready`。缺失、过期或不完整时记录 `waiting_input` 和原因，同修订已备妥的部分仍可封存。
+
+Windows 报告绑定的 `scheduledCapture: true` 启用正式领取。原作业在原锁内重新筛选，核对配置修订、完整输入哈希及回执，再按原规则保留人工卡片、勾选与笔记。只有 Windows 作业成功落盘后，才用原作业 ID 回送消费确认。缺少可消费草稿或内容变动时沿用原即时 SSH 和 Windows 本地渲染。将 `scheduledCapture` 设为 `false` 可回退原即时渲染。Windows 独占短文周报、审核、正式归档与通知。
+
+### 隔离回放
+
 候选输入位于 `<stage-home>/<cycle>/<kind>/input`，分为 `workspace`、`state`、`rss`、`video` 四个子目录，另以 `roots.json` 记录四个原 Windows 输入根。已有正文的正式传输由阅读同步负责。冻结输入排除 Local IR 与浏览器凭据。
 
 `node subscription-workflow/remote-report-stage.mjs <stage-home> <daily|weekly> <cycle>` 复用报表渲染和活动汇总。计算前后验证冻结输入，产物包含哈希及业务完成状态。Windows 可用 `receive-report-candidate.ps1` 把候选和回执取回隔离目录，重复领取读回同一组文件。

@@ -60,12 +60,18 @@ export async function main(argv=process.argv.slice(2)) {
   if(command==='status')return status(root);
   if(command==='drain')return drain(root);
   if(command==='enqueue-discovery')return enqueueDiscoveryCycles(root,options.kind);
-  if(command==='run-scheduled-rss' || command==='run-scheduled-report') {
+  if(command==='run-scheduled-rss' || command==='run-scheduled-report' || command==='enqueue-scheduled-report') {
     const kind = command==='run-scheduled-rss' ? 'rss' : options.kind;
-    if (!['rss','daily','weekly'].includes(kind) || !/^scheduled-\d{4}-\d{2}-\d{2}$/u.test(options.key || '')) {
+    const report=['daily','weekly'].includes(kind);
+    const cycle=report && options.key==='natural' ? (await import('./scheduled-report-draft.mjs')).reportCycle(kind) : options.key;
+    if ((!report && command!=='run-scheduled-rss') || !/^scheduled-\d{4}-\d{2}-\d{2}$/u.test(cycle || '')) {
       throw new Error('Invalid scheduled subscription period');
     }
-    return drain(root, {kind, cycle:options.key});
+    if(command==='enqueue-scheduled-report'){
+      const job=await enqueue(root,kind,cycle);
+      return {id:job.id,status:job.status};
+    }
+    return drain(root, {kind, cycle});
   }
   if(command==='import-video') {
     if (!(await loadConfig(root))?.enabled) throw new Error('后台队列已暂停');
