@@ -7,6 +7,7 @@ import { normalizeUrl, validateFeedDocument } from '../rss-source/core.mjs';
 
 const schema = 'progressive-reading.subscription-rss-capture/v1';
 const maxBytes = 64 * 1024 * 1024;
+const registryLimit = 256 * 1024;
 const dates = /^scheduled-\d{4}-\d{2}-\d{2}$/u;
 const payloadSha = body => digest(JSON.stringify(body));
 const safeOriginError = error => /^http_(\d{3})/u.exec(error.message)?.[0] || 'rss_source_unavailable';
@@ -21,6 +22,40 @@ export function feedPlan(config) {
   if (new Set(feeds.map(source => source.id)).size !== feeds.length ||
       new Set(feeds.map(source => source.url)).size !== feeds.length) throw new Error('rss_capture_duplicate_source');
   return { revision: config.revision, feeds };
+}
+
+export function registryState(config) {
+  if (typeof config?.enabled !== 'boolean' || !Number.isSafeInteger(config.revision) || config.revision < 1) {
+    throw new Error('rss_registry_invalid');
+  }
+  const { revision, feeds } = feedPlan({ ...config, enabled: true });
+  const projection = { enabled:config.enabled, revision,
+    subscriptions:feeds.map(feed => ({ ...feed, kind:'rss', enabled:true })) };
+  return { projection, revision, enabled:projection.enabled, feeds:feeds.length, sha256:payloadSha(projection) };
+}
+
+export async function publishFeedRegistry(home, input) {
+  const hasOnly = (value, keys) => value && Object.keys(value).length === keys.length &&
+    keys.every(key => Object.hasOwn(value,key));
+  if (!hasOnly(input,['enabled','revision','subscriptions']) || !Array.isArray(input.subscriptions) ||
+      input.subscriptions.some(source => !hasOnly(source,['id','url','kind','enabled']) || source.kind !== 'rss' ||
+        source.enabled !== true || typeof source.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$/u.test(source.id) ||
+        typeof source.url !== 'string' || !/^https?:\/\//u.test(source.url))) {
+    throw new Error('rss_registry_projection_invalid');
+  }
+  const { projection, ...proposed } = registryState(input);
+  const registry = path.join(home,'registry.json');
+  return withLock(registry+'.lock', async () => {
+    const previous = registryState(await readJson(registry));
+    if (proposed.revision < previous.revision) throw new Error('stale_registry_revision');
+    if (proposed.revision === previous.revision) {
+      if (proposed.sha256 !== previous.sha256) throw new Error('same_revision_source_conflict');
+      return { status:'already_current', ...proposed };
+    }
+    await writeJson(registry,projection);
+    if (registryState(await readJson(registry)).sha256 !== proposed.sha256) throw new Error('rss_registry_readback_mismatch');
+    return { status:'replaced', ...proposed };
+  }, {waitMs:2000});
 }
 
 function files(home, cycle) {
@@ -116,6 +151,21 @@ export async function acknowledgeCapture(home, cycle, expected) {
 async function main() {
   const [operation, home, arg, value] = process.argv.slice(2);
   if (!path.isAbsolute(home || '')) throw new Error('rss_capture_home_required');
+  if (operation === 'registry') {
+    const { projection, ...current } = registryState(await readJson(path.join(home,'registry.json')));
+    return current;
+  }
+  if (operation === 'publish-registry') {
+    process.umask(0o077);
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of process.stdin) {
+      size += chunk.length;
+      if (size > registryLimit) throw new Error('rss_registry_projection_too_large');
+      chunks.push(chunk);
+    }
+    return publishFeedRegistry(home, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+  }
   if (operation === 'run') {
     const config = await readJson(arg);
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: SCHEDULE.timezone, dateStyle: 'short' }).format(new Date());

@@ -155,9 +155,19 @@ export async function loadConfig(workflowRoot = codeRoot, home) {
   return config ? validateConfig(config) : null;
 }
 
+export async function syncSavedRssRegistry(subscriptionHome) {
+  if (!existsSync(path.join(subscriptionHome,'remote-rss-binding.json'))) return;
+  try {
+    const { reconcileFeedRegistry } = await import('./rss-registry-sync.mjs');
+    await reconcileFeedRegistry(subscriptionHome);
+  } catch {
+    console.warn(JSON.stringify({event:'rss_registry_sync',status:'pending'}));
+  }
+}
+
 export async function saveSource(workflowRoot, value, { home, expectedRevision } = {}) {
   const p = paths(workflowRoot, home);
-  return withLock(p.config + '.lock', async () => {
+  const saved = await withLock(p.config + '.lock', async () => {
     const config = await loadConfig(workflowRoot, home);
     if (!config) throw new Error('订阅配置尚未初始化');
     if (expectedRevision != null && config.revision !== expectedRevision) throw new Error('配置已在另一处更新，请刷新后重试');
@@ -171,11 +181,13 @@ export async function saveSource(workflowRoot, value, { home, expectedRevision }
     validateConfig(config); await writeJson(p.config, config);
     return config;
   });
+  await syncSavedRssRegistry(p.home);
+  return saved;
 }
 
 export async function deleteSource(workflowRoot, id, { home, expectedRevision } = {}) {
   const p = paths(workflowRoot, home);
-  return withLock(p.config + '.lock', async () => {
+  const saved = await withLock(p.config + '.lock', async () => {
     const config = await loadConfig(workflowRoot, home);
     if (!config) throw new Error('订阅配置尚未初始化');
     if (!Number.isSafeInteger(expectedRevision) || config.revision !== expectedRevision) throw new Error('配置已在另一处更新，请刷新后重试');
@@ -187,6 +199,8 @@ export async function deleteSource(workflowRoot, id, { home, expectedRevision } 
     validateConfig(config); await writeJson(p.config, config);
     return config;
   });
+  await syncSavedRssRegistry(p.home);
+  return saved;
 }
 
 export function platform(source) { return source.kind==='github_repository'?'rss':source.kind.split('_')[0]; }

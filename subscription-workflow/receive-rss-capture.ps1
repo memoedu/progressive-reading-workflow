@@ -48,6 +48,23 @@ if ($Acknowledge) {
     return
 }
 
+# The original receive path retries a configuration saved while the Mac was offline.
+# Preserve the existing local fallback and never rewrite this cycle's sealed capture.
+if (!$MacStage) {
+    try {
+        $file = Join-Path $SubscriptionsHome 'remote-rss-binding.json'
+        if (Test-Path -LiteralPath $file) {
+            $binding = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+            if ($binding.enabled -eq $true -and $binding.host -ceq $MacHost -and $binding.home -ceq $MacHome) {
+                $sync = Join-Path $PSScriptRoot 'rss-registry-sync.mjs'
+                & $Node $sync $SubscriptionsHome 2>$null | Out-Null
+            }
+        }
+    } catch {
+        # Only the existing capture verification decides whether it can be consumed.
+    }
+}
+
 if (Test-Path -LiteralPath $destination) {
     Verify-Capture $destination
     return
