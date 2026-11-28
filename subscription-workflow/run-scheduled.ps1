@@ -45,7 +45,9 @@ if ($Kind -eq 'rss' -and (Test-Path -LiteralPath $bindingFile)) {
     }
 }
 $cli = Join-Path $PSScriptRoot 'cli.mjs'
-if ($WorkflowRoot -and $Kind -in @('rss','daily','weekly')) {
+if ($Kind -in @('zhihu','bilibili')) {
+    & $node $cli enqueue-discovery --root $projectRoot --kind $Kind 2>&1 | Tee-Object -FilePath $log -Append
+} elseif ($WorkflowRoot -and $Kind -in @('rss','daily','weekly')) {
     # Claim the original scheduled job under the existing worker lock before the local app can take it.
     $run = if($Kind -eq 'rss') {'run-scheduled-rss'} else {'run-scheduled-report'}
     & $node $cli $run --root $projectRoot --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append

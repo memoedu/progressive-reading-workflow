@@ -165,6 +165,17 @@ export async function syncSavedRssRegistry(subscriptionHome) {
   }
 }
 
+export async function syncSavedDiscoveryRegistry(subscriptionHome) {
+  if (!existsSync(path.join(subscriptionHome,'remote-zhihu-discovery.json')) &&
+      !existsSync(path.join(subscriptionHome,'remote-video-discovery.json'))) return;
+  try {
+    const {synchronizeDiscoveryRegistry}=await import('./remote-discovery-capture.mjs');
+    await synchronizeDiscoveryRegistry(subscriptionHome);
+  } catch {
+    console.warn(JSON.stringify({event:'scheduled_discovery_registry_sync',status:'pending'}));
+  }
+}
+
 export async function saveSource(workflowRoot, value, { home, expectedRevision } = {}) {
   const p = paths(workflowRoot, home);
   const saved = await withLock(p.config + '.lock', async () => {
@@ -181,7 +192,7 @@ export async function saveSource(workflowRoot, value, { home, expectedRevision }
     validateConfig(config); await writeJson(p.config, config);
     return config;
   });
-  await syncSavedRssRegistry(p.home);
+  await Promise.all([syncSavedRssRegistry(p.home),syncSavedDiscoveryRegistry(p.home)]);
   return saved;
 }
 
@@ -199,7 +210,7 @@ export async function deleteSource(workflowRoot, id, { home, expectedRevision } 
     validateConfig(config); await writeJson(p.config, config);
     return config;
   });
-  await syncSavedRssRegistry(p.home);
+  await Promise.all([syncSavedRssRegistry(p.home),syncSavedDiscoveryRegistry(p.home)]);
   return saved;
 }
 

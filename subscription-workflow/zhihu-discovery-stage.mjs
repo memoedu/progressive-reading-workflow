@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { digest, readJson, withLock } from './config.mjs';
+import { receiveDiscovery } from './remote-discovery-capture.mjs';
 import { discoverZhihuColumn } from '../scripts/zhihu-column-import.mjs';
 import { zhihuColumnIdentity } from '../scripts/import-rule-catalog.mjs';
 import { dataPath } from '../scripts/runtime-paths.mjs';
@@ -18,7 +19,7 @@ const execute = promisify(execFile);
 const hash = value => digest(JSON.stringify(value));
 const nativeFailure = code => new Error('zhihu_remote_' + code);
 const fail = code => { throw nativeFailure(code); };
-const safeCode = error => /^zhihu_remote_[a-z_]+$/u.test(error?.message) ? error.message : 'zhihu_remote_unavailable';
+const safeCode = error => /^(?:zhihu_remote|scheduled_discovery)_[a-z_]+$/u.test(error?.message) ? error.message : 'zhihu_remote_unavailable';
 const isSource = url => {
   if (typeof url !== 'string' || url.length > 1024) return false;
   try { return Boolean(zhihuColumnIdentity(url)); } catch { return false; }
@@ -139,7 +140,7 @@ async function requestMac(binding, request) {
   });
 }
 
-export async function boundZhihuDiscovery(home, cycle, revision, sources, { send = requestMac } = {}) {
+export async function boundZhihuDiscovery(home, cycle, revision, sources, { send = requestMac, receive = receiveDiscovery } = {}) {
   if (!/^scheduled-\d{4}-\d{2}-\d{2}$/u.test(cycle) || !sources.length) return null;
   try {
     const binding = await readJson(path.join(home,'remote-zhihu-discovery.json'));
@@ -147,10 +148,12 @@ export async function boundZhihuDiscovery(home, cycle, revision, sources, { send
     if (binding.host !== host || !/^\/Users\/[A-Za-z0-9_-]+$/u.test(binding.home || '')) fail('invalid_binding');
     const request = {schema,cycle,revision,sources:sources.map(source=>source.url)};
     validateRequest(request);
-    const result = await send(binding,request);
+    const sealed=binding.scheduledCapture===true ? await receive(binding,'zhihu',request) : null;
+    const result = sealed ? sealed.result : await send(binding,request);
     const columns = verifyZhihuDiscovery(request,result);
     return {columns,receipt:{executor:'mac',cycle,sourceCount:columns.size,
-      requestSha256:result.requestSha256,resultSha256:result.resultSha256}};
+      requestSha256:result.requestSha256,resultSha256:result.resultSha256,
+      ...(sealed ? {origin:'scheduled_capture',captureSha256:sealed.sha256,capturedAt:sealed.finishedAt} : {})}};
   } catch(error) {
     return {columns:null,receipt:{executor:'windows',cycle,fallback:safeCode(error)}};
   }
@@ -177,6 +180,13 @@ async function readChromeFactory() {
   };
 }
 
+export async function generateNativeZhihuDiscovery(request) {
+  if (process.platform !== 'darwin') fail('mac_required');
+  const readChromeJson = await readChromeFactory();
+  return withLock(path.join(dataPath('ProgressiveReading','ZhihuDiscovery'),'chrome.lock'),
+    ()=>generateZhihuDiscovery(request,readChromeJson));
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     if (process.platform !== 'darwin') fail('mac_required');
@@ -187,10 +197,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       if (input.length > 64*1024) fail('request_too_large');
     }
     const request = JSON.parse(input.replace(/^\uFEFF/u,''));
-    const readChromeJson = await readChromeFactory();
-    const result = await withLock(path.join(dataPath('ProgressiveReading','ZhihuDiscovery'),'chrome.lock'),
-      ()=>generateZhihuDiscovery(request,readChromeJson));
-    console.log(JSON.stringify(result));
+    console.log(JSON.stringify(await generateNativeZhihuDiscovery(request)));
   } catch(error) {
     console.error(safeCode(error));
     process.exitCode = 1;
