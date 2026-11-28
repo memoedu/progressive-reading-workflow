@@ -225,6 +225,7 @@ async function main() {
       process.env.AI_PRODUCER_CODEX_BIN ||= path.join(homedir(),'.local','bin','codex');
       process.env.AI_PRODUCER_CODEX_WORK_DIR ||= path.join(cache,'codex-exec');
       process.env.PR_PREPROCESS_CACHE_DIR ||= path.join(cache,'preprocess');
+      process.env.PR_TRANSLATION_PROMPT_PATH ||= path.join(homedir(),'Agent','AppData','ProgressiveReading','TranslationPrompts','general-translation.txt');
     }
     return sealReportDraft(home,kind,cycle);
   }
