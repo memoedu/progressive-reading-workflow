@@ -71,5 +71,5 @@ export async function readZhihuReportBodies(home,request,sealed){
   const {sha256,...body}=saved;
   if(hash(body)!==sha256 || body.cycle!==request.cycle || body.revision!==request.revision ||
     body.captureSha256!==sealed.sha256)throw Error('zhihu_report_body_capture_mismatch');
-  return new Map(body.sources.map(source=>[source.url,new Map(source.rows.map(row=>[row.key,row]))]));
+  return {sha256,sources:new Map(body.sources.map(source=>[source.url,new Map(source.rows.map(row=>[row.key,row]))]))};
 }

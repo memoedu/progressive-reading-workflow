@@ -32,7 +32,12 @@ export async function replayReportZhihu(home,plan,{readBodies=readZhihuReportBod
     columns=verifyZhihuDiscovery(request,sealed.result);
   }catch{return absent('zhihu_report_capture_integrity_failed');}
 
-  const work=path.join(home,'zhihu-replay',plan.cycle,hash([sealed.sha256,checkpoint,plan.rssCheckpoint.knownKeys]));
+  let bodyCapture;
+  try { bodyCapture=await readBodies(captures,request,sealed); }
+  catch { return absent('zhihu_report_body_capture_mismatch'); }
+  if(!bodyCapture)return absent('zhihu_report_body_capture_missing');
+  const bodies=bodyCapture.sources;
+  const work=path.join(home,'zhihu-replay',plan.cycle,hash([sealed.sha256,bodyCapture.sha256,checkpoint,plan.rssCheckpoint.knownKeys]));
   return withLock(path.join(work,'replay.lock'),async()=>{
     const savedFile=path.join(work,'result.json');
     const saved=await readJson(savedFile);
@@ -59,10 +64,6 @@ export async function replayReportZhihu(home,plan,{readBodies=readZhihuReportBod
       });
       return selected.length ? [{url:source.url,source,items:selected}] : [];
     });
-    let bodies;
-    try { bodies=groups.length ? await readBodies(captures,request,sealed) : new Map(); }
-    catch { return absent('zhihu_report_body_capture_mismatch'); }
-    if(!bodies)return absent('zhihu_report_body_capture_missing');
     const failures=new Map();
     for(const {source,url,items:selected} of groups){
       for(const item of selected){
@@ -101,7 +102,8 @@ export async function replayReportZhihu(home,plan,{readBodies=readZhihuReportBod
       }
     }
     pending.push(...failures.values());
-    const replay={status:items.length?'provisional_draft':'waiting_input',captureSha256:sealed.sha256,items,pending};
+    const replay={status:items.length?'provisional_draft':'waiting_input',captureSha256:sealed.sha256,
+      bodyCaptureSha256:bodyCapture.sha256,items,pending};
     await writeJson(savedFile,{replay,resultSha256:hash(replay)});
     return replay;
   },{waitMs:5000});

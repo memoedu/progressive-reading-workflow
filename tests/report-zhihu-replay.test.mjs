@@ -40,7 +40,7 @@ test('Zhihu report replay requires a verified column, body identity and revision
     assert.deepEqual(request.sources,[url,originalUrl]);
     assert.equal(sealed.result.columns[0].materials.length,7);
     const markdown=html.replace(/<\/?p>/gu,'');
-    return new Map([[url,new Map(sealed.result.columns[0].materials.map(item=>{
+    return {sha256:'a'.repeat(64),sources:new Map([[url,new Map(sealed.result.columns[0].materials.map(item=>{
       const body={method:'zhihu_column_embedded_body',markdown,bodySha256:digest(markdown),url:item.url,revision:item.revision};
       if(item.key.endsWith(':103'))body.revision='1700000200';
       if(item.key.endsWith(':104'))body.url='https://zhuanlan.zhihu.com/p/1000';
@@ -48,7 +48,7 @@ test('Zhihu report replay requires a verified column, body identity and revision
       if(item.key.endsWith(':106'))body.markdown='changed after seal';
       if(item.key.endsWith(':107'))Object.assign(body,{markdown:'短文',bodySha256:digest('短文')});
       return [item.key,body];
-    }))]]);
+    }))]])};
   }
   async function preparePreview(_,item){
     previews++;
@@ -69,7 +69,7 @@ test('Zhihu report replay requires a verified column, body identity and revision
   assert.deepEqual(first.pending.map(row=>row.reason),['zhihu_report_article_revision_changed','zhihu_report_article_revision_changed',
     'zhihu_report_column_body_incomplete','zhihu_report_article_body_unverified','short_report_delivery_owned_by_windows']);
   assert.deepEqual(await run(),first);
-  assert.equal(scans,1);
+  assert.equal(scans,2);
   assert.equal(previews,1);
   assert.equal((await run({...plan,revision:5})).reason,'zhihu_report_capture_wrong_scope_or_revision');
   assert.equal((await run({...plan,zhihuCheckpoint:{sources:[{...source,url:'https://www.zhihu.com/column/c_999'}]}})).reason,
@@ -102,7 +102,7 @@ test('routine discovery seals only projected complete report bodies, with its ow
   assert.equal(seen.length,5);
   assert.ok(seen.every(target=>target.endsWith('/me') || target.includes('/api/columns/')));
   const input=await readJson(path.join(files,'input.json')), sealed=await readJson(path.join(files,'capture.json'));
-  const bodies=await readZhihuReportBodies(base,input,sealed);
+  const {sources:bodies}=await readZhihuReportBodies(base,input,sealed);
   assert.deepEqual([...bodies.keys()],[url]);
   assert.equal(bodies.get(url).has('zhihu:articles:101'),false);
   assert.equal(bodies.get(url).get('zhihu:articles:102').bodySha256,digest('原有正文'));
