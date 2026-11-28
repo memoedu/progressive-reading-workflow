@@ -14,6 +14,7 @@ import { WATCH_WORKFLOW, WATCH_MODEL, WATCH_FRAME_POLICY } from '../video-workfl
 import { LiveCookieSnapshot } from '../scripts/live-cookie-snapshot.mjs';
 import { discoverZhihuColumn } from '../scripts/zhihu-column-import.mjs';
 import { boundZhihuDiscovery } from './zhihu-discovery-stage.mjs';
+import { boundVideoDiscovery } from './video-discovery-stage.mjs';
 import { requestZhihuJson } from '../scripts/zhihu-social-archive.mjs';
 import { defaultCookieDataRoot } from '../scripts/live-cookie-snapshot.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
@@ -174,7 +175,8 @@ export async function prepareVideoPreview(root, source, item, watch, { acquire, 
   return { status: 'awaiting_review', material_id: record.material_id };
 }
 
-export async function scanVideos(root, cycle, { discoverFn = discover, processFn = processWatchItem, previewFn = prepareVideoPreview, existingFn = existingPublications, retryOnly = false } = {}) {
+export async function scanVideos(root, cycle, { discoverFn = discover, processFn = processWatchItem, previewFn = prepareVideoPreview,
+  existingFn = existingPublications, discoverRemote = discoverFn === discover ? boundVideoDiscovery : null, retryOnly = false } = {}) {
   const config = await loadConfig(root), data = config.video_home;
   return withLock(path.join(data, 'watch.lock'), async () => {
     const sources = config.subscriptions.filter(s => s.enabled && s.kind.startsWith('bilibili_'));
@@ -185,12 +187,17 @@ export async function scanVideos(root, cycle, { discoverFn = discover, processFn
     const previous = retryOnly ? await readJson(path.join(data,'last-check.json'),{}) : {};
     const failedSources = new Set((previous.errors || []).map(error=>error.subscription_id));
     const existing = await existingFn(), errors = [], added = [];
-    const watches = sources.map(s => sourceWatch(root, s));
+    const watches = sources.map(source=>{
+      const watch=sourceWatch(root,source);
+      const savedSeason=state.watch_baselines[watch.id]?.season_id;
+      if (watch.collection && savedSeason != null) watch.season_id=savedSeason;
+      return watch;
+    });
+    const remote = retryOnly ? null : await discoverRemote?.(paths(root).home,cycle,config.revision,watches);
     for (const watch of watches) {
       if (retryOnly && !failedSources.has(watch.subscription_id)) continue;
       try {
-        if (watch.collection && state.watch_baselines[watch.id]?.season_id != null) watch.season_id = state.watch_baselines[watch.id].season_id;
-        const found = await discoverFn(watch);
+        const found = remote?.bySource?.get(watch.subscription_id)?.found || await discoverFn(watch);
         if (watch.collection && !found.season_id) throw new Error('此视频未发现合集，请改为多 P 视频订阅');
         const source = sources.find(s => s.id === watch.subscription_id);
         const backfill = ['since','all'].includes(source.history_mode);
@@ -228,6 +235,7 @@ export async function scanVideos(root, cycle, { discoverFn = discover, processFn
         return processFn(item, watch);
       } });
     const report = { checked_at: new Date().toISOString(), new_items: added, events, errors,
+      ...(remote ? {discovery:remote.receipt} : {}),
       pending: Object.values(state.entries).filter(i => ['pending','waiting_source'].includes(i.status)).length,
       blocked: Object.values(state.entries).filter(i => i.status === 'blocked').map(({key,reason}) => ({key,reason})) };
     await writeJson(path.join(data, 'last-check.json'), report); return report;

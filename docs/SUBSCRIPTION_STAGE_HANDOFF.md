@@ -23,6 +23,14 @@ Mac 使用已运行的本机 Chrome 验证现有知乎账号并读取专栏页�
 
 Windows 只接收完整的阶段回执，累计偏移不连续或缺少末页时使用 Windows 原发现路径。平台确实在末页结束但报告的总数与收录量有差异时，沿用原 `zhihu_column_count_discrepancy`。原作业的 `steps.scan.result.discovery` 记录实际执行端及回退原因。Windows 原游标、正文抓取、审核、归档和通知继续由原 worker 管理。单篇正文读取失败时，Windows 仍可从原专栏接口取同一 ID、同修订的正文。关闭绑定即可回到 Windows 发现，无需重建任务。
 
+## B 站订阅发现
+
+Windows 订阅数据目录的 `remote-video-discovery.json` 可启用原 08:00 视频任务的远端公开列表发现。原 worker 在视频锁内读取配置修订和已保存的合集 ID，通过固定主机密钥连接 `mac-mini-tailscale`。Mac 使用原 `discover` 读取公开合集和视频分 P。只有公开视频标识、合集约束和周期进入请求。
+
+Windows 核验绑定当期、修订、来源及结果的哈希，再检查合集身份、`BV + CID`、分 P 顺序和完整性。原程序需要翻页时，回执包含连续页号、各页收录量与平台总数。SSH 失联、列表不完整或回执失配时，原 worker 在同一周期调用 Windows 的 `discover`。关闭绑定也回到同一路径。业务回执在 `steps.scan.result.discovery`。
+
+Windows 保持唯一领取和游标写入，继续使用原字幕和截图入口、处理与发布账本。Mac 的列表调用使用公开接口和相同解析器。
+
 ## 日报和周报
 
 候选输入位于 `<stage-home>/<cycle>/<kind>/input`，分为 `workspace`、`state`、`rss`、`video` 四个子目录，另以 `roots.json` 记录四个原 Windows 输入根。已有正文的正式传输由阅读同步负责。冻结输入排除 Local IR 与浏览器凭据。
