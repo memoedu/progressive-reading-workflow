@@ -454,7 +454,7 @@ export async function loadLedger(workflowRoot = DEFAULT_WORKFLOW_ROOT) {
   return ledger;
 }
 
-export async function syncLedger(workflowRoot = DEFAULT_WORKFLOW_ROOT, catalog = null) {
+export async function syncLedger(workflowRoot = DEFAULT_WORKFLOW_ROOT, catalog = null, { persist = true } = {}) {
   const scanned = catalog || await scanCatalog(workflowRoot);
   const { paths, items } = scanned;
   const ledger = await readJson(paths.ledgerPath, emptyLedger());
@@ -539,7 +539,7 @@ export async function syncLedger(workflowRoot = DEFAULT_WORKFLOW_ROOT, catalog =
     ledger.items[current.materialId] = item;
   }
   ledger.updated_at = nowIso();
-  await writeJson(paths.ledgerPath, ledger);
+  if (persist) await writeJson(paths.ledgerPath, ledger);
   return { paths, ledger, catalog: scanned };
 }
 
@@ -1390,6 +1390,64 @@ function uniqueItems(items) {
   return [...new Map(items.map((item) => [item.material_id, item])).values()];
 }
 
+function reportItems(ledger,catalog) {
+  const catalogIds = new Set(catalog.items.map(item=>item.materialId));
+  return Object.values(ledger.items).filter(item=>catalogIds.has(item.material_id))
+    .sort((a,b)=>String(b.published_at || b.fetched_at || '').localeCompare(String(a.published_at || a.fetched_at || '')) ||
+      a.title.localeCompare(b.title));
+}
+
+async function selectReportCandidates(paths,ledger,items,date,{runDaily,runWeekly,dailyPath}) {
+  if (runDaily) {
+    for (const item of items) {
+      const delivery = item.delivery ||= {};
+      if (item.route === 'long_review' && delivery.long_daily_revision !== item.source_revision) {
+        delivery.daily_report_key = date;
+        delivery.daily_report_path = dailyPath;
+        if (!paths.unified) delivery.active_review_path = dailyPath;
+      } else if (item.route === 'blocked' && delivery.blocked_daily_revision !== item.source_revision) {
+        delivery.blocked_report_key = date;
+        delivery.blocked_report_path = dailyPath;
+      }
+    }
+  }
+  const dailyItems = runDaily ? items.filter(item=>item.route==='long_review' && item.delivery?.daily_report_key===date) : [];
+  const weeklyLong = runWeekly ? paths.unified ? await weeklyFromPreviousReports(paths,ledger,items,date)
+    : items.filter(item=>item.route==='long_review' && item.decision==='unresolved' && item.eligible_for_preprocess) : [];
+  return {dailyItems,weeklyLong};
+}
+
+// This projects the same candidate selection as publication. Its in-memory
+// ledger is disposable. Only the existing Windows writer commits changes.
+export async function prepareScheduledReportDrafts(root, periods) {
+  const paths=workflowPaths(root);
+  if (!paths.unified) throw Error('report_draft_unified_workspace_required');
+  const version=await fileSha256(paths.ledgerPath);
+  const synced=await syncLedger(root,null,{persist:false});
+  const basis=await savedReviewCards(paths,synced.ledger);
+  const plans=[];
+  for (const {kind,date} of periods) {
+    const ledger=structuredClone(synced.ledger);
+    await normalizeReportLocations(paths,ledger);
+    ledger.report_runs ||= {daily:{},weekly:{}};
+    ledger.report_runs.daily ||= {};
+    const dailyPath=path.join(paths.summaryRoot,`${date} ${paths.reportLabel} 日报.md`);
+    const {dailyItems,weeklyLong}=await selectReportCandidates(paths,ledger,reportItems(ledger,synced.catalog),date,
+      {runDaily:true,runWeekly:kind==='weekly',dailyPath});
+    const candidates=uniqueItems([...dailyItems,...weeklyLong]);
+    const ready=(await Promise.all(candidates.map(async item=>{
+      const preview=item.review_preview;
+      return preview?.status==='ready' && preview.core && preview.source_request_sha256===item.preprocess_request_sha256 &&
+        preview.result_path && preview.result_sha256 &&
+        await fileSha256(preview.result_path).catch(()=>null)===preview.result_sha256 ? item : null;
+    }))).filter(Boolean);
+    plans.push({kind,date,input:reportDraftInput(ready),missingPreviews:candidates.length-ready.length,ledgerSha256:version});
+  }
+  await verifyReviewSources(basis);
+  if (await fileSha256(paths.ledgerPath)!==version) throw Error('review_ledger_changed_during_draft_preparation');
+  return plans;
+}
+
 export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, options = {}) {
   const date = options.date || localDate();
   const week = options.week || isoWeek();
@@ -1439,10 +1497,7 @@ export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, op
       ledger = synced.ledger;
     }
   }
-  const catalogIds = new Set(synced.catalog.items.map((item) => item.materialId));
-  const items = Object.values(ledger.items)
-    .filter((item) => catalogIds.has(item.material_id))
-    .sort((a, b) => String(b.published_at || b.fetched_at || "").localeCompare(String(a.published_at || a.fetched_at || "")) || a.title.localeCompare(b.title));
+  const items = reportItems(ledger,synced.catalog);
   const fulltextCount = items.filter((item) => item.eligible_for_preprocess).length;
   const blockedCount = items.length - fulltextCount;
   const dailyPath = path.join(paths.summaryRoot, `${date} ${paths.reportLabel} 日报.md`);
@@ -1453,25 +1508,9 @@ export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, op
       await fs.readFile(target,'utf8').catch(error=>{if(error.code==='ENOENT')return null;throw error;}));
   }
 
-  if (runDaily) {
-    for (const item of items) {
-      const delivery = item.delivery ||= {};
-      if (item.route === "long_review" && delivery.long_daily_revision !== item.source_revision) {
-        delivery.daily_report_key = date;
-        delivery.daily_report_path = dailyPath;
-        if(!paths.unified)delivery.active_review_path = dailyPath;
-      } else if (item.route === "blocked" && delivery.blocked_daily_revision !== item.source_revision) {
-        delivery.blocked_report_key = date;
-        delivery.blocked_report_path = dailyPath;
-      }
-    }
-  }
-
-  const dailyItems = runDaily ? items.filter((item) => item.route === "long_review" && item.delivery?.daily_report_key === date) : [];
+  const {dailyItems,weeklyLong}=await selectReportCandidates(paths,ledger,items,date,{runDaily,runWeekly,dailyPath});
   const dailyBlocked = runDaily && !paths.unified ? items.filter((item) => item.route === "blocked" && item.delivery?.blocked_report_key === date) : [];
   const pendingShort = runShortWeekly ? items.filter((item) => item.route === "short_aggregate" && item.delivery?.short_weekly_revision !== item.source_revision) : [];
-  const weeklyLong = runWeekly ? paths.unified ? await weeklyFromPreviousReports(paths,ledger,items,date)
-    : items.filter((item) => item.route === "long_review" && item.decision === "unresolved" && item.eligible_for_preprocess) : [];
   const weeklyBlocked = runWeekly && !paths.unified ? items.filter((item) => item.route === "blocked" && item.decision !== "dismissed" && item.publication?.status !== "published") : [];
   const previewTargets = uniqueItems([...dailyItems, ...pendingShort, ...weeklyLong]);
   const preview = await ensureReviewPreviews(paths, previewTargets, {

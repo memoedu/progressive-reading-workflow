@@ -5,7 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { paths, codeRoot, loadConfig, readJson, writeJson, withLock, digest, platform } from './config.mjs';
 import { scanRss, scanVideos, scanZhihu, advanceAuto, withAutoImporter } from './adapters.mjs';
-import { boundReportDraft } from './report-draft-transport.mjs';
+import { boundReportDraft, settleReportDraft, stageAfterSource } from './report-draft-transport.mjs';
 import { generateSummaries, prepareSubscriptionPreviews, processMarkdownDecisions } from '../rss-reading/core.mjs';
 import { publicationMetadata } from './publication-time.mjs';
 import { recordExceptions, acknowledgeExceptions, exceptionFile } from './exception-log.mjs';
@@ -324,9 +324,11 @@ async function runJob(root, job, save) {
   }
   const scopeFaults = await step('apply-source-scopes',()=>applyPendingScopes(root,job.cycle,progress));
   await step('decisions',()=>processMarkdownDecisions(root));
+  const date = /^scheduled-\d{4}-\d{2}-\d{2}$/u.test(job.cycle) ? job.cycle.slice(10) : localDate();
   const receipt = await step('report',async()=>generateSummaries(root,{ mode:job.kind,
-    executeDecisions:false, ingestSummaries:false, onPreviewProgress:progress, renderDraft:await boundReportDraft(root,job.cycle) }));
-  const result = await step('activity',()=>appendActivity(root,receipt));
+    date, week:weekKey(date), executeDecisions:false, ingestSummaries:false, onPreviewProgress:progress,
+    renderDraft:await boundReportDraft(root,job.cycle,job.kind) }));
+  const result = await step('activity',()=>appendActivity(root,receipt,{date}));
   await step('notify',async()=>{
     const outputs=Object.entries(result.outputs).filter(([key,value])=>key!=='ledger'&&value?.sha256);
     if(!outputs.length)return {done:true,skipped:'no_report_content'};
@@ -344,16 +346,24 @@ export async function drain(root = codeRoot, scheduled = null) {
   if (!config?.enabled) return { status:'paused' };
   return withLock(path.join(paths(root).home,'worker.lock'),async()=>{
     const target = scheduled && await enqueue(root, scheduled.kind, scheduled.cycle);
+    if(target)await settleReportDraft(root,target).catch(()=>null);
     const completed = [];
     for (;;) {
       const job = (await jobList(root)).find(j=>['queued','running'].includes(j.status) && (!target || j.id === target.id));
       if (!job) break;
       const save = () => writeJson(path.join(paths(root).jobs,job.id+'.json'),job);
+      const sourceCheckpoint=['rss','zhihu','bilibili'].includes(job.kind) && /^scheduled-\d{4}-\d{2}-\d{2}$/u.test(job.cycle);
+      if(sourceCheckpoint && !job.steps.scan?.done) job.reportSourceRevision=(await loadConfig(root))?.revision;
       job.status='running'; job.pid=process.pid; job.started_at ||= stamp(); await save();
       try { const result = await runJob(root,job,save); job.result=result; job.status=result.status; delete job.error; }
       catch (error) { job.status='failed'; job.error=cleanError(error); await noticeFaults(root,job.kind,[{error:job.error}]); }
+      if(sourceCheckpoint && (await loadConfig(root).catch(()=>null))?.revision!==job.reportSourceRevision)delete job.reportSourceRevision;
       job.completed_at=stamp(); delete job.current_step; await save();
       await settleDiscovery(paths(root).home,job);
+      await settleReportDraft(root,job).catch(()=>null);
+      if(sourceCheckpoint || ['daily','weekly'].includes(job.kind)) {
+        await stageAfterSource(root).catch(()=>console.warn(JSON.stringify({event:'scheduled_report_input_pending',kind:job.kind,cycle:job.cycle})));
+      }
       completed.push({ id:job.id,kind:job.kind,status:job.status });
     }
     return { status:'idle',completed, ...(target ? {job:target.id} : {}) };

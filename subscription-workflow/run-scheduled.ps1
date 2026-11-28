@@ -50,10 +50,12 @@ if ($Kind -in @('zhihu','bilibili')) {
 } elseif ($WorkflowRoot -and $Kind -in @('rss','daily','weekly')) {
     # Claim the original scheduled job under the existing worker lock before the local app can take it.
     $run = if($Kind -eq 'rss') {'run-scheduled-rss'} else {'run-scheduled-report'}
-    & $node $cli $run --root $projectRoot --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
+    $period = if($Kind -eq 'rss') {$cycle} else {'natural'}
+    & $node $cli $run --root $projectRoot --kind $Kind --key $period 2>&1 | Tee-Object -FilePath $log -Append
     if ($LASTEXITCODE -ne 0) {
         # A busy worker can continue from the original queue without risking a second cycle.
-        & $node $cli enqueue --root $projectRoot --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
+        $fallback = if($Kind -eq 'rss') {'enqueue'} else {'enqueue-scheduled-report'}
+        & $node $cli $fallback --root $projectRoot --kind $Kind --key $period 2>&1 | Tee-Object -FilePath $log -Append
     }
 } else {
     & $node $cli enqueue --root $projectRoot --kind $Kind --key $cycle 2>&1 | Tee-Object -FilePath $log -Append
