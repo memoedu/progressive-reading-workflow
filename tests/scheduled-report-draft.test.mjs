@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import {fileURLToPath} from 'node:url';
 import {digest,initialize,paths,writeJson} from '../subscription-workflow/config.mjs';
 import {boundReportDraft,settleReportDraft} from '../subscription-workflow/report-draft-transport.mjs';
 import {confirmSealedReportDraft,putReportPlan,receiveSealedReportDraft,reportCycle,reportPlanSchema,sealReportDraft}
@@ -50,6 +52,10 @@ test('a native draft waits for complete current revision and rejects earlier ove
   const ack={jobId:id('weekly'),planSha256:result.receipt.planSha256,resultSha256:result.receipt.resultSha256};
   const one=await confirmSealedReportDraft(home,'weekly',cycle,ack);
   assert.deepEqual(await confirmSealedReportDraft(home,'weekly',cycle,ack),one);
+  const cli=fileURLToPath(new URL('../subscription-workflow/scheduled-report-draft.mjs',import.meta.url));
+  const read=operation=>JSON.parse(execFileSync(process.execPath,[cli,operation,home,'weekly',cycle],{encoding:'utf8'}));
+  assert.deepEqual(read('status'),result.receipt);
+  assert.deepEqual(read('consumed'),one);
   await assert.rejects(candidate(home,{revision:42}),/already_consumed/u);
 });
 

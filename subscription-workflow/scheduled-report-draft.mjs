@@ -203,7 +203,7 @@ async function main() {
     return null;
   }
   if(op==='ack')return confirmSealedReportDraft(home,kind,cycle,await stdin());
-  if(['status','consumed'].includes(op))return readJson(cycleFiles(home,kind,cycle)[op]);
+  if(op==='status' || op==='consumed')return readJson(cycleFiles(home,kind,cycle)[op==='status'?'receipt':'consumed']);
   fail('operation_invalid');
 }
 
