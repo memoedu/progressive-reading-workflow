@@ -884,11 +884,11 @@ function boundedScreeningExcerpt(markdown, maxLength = 6000) {
   return [opening, headings ? `## 文章结构提示\n\n${headings}` : "", `## 结尾节选\n\n${ending}`].filter(Boolean).join("\n\n");
 }
 
-async function buildConsumerRequest(item, mode) {
+async function buildConsumerRequest(item, mode,{savedMarkdown}={}) {
   const request = await readJson(item.preprocess_request_path);
   if (!request) throw new Error(`preview_request_missing:${item.material_id}`);
   if(mode==='saved_reading') {
-    const saved=await fs.readFile(item.publication.path,'utf8');
+    const saved=savedMarkdown ?? await fs.readFile(item.publication.path,'utf8');
     const {body,structured:standard}=savedReadingBody(saved);
     if(!body)throw new Error(`saved_reading_body_missing:${item.material_id}`);
     const language=standard?'zh':request.source_metadata?.language;
@@ -982,7 +982,7 @@ async function defaultPreviewRunner({ paths, request, outputDir }) {
 }
 
 async function ensureReviewPreview(paths, item, options = {}) {
-  if (paths.unified && directArticle(item) && item.eligible_for_preprocess) {
+  if (paths.unified && directArticle(item) && item.eligible_for_preprocess && options.savedMarkdown===undefined) {
     await deliverArticle(paths,item,safeTitle(item.title,item.material_id),options);
   }
   if (!item.eligible_for_preprocess || item.route === "blocked") {
@@ -1009,7 +1009,7 @@ async function ensureReviewPreview(paths, item, options = {}) {
   const runner = options.previewRunner || defaultPreviewRunner;
   const errors = [];
   for (const variant of variants) {
-    const request = await buildConsumerRequest(item, variant);
+    const request = await buildConsumerRequest(item, variant, options);
     const consumerRequestSha256 = sha256(Buffer.from(JSON.stringify(request), "utf8"));
     let outputDir = path.join(paths.previewsRoot, item.material_id, consumerRequestSha256.slice(0, 16));
     if (item.review_preview?.status === 'ready' && item.review_preview.consumer_request_sha256 === consumerRequestSha256 && existsSync(item.review_preview.result_path)) return item.review_preview;
@@ -1390,6 +1390,29 @@ function uniqueItems(items) {
   return [...new Map(items.map((item) => [item.material_id, item])).values()];
 }
 
+export async function prepareIsolatedReportPreview(root,item,{previewRunner=defaultPreviewRunner}={}) {
+  if (!item.eligible_for_preprocess || item.route!=='long_review') throw Error('report_replay_not_long_review');
+  const paths={...workflowPaths(root),unified:true,
+    preprocessCli:path.join(DEFAULT_WORKFLOW_ROOT,'standard-preprocessing','cli.mjs')};
+  let savedMarkdown;
+  if (directArticle(item)) {
+    const source=await readJson(item.preprocess_request_path);
+    const request=readingRequest(source,item);
+    const outputDir=path.join(paths.previewsRoot,item.material_id,'private-reading-'+sha256(JSON.stringify(request)).slice(0,20));
+    const cached=await readJson(path.join(outputDir,'result.json'));
+    const {result}=cached && ['completed','idempotent_replay'].includes(cached.status) ?
+      {result:cached} : await previewRunner({paths,request,outputDir,variant:'private_reading'});
+    if(!['completed','idempotent_replay'].includes(result?.status) || result.processing_state!=='rendered' ||
+      result.artifacts?.target_zone!=='local-ir-reading' || !result.artifacts.reading_markdown?.trim())throw Error('report_replay_reading_incomplete');
+    savedMarkdown=result.artifacts.reading_markdown;
+  }
+  await ensureReviewPreview(paths,item,{previewRunner,savedMarkdown});
+  const preview=item.review_preview;
+  if(preview?.status!=='ready' || !preview.core || !preview.result_path ||
+    await fileSha256(preview.result_path)!==preview.result_sha256)throw Error('report_replay_preview_incomplete');
+  return {input:reportDraftInput([item])[0],previewSha256:preview.result_sha256,consumerSha256:preview.consumer_request_sha256};
+}
+
 function reportItems(ledger,catalog) {
   const catalogIds = new Set(catalog.items.map(item=>item.materialId));
   return Object.values(ledger.items).filter(item=>catalogIds.has(item.material_id))
@@ -1445,7 +1468,7 @@ export async function prepareScheduledReportDrafts(root, periods) {
   }
   await verifyReviewSources(basis);
   if (await fileSha256(paths.ledgerPath)!==version) throw Error('review_ledger_changed_during_draft_preparation');
-  return plans;
+  return {plans,knownUrls:uniqueItems(Object.values(synced.ledger.items)).flatMap(item=>item.item_url?[item.item_url]:[])};
 }
 
 export async function generateSummaries(workflowRoot = DEFAULT_WORKFLOW_ROOT, options = {}) {

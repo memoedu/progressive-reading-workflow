@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -76,7 +77,18 @@ export async function settleReportDraft(root,job,send=stageExchange) {
   if(!['completed','completed_with_issues'].includes(job.status) || r?.origin!=='scheduled_capture')return;
   const binding=await reportBinding(root);
   if(binding?.scheduledCapture!==true)return;
-  return send(binding,'ack',job.kind,job.cycle,{jobId:job.id,planSha256:r.planSha256,resultSha256:r.resultSha256});
+  const identity={jobId:job.id,planSha256:r.planSha256,resultSha256:r.resultSha256};
+  const files=['daily','long_weekly'].map(key=>job.result.outputs?.[key]).filter(output=>output?.sha256);
+  const outputMatches=await Promise.all(files.map(async output=>{
+    const body=await fs.readFile(output.path).catch(()=>null);
+    return body!==null && digest(body)===output.sha256;
+  }));
+  if((await loadConfig(root))?.revision===r.revision && outputMatches.every(Boolean)){
+    return send(binding,'ack',job.kind,job.cycle,identity);
+  }
+  const prior=await send(binding,'consumed',job.kind,job.cycle,null);
+  if(prior?.kind===job.kind && prior.cycle===job.cycle &&
+    Object.entries(identity).every(([key,value])=>prior[key]===value))return prior;
 }
 
 function exchange(host, command, message) {

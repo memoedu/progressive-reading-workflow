@@ -57,8 +57,12 @@ test('a native draft waits for complete current revision and rejects earlier ove
   assert.deepEqual(read('status'),result.receipt);
   assert.deepEqual(read('consumed'),one);
   await assert.rejects(candidate(home,{revision:41,frozenAt:'2026-11-29T12:30:00.000Z'}),/already_consumed/u);
-  await candidate(home,{revision:42});
-  assert.equal((await run()).revision,42);
+  await writeJson(registry,{revision:42});
+  assert.deepEqual(await confirmSealedReportDraft(home,'weekly',cycle,ack),one);
+  assert.deepEqual(await run(),result.receipt);
+  await assert.rejects(candidate(home,{revision:42}),/already_consumed/u);
+  await assert.rejects(confirmSealedReportDraft(home,'weekly',cycle,{...ack,resultSha256:'c'.repeat(64)}),/already_consumed/u);
+  assert.deepEqual(read('consumed'),one);
 });
 
 test('the original renderer uses the sealed result only for its freshly selected exact input',async t=>{
@@ -84,8 +88,25 @@ test('the original renderer uses the sealed result only for its freshly selected
   assert.equal((await render([{...input[0],direct:false}])).receipt.origin,'fallback');
   assert.equal(fallbacks,1);
   const job={id:id('weekly'),kind:'weekly',cycle,status:'completed',result:{draftRender:result.receipt}};
-  const confirm=(_binding,_op,kind,period,receipt)=>confirmSealedReportDraft(home,kind,period,receipt);
-  assert.deepEqual(await settleReportDraft(root,job,confirm),await settleReportDraft(root,job,confirm));
+  const confirm=(_binding,operation,kind,period,receipt)=>operation==='consumed' ?
+    fs.readFile(path.join(home,kind,period,'consumed.json'),'utf8').then(JSON.parse).catch(()=>null) :
+    confirmSealedReportDraft(home,kind,period,receipt);
+  const output=path.join(root,'weekly.md');
+  await fs.writeFile(output,'draft');
+  job.result.outputs={long_weekly:{path:output,sha256:digest('draft')}};
+  await fs.appendFile(output,'manual note');
+  assert.equal(await settleReportDraft(root,job,confirm),undefined);
+  await fs.writeFile(output,'draft');
+  await writeJson(paths(root).config,{...cfg,revision:41});
+  assert.equal(await settleReportDraft(root,job,confirm),undefined);
+  await writeJson(paths(root).config,{...cfg,revision:40});
+  const consumed=await settleReportDraft(root,job,confirm);
+  assert.ok(consumed);
+  assert.deepEqual(await settleReportDraft(root,job,confirm),consumed);
+  await writeJson(paths(root).config,{...cfg,revision:41});
+  await writeJson(path.join(root,'SubscriptionFeedCapture','registry.json'),{revision:41});
+  await fs.appendFile(output,'a later manual note');
+  assert.deepEqual(await settleReportDraft(root,job,confirm),consumed);
 });
 
 test('an old acknowledgement cannot consume a replacement plan or a newer registry revision',async t=>{

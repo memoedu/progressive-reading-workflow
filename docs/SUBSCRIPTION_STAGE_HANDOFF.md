@@ -51,7 +51,11 @@ Mac 的两个只读 LaunchAgent 可分别于北京时间 07:00 和 08:00 封存�
 
 Mac 的 `org.memoedu.progressive-reading.daily-draft` 每日 09:00 运行，`org.memoedu.progressive-reading.weekly-draft` 每周日 21:00 运行，均为北京时间。使用 `python3 subscription-workflow/configure-mac-report-draft.py daily` 或 `weekly` 安装。回执在 `~/Agent/AppData/ProgressiveReading/SubscriptionReportDrafts/<daily|weekly>/<scheduled-YYYY-MM-DD>/receipt.json`。已交齐同周期来源和预览时记录 `draft_ready`。缺失、过期或不完整时记录 `waiting_input` 和原因，同修订已备妥的部分仍可封存。
 
+Windows 缺席时，Mac 可用上一份同修订 RSS 检查点和当期已验证 XML 查找新文章。检查点只含来源规则和已知条目身份哈希。对附有完整正文且满足原长文规则的报告来源，Mac 在私有工作目录运行原来源包装、正文和预览步骤，封存 `provisional_draft`。回执逐条留存 XML、正文、请求和预览结果哈希。原计划的周报运行仍可一并封存当日新卡，这些卡属于当日日报。缺失封存、正文只有摘要或短文归档待办均留有原因。`provisional_draft` 只供核对，Windows 原入口对该周期重新筛选和渲染，仍按原归档、审批和通知规则结算。
+
 Windows 报告绑定的 `scheduledCapture: true` 启用正式领取。原作业在原锁内重新筛选，核对配置修订、完整输入哈希及回执，再按原规则保留人工卡片、勾选与笔记。只有 Windows 作业成功落盘后，才用原作业 ID 回送消费确认。缺少可消费草稿或内容变动时沿用原即时 SSH 和 Windows 本地渲染。将 `scheduledCapture` 设为 `false` 可回退原即时渲染。Windows 独占短文周报、审核、正式归档与通知。
+
+首次确认采用当前计划、订阅修订和产物哈希。同周期已记录消费后，完全相同的作业 ID、计划及产物哈希可读回原回执，即使来源已升修订或 Windows 报告后来有人工修改。不同计划不能覆盖已记录的消费。
 
 ### 隔离回放
 
