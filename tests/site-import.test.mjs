@@ -264,7 +264,7 @@ test('all-page scope complements featured links with sitemap pages and reuses in
     hits.push(url);
     const pages={
       [base+'/']:'<ul class="featured"><li><a href="/featured">Featured</a></li></ul>',
-      [base+'/robots.txt']:'Sitemap: {{ site.url }}/sitemap.xml\nSitemap: {{site.url}}/broken.xml\nSitemap: /additional-sitemap.xml\n',
+      [base+'/robots.txt']:'Sitemap: {{ site.url }}/sitemap.xml\nSitemap: {{site.url}}/broken.xml\nSitemap: /additional-sitemap.xml # public archive\n',
       [base+'/sitemap.xml']:'<urlset>'+[featured,unlisted,attachment].map(url=>'<url><loc>'+url+'</loc></url>').join('')+'</urlset>',
       [base+'/additional-sitemap.xml']:'<urlset><url><loc>'+unlisted+'</loc></url></urlset>',
       [unlisted]:body

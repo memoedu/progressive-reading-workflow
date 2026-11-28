@@ -128,7 +128,7 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
     const sitemapQueue=[new URL('/sitemap.xml',base).href],visited=new Set(),urls=[],sitemaps=[];
     const robots=await fetchPage(new URL('/robots.txt',base).href,{base}).catch(()=>null);
     for(const line of robots?.body.split(/\r?\n/u)||[]){
-      const location=/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/iu.exec(line)?.[1];
+      const location=/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/iu.exec(line.split('#',1)[0])?.[1];
       if(!location||/[{}]/u.test(location))continue;
       try{sitemapQueue.push(scopedUrl(location,base));}catch{/* Ignore invalid or out-of-scope declarations. */}
     }
