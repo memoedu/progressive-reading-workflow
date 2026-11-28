@@ -126,7 +126,12 @@ export async function discoverSite(root,settings,runId,{onProgress=async()=>{},p
       feeds=[...doc.querySelectorAll('link[rel=alternate]')].filter(node=>/rss|atom/iu.test(node.type)).map(node=>node.href);
     }finally{dom.window.close();}
     const sitemapQueue=[new URL('/sitemap.xml',base).href],visited=new Set(),urls=[],sitemaps=[];
-    try{const robots=await fetchPage(new URL('/robots.txt',base).href,{base});for(const line of robots.body.split(/\r?\n/u)){const match=/^Sitemap:\s*(\S+)/iu.exec(line);if(match)sitemapQueue.push(scopedUrl(match[1],base));}}catch{}
+    const robots=await fetchPage(new URL('/robots.txt',base).href,{base}).catch(()=>null);
+    for(const line of robots?.body.split(/\r?\n/u)||[]){
+      const location=/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/iu.exec(line.split('#',1)[0])?.[1];
+      if(!location||/[{}]/u.test(location))continue;
+      try{sitemapQueue.push(scopedUrl(location,base));}catch{/* Ignore invalid or out-of-scope declarations. */}
+    }
     while(sitemapQueue.length){
       const url=sitemapQueue.shift();if(visited.has(url))continue;visited.add(url);
       if(visited.size>300)throw new Error('站点地图超过完整枚举上限，已停止，未把部分目录当作全集');
