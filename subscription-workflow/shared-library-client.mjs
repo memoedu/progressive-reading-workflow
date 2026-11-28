@@ -3,7 +3,6 @@ import path from 'node:path';
 import defaultSources from '../config/shared-library-server-sources.example.json' with { type: 'json' };
 import { readJson, writeJson, withLock } from './config.mjs';
 import { sharedArticleUrl, sharedDigest, sharedRecord, sharedRawUrl, sharedMaterialRecord, sharedReadingSource, sharedRepository, commitPattern, sha256Pattern, variantKind } from './shared-library.mjs';
-import { verifyPublicVideoPublication } from './shared-library-sources.mjs';
 import { publicArchiveContainsPrivateData } from '../scripts/original-markdown-backup.mjs';
 import { standardWorkflowOptions } from '../standard-preprocessing/index.mjs';
 import { PROCESSOR_VERSION, PROMPT_VERSION, stableJson } from '../standard-preprocessing/lib/core.mjs';
@@ -252,9 +251,7 @@ export async function downloadSharedReading(root, input, options) {
   return lookupSharedReadingArtifacts(root, { ...input, includeOriginal: false }, options);
 }
 
-export async function syncSharedReading(root, { url, kind, original, markdown, processingOptions }, {
-  fetchImpl = fetch, verifyVideo = verifyPublicVideoPublication
-} = {}) {
+export async function syncSharedReading(root, { url, title, kind, original, markdown, processingOptions }, { fetchImpl = fetch } = {}) {
   const canonical = sharedArticleUrl(url);
   const state = await settings(root);
   if (!canonical || !state.enabled || !state.endpoint || !state.token) {
@@ -269,27 +266,26 @@ export async function syncSharedReading(root, { url, kind, original, markdown, p
     return { status: 'local_only', reason: 'shared_material_not_publication_ready' };
   }
   try {
-    let publicSourceAttestation;
-    if (['youtube', 'bilibili'].includes(sharedReadingSource(canonical))) {
-      const verified = await verifyVideo(canonical, fetchImpl);
-      if (!verified) return { status:'local_only', reason:'video_source_not_publicly_verified' };
-      publicSourceAttestation = { ...verified, original_sha256:sharedDigest(original) };
+    const originalSha256 = sharedDigest(original);
+    const indexed = await lookupSharedReadingArtifacts(root, { url: canonical, kind, processingOptions, originalSha256,
+      includeReading: reading !== undefined }, { fetchImpl });
+    if (indexed && (reading === undefined || indexed.reading)) {
+      const { originalBytes, readingBytes, ...receipt } = indexed;
+      return { ...receipt, reused: true };
     }
     const result = await request(state, 'publication', {
-      url: canonical, original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256,
-      ...(publicSourceAttestation ? { public_source_attestation: publicSourceAttestation } : {})
+      url: canonical, title, original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256
     }, fetchImpl);
     if (result.status === 'local_only') return result;
     if (result.status !== 'available') throw new Error('shared_sync_invalid_receipt');
     const record = sharedRecord(result.record, canonical);
     if (reading === undefined) {
-      const entry = [record.original, ...(record.original_revisions || [])].find(item => item.sha256 === sharedDigest(original));
+      const entry = [record.original, ...(record.original_revisions || [])].find(item => item.sha256 === originalSha256);
       if (!entry) throw new Error('shared_sync_invalid_receipt');
       await verifiedReadingBytes(result.commit, entry, fetchImpl);
       return { status: 'available', commit: result.commit, title: record.title, original: entry };
     }
-    const entry = record.reading_files?.find(item => item.processing_sha256 === processingSha256 &&
-      item.original_sha256 === sharedDigest(original) && item.sha256 === sharedDigest(reading));
+    const entry = readingEntry(record, { kind, processingOptions }, originalSha256);
     if (!entry) throw new Error('shared_sync_invalid_receipt');
     const { originalBytes, readingBytes, ...receipt } = await verifiedReadingPair(result.commit, record, entry, fetchImpl);
     return receipt;

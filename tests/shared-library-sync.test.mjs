@@ -41,17 +41,17 @@ test('YouTube source verification requires an exact video in the anonymous autho
   assert.equal(await verifyPublicYoutubeListing(url, fetchListing('other-video')), null);
 });
 
-test('only the designated publisher can attest to an exact public video, part, and source digest', async t => {
+test('signed-in publishers submit captured artifacts without contacting the source', async t => {
   const password = 'isolated-fixture-password';
   const owner = await createSharedAccount(password);
   let writes = 0;
   const server = createSharedLibraryServer({
-    config:{ accounts:{ plain:owner, trusted:{ ...owner, trusted_public_source_publisher:true } }, gitleaks:'fixture' },
-    verifyReadingSource: async () => null,
+    config:{ accounts:{ owner }, gitleaks:'fixture' },
+    fetchArticle: async () => assert.fail('publication must not acquire the source'),
     scan: async () => true,
     github:{ ready:true, lookup:async () => ({commit, record:null}), publishReading:async input => {
       writes++;
-      assert.equal(input.original, markdown);
+      assert.equal(input.original, '短稿');
       return {status:'available', commit, record};
     } }
   });
@@ -62,22 +62,15 @@ test('only the designated publisher can attest to an exact public video, part, a
     method:'POST', headers:{'content-type':'application/json', ...(token ? {authorization:'Bearer '+token} : {})},
     body:JSON.stringify(body)
   }).then(response => response.json());
-  const plain = (await post('session', {account:'plain',password})).token;
-  const trusted = (await post('session', {account:'trusted',password})).token;
-  const videoId = 'aB_c-234567';
-  const url = 'https://www.youtube.com/watch?v=' + videoId;
-  const attestation = {type:'youtube_public_channel_listing',video_id:videoId,title:'Public fixture',original_sha256:sharedDigest(markdown)};
-  const submit = (token, proof, source = url) => post('publication', {url:source, original:markdown, public_source_attestation:proof}, token);
-  assert.equal((await submit(plain, attestation)).reason, 'source_not_publicly_verified');
-  assert.equal((await submit(trusted, {...attestation, video_id:'other-video'})).reason, 'source_not_publicly_verified');
-  assert.equal((await submit(trusted, {...attestation, original_sha256:'0'.repeat(64)})).reason, 'source_not_publicly_verified');
-  assert.equal((await submit(trusted, attestation)).status, 'available');
-  const bili = 'https://www.bilibili.com/video/BV1234567890?p=2';
-  const playback = {...attestation,type:'bilibili_public_playback',video_id:'BV1234567890',part:2};
-  assert.equal((await submit(plain, playback, bili)).reason, 'source_not_publicly_verified');
-  assert.equal((await submit(trusted, {...playback,part:1}, bili)).reason, 'source_not_publicly_verified');
-  assert.equal((await submit(trusted, playback, bili)).status, 'available');
-  assert.equal(writes, 2);
+  const token = (await post('session', {account:'owner',password})).token;
+  const submit = (url, auth) => post('publication', {url, original:'短稿'}, auth);
+  const zhihu = 'https://www.zhihu.com/question/101/answer/202';
+  assert.equal((await submit(zhihu)).error, 'shared_login_required');
+  for (const url of [zhihu, 'https://www.youtube.com/watch?v=aB_c-234567',
+    'https://www.bilibili.com/video/BV1234567890?p=2', 'https://unregistered.example/content']) {
+    assert.equal((await submit(url, token)).status, 'available');
+  }
+  assert.equal(writes, 4);
 });
 
 test('registered public web sources are independently verified without credentials or cross-URL redirects', async () => {
@@ -122,16 +115,17 @@ test('a verified publication separates original and reading files and reuses onl
   const url = 'https://mp.weixin.qq.com/s/fixture-public-article';
   const title = 'Fixture public article';
   const reading = markdown + '\n\n## 阅读前置卡\n\nA guide with source links.';
-  let indexed, verificationCalls = 0;
+  let indexed, publicationWrites = 0;
   const blobs = new Map();
   const password = 'fixture-account-only';
   const server = createSharedLibraryServer({
     config: { accounts: { owner: await createSharedAccount(password) }, gitleaks: 'fixture' },
-    verifyReadingSource: async source => { verificationCalls++; return source === url ? { title, markdown } : null; },
+    fetchArticle: async () => assert.fail('stored artifacts must never need source acquisition'),
     scan: async () => true,
     github: {
       ready: true, lookup: async () => ({ commit, record: indexed }), lookupArticleHash: async () => ({ commit, record: indexed }),
       publishReading: async ({ url: source, original, reading: body, processingSha256, optionsSha256 }) => {
+        publicationWrites++;
         const sha = sharedDigest(original);
         const originalEntry = { path: sharedOriginalRevisionPath(source, sha), sha256: sha };
         blobs.set(originalEntry.path, original);
@@ -185,7 +179,10 @@ test('a verified publication separates original and reading files and reuses onl
   assert.equal(receipt.status, 'available');
   assert.notEqual(receipt.original.path, receipt.reading.path);
   assert.equal(blobs.get(receipt.reading.path), reading);
-  assert.equal(verificationCalls, 1);
+  const repeated = await syncSharedReading(root, { ...supplied, markdown: reading + '\nAnother rendering.' }, { fetchImpl });
+  assert.equal(repeated.reused, true);
+  assert.deepEqual(repeated.reading, receipt.reading);
+  assert.equal(publicationWrites, 2);
   await updateSharedLibrarySettings(root, { action: 'logout' });
   const same = await downloadSharedReading(root, { url, processingOptions: { include_reading_guide: true, translate: true } }, { fetchImpl });
   assert.equal(same.readingBytes.toString(), reading);

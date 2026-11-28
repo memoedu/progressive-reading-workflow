@@ -40,11 +40,9 @@ export async function reconcileReadingPublication(root, { url, file, retained, i
       indexedReading.reading.processing_sha256 === sharedReadingProcessingKey({ processingOptions }));
   if (matchingEdition) return indexedReceipts;
 
-  const source = { url, original, processingOptions, archivedOriginalSha256: indexedOwnOriginal ? rawHash : undefined,
-    indexed: indexedOwnOriginal && !matchingEdition ? { ...indexed, reading: undefined } : indexed,
-    archiveHintSha256: request.source_metadata?.shared_original_sha256 };
+  const source = { url, title: request.source_metadata?.title, original, processingOptions };
   const { shared_reading: originalReceipt } = indexedOwnOriginal ? { shared_reading: indexedOriginal }
-    : await synchronize(root, { ...source, defer: true });
+    : await synchronize(root, source);
   const readingReceipts = generated ? await synchronize(root, { ...source, markdown: bytes.toString('utf8') }) : {};
   return { ...indexedReceipts, shared_original: originalReceipt, ...readingReceipts };
 }

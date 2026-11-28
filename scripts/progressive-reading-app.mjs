@@ -36,7 +36,6 @@ import { processCollectionTask } from "./collection-import.mjs";
 import { handleImportCenter } from '../site-import/http.mjs';
 import { processSiteTask } from '../site-import/tasks.mjs';
 import { capturedArticle, findSiteArticleCapture } from '../site-import/article-capture.mjs';
-import { CAPTURE_VERSION } from '../site-import/network.mjs';
 import { taxonomyFolder } from '../site-import/taxonomy.mjs';
 import { fetchYoutubeSubtitleDraft, youtubeVideoIdentity } from "./youtube-subtitle-import.mjs";
 import { LiveCookieSnapshot, defaultCookieDataRoot, COOKIE_SNAPSHOT_ENDPOINT, COOKIE_STATUS_ENDPOINT, safeError as safeCookieSnapshotError } from "./live-cookie-snapshot.mjs";
@@ -1317,19 +1316,12 @@ async function writeBrowserDraftCommitUnlocked(rawBody, destination = "reading",
       orphanState = {state, stateBytes};
     }
   }
-  if (draft.sourceType === 'url_import' && options.anonymousOriginalCapture === true) {
-    await originalMarkdownBackup.capture({ file: target, url: parsed.href, markdown: converted.markdown, authenticated: false });
-  }
   const publicationSource = {
-    url: parsed.href, original: converted.markdown,
-    archivedOriginalSha256: options.archivedOriginalSha256,
-    archiveHintSha256: draft.sourceMetadata.shared_original_sha256,
-    publicCapture: options.anonymousOriginalCapture === true && sharedPublicWebCandidate(parsed.href),
-    indexed: indexed && { ...indexed, reading: undefined },
+    url: parsed.href, title: converted.title || draft.title, original: converted.markdown,
     processingOptions: draft.processingOptions
   };
-  const sourceSharing = standardize && process.env.NODE_ENV !== 'test'
-    ? await synchronizeReadingPublication(workflowRoot, { ...publicationSource, defer: true })
+  const sourceSharing = !sharedReading && process.env.NODE_ENV !== 'test'
+    ? await synchronizeReadingPublication(workflowRoot, publicationSource)
     : {};
   const preprocessing = standardize
     ? await standardizeBrowserDraft(draft, parsed, converted, options.onProgress)
@@ -1636,7 +1628,6 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
     } else {
       if (articleSource) destinationFolder = taxonomyFolder(destinationFolder, source.metadata?.taxonomy);
       fetched = { requestedUrl:url, finalUrl:source.url, redirectChain:[],
-        anonymousSiteCapture: source.capture_version === CAPTURE_VERSION && !source.metadata?.repository && !source.metadata?.shared_original_sha256,
         draft:{id:'site-'+shortHash(source.url),url:source.url,title:source.title,sourceType:'url_import',pageText:source.markdown,cachedRssMarkdown:source.markdown,
         sourceMetadata:{...source.metadata,source_url:url,canonical_url:source.url,input_form:'written',title:source.title,capture_agent:'verified_site_source',source_response:source.source_response,published_at:source.metadata?.published_at||null}},
         fetchReceipt:{source_reused:source.metadata?.shared_original_sha256?'shared_library':'verified_site_capture',source_response:source.source_response,browser_tab_created:false} };
@@ -1650,11 +1641,6 @@ async function importUrlThroughStandardWorkflow(url, { userInstruction = "", des
     result = await writeBrowserDraftCommit({ draft: fetched.draft }, "reading", {
       standardize: processingMode==='standard_preprocess', onProgress, cachedRssMarkdown:fetched.draft.cachedRssMarkdown,
       captureMethod:fetched.fetchReceipt.source_reused,
-      anonymousOriginalCapture: !pendingInputPath && !cachedRssDraft && (fetched.anonymousSiteCapture === true ||
-        (fetched.fetchReceipt.authenticated_fetch === false && !fetched.fetchReceipt.source_reused &&
-          fetched.fetchReceipt.shared_library?.status !== 'pending_review')),
-      archivedOriginalSha256: !pendingInputPath && !cachedRssDraft && fetched.fetchReceipt.source_reused === 'shared_library'
-        ? fetched.draft.sourceMetadata.shared_original_sha256 : undefined,
       indexedOriginal: sharedArtifacts && { ...sharedArtifacts, reading: undefined },
       missingPublicationHash:articleSource?.missing_publications?.[url]
     });

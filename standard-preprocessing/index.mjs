@@ -791,7 +791,7 @@ async function publishReadingArtifactUnlocked(result, {
     sharing = await synchronizeReadingPublication(libraryRoot, {
       url: sourceUrl,
       original: request?.material?.markdown,
-      archiveHintSha256: request?.source_metadata?.shared_original_sha256,
+      title: request?.source_metadata?.title,
       processingOptions: request?.processing_options,
       ...publicationSource,
       markdown: written && sha256(written) === publishedMarkdownHash ? written.toString('utf8') : undefined,

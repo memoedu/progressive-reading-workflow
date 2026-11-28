@@ -180,7 +180,7 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     }
   }
   const sourceSharing = libraryRoot && !privatePublication
-    ? await synchronizeReadingPublication(libraryRoot, { ...shareRequest, original:sourceMedia.markdown, publicCapture:true, defer:true })
+    ? await synchronizeReadingPublication(libraryRoot, { ...shareRequest, original:sourceMedia.markdown })
     : {};
   // The single-pass adapter owns speech editing. The standard workflow receives
   // its completed written text and may only add the requested reading guide.
@@ -235,7 +235,7 @@ export async function importTranscript({ inputDir, outputDir, publishPath, proce
     await writeExact(path.join(attachmentRoot, publishedAssetRelative(record.path)), data);
   }
   const publication = await publishReadingArtifact(result, { publishPath, runDir: outputDir,
-    publicationSource:privatePublication ? null : {...shareRequest, original:sourceMedia.markdown, publicCapture:true} });
+    publicationSource:privatePublication ? null : {...shareRequest, original:sourceMedia.markdown} });
   if (publication.preserved_existing && path.resolve(publication.markdown.path) !== path.resolve(publishPath)) {
     const receipt={status:'completed',preserved_existing:true,quality_status:publication.quality_status,publication,model:run.result.receipt.model,attachments:[],attachments_verified:0};
     await fs.writeFile(path.join(outputDir,'video-receipt.json'),JSON.stringify(receipt,null,2)+'\n');
