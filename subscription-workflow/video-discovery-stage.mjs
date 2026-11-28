@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { digest, readJson } from './config.mjs';
+import { receiveDiscovery } from './remote-discovery-capture.mjs';
 import { biliApi, canonicalUrl, discover, itemKey, videoId } from '../video-workflow/watch-core.mjs';
 
 const schema = 'progressive-reading.video-discovery/v1';
@@ -11,7 +12,7 @@ const stableBvid = /^BV[0-9A-Za-z]{10}$/u;
 const maxBytes = 4 * 1024 * 1024;
 const hash = value => digest(JSON.stringify(value));
 const fail = reason => { throw Error('video_discovery_' + reason); };
-const safeCode = message => /^video_discovery_[a-z_]+$/u.test(message || '') ? message : 'video_discovery_unavailable';
+const safeCode = message => /^(?:video_discovery|scheduled_discovery)_[a-z_]+$/u.test(message || '') ? message : 'video_discovery_unavailable';
 const positiveInt = n => Number.isSafeInteger(n) && n > 0;
 const itemFields = new Set(['key','bvid','cid','part','parts','video_title','part_title','duration','url','published_at']);
 const projectWatch = watch => ({bvid:videoId(watch.url),collection:watch.collection !== false,season_id:watch.season_id ?? null});
@@ -107,7 +108,7 @@ function requestMac(binding, request) {
   });
 }
 
-export async function boundVideoDiscovery(home,cycle,revision,watches,{send=requestMac}={}) {
+export async function boundVideoDiscovery(home,cycle,revision,watches,{send=requestMac,receive=receiveDiscovery}={}) {
   if (!scheduledCycle.test(cycle) || !watches.length) return null;
   try {
     const binding=await readJson(path.join(home,'remote-video-discovery.json'));
@@ -115,11 +116,18 @@ export async function boundVideoDiscovery(home,cycle,revision,watches,{send=requ
     if (binding.host !== macHost || !/^\/Users\/[A-Za-z0-9_-]+$/u.test(binding.home || '')) fail('invalid_binding');
     const request={schema,cycle,revision,watches:watches.map(projectWatch)};
     validateRequest(request);
-    const response=await send(binding,request);
-    const results=verifyVideoDiscovery(request,response);
+    // The autonomous registry binds the configured collection. Windows still
+    // checks the durable season anchor in its own cursor before observation.
+    const captureRequest=binding.scheduledCapture===true
+      ? {...request,watches:request.watches.map(watch=>({...watch,season_id:null}))} : request;
+    const sealed=binding.scheduledCapture===true ? await receive(binding,'bilibili',captureRequest) : null;
+    const response=sealed ? sealed.result : await send(binding,request);
+    const results=verifyVideoDiscovery(captureRequest,response);
+    if(sealed) results.forEach((result,index)=>validateResult(request.watches[index],result));
     const bySource=new Map(watches.map((watch,index)=>[watch.subscription_id,results[index]]));
     return {bySource,receipt:{executor:'mac',cycle,sourceCount:results.length,
       requestSha256:response.requestSha256,resultSha256:response.resultSha256,
+      ...(sealed ? {origin:'scheduled_capture',captureSha256:sealed.sha256,capturedAt:sealed.finishedAt} : {}),
       views:results.reduce((sum,result)=>sum+result.trace.viewBvids.length,0),
       archivePages:results.reduce((sum,result)=>sum+result.trace.archivePages.length,0)}};
   } catch(error) {

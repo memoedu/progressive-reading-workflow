@@ -31,6 +31,14 @@ Windows 核验绑定当期、修订、来源及结果的哈希，再检查合集
 
 Windows 保持唯一领取和游标写入，继续使用原字幕和截图入口、处理与发布账本。Mac 的列表调用使用公开接口和相同解析器。
 
+## Mac 自主订阅发现
+
+Mac 的两个只读 LaunchAgent 可分别于北京时间 07:00 和 08:00 封存知乎专栏和 B 站公开列表。登记表只包含启用的专栏、视频标识和 Windows 配置修订。Windows 保存来源后同步修订，原任务补跑时再尝试同步；相同修订不可替换为不同来源配置。
+
+原绑定加上 `scheduledCapture: true` 后，Windows 只领取 Mac 已封存的同周期回执。Windows 原任务的错过补跑会从待领周期恢复原作业 ID。正在运行的 Mac 周期可短时等候，回执缺失、校验失败或合集与原 Windows 游标的合集号冲突时，使用 Windows 原发现。成功处理终态保存后向 Mac 确认原作业 ID 和封存哈希。重复领取或确认读回同一份证据。
+
+安装入口为 `python3 subscription-workflow/configure-mac-discovery-stage.py <zhihu|bilibili>`。先发布初始登记表再安装。知乎使用 Mac 当前账号的 Chrome 会话，且 macOS 必须允许原生定时进程使用 Chrome 自动化。B 站公开发现无需浏览器或账号。现有 Windows 通知、审核、正文、游标和发布路径仍持有原业务状态。回退时关闭绑定中的 `scheduledCapture` 可恢复原即时跨机发现，关闭整个绑定可恢复 Windows 发现。可单独停用对应 Mac 采集标签，保留封存的周期文件。
+
 ## 日报和周报
 
 候选输入位于 `<stage-home>/<cycle>/<kind>/input`，分为 `workspace`、`state`、`rss`、`video` 四个子目录，另以 `roots.json` 记录四个原 Windows 输入根。已有正文的正式传输由阅读同步负责。冻结输入排除 Local IR 与浏览器凭据。

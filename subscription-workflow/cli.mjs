@@ -1,8 +1,8 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { codeRoot, initialize, paths, loadConfig, writeJson, withLock, syncSavedRssRegistry } from './config.mjs';
-import { JOB_KINDS, enqueue, enqueueVideoRequest, launchWorker, drain, status, initializeActivity, localDate } from './service.mjs';
+import { codeRoot, initialize, paths, loadConfig, writeJson, withLock, syncSavedRssRegistry, syncSavedDiscoveryRegistry } from './config.mjs';
+import { JOB_KINDS, enqueue, enqueueDiscoveryCycles, enqueueVideoRequest, launchWorker, drain, status, initializeActivity, localDate } from './service.mjs';
 import { downloadSharedReading, downloadSharedVersion, resolveSharedMaterial, syncSharedReading } from './shared-library-client.mjs';
 import { sharedDigest, sharedReadingSource } from './shared-library.mjs';
 
@@ -54,11 +54,12 @@ export async function main(argv=process.argv.slice(2)) {
       config.revision++;
       await writeJson(p.config,config);
     });
-    await syncSavedRssRegistry(p.home);
+    await Promise.all([syncSavedRssRegistry(p.home),syncSavedDiscoveryRegistry(p.home)]);
     return {status:'active'};
   }
   if(command==='status')return status(root);
   if(command==='drain')return drain(root);
+  if(command==='enqueue-discovery')return enqueueDiscoveryCycles(root,options.kind);
   if(command==='run-scheduled-rss' || command==='run-scheduled-report') {
     const kind = command==='run-scheduled-rss' ? 'rss' : options.kind;
     if (!['rss','daily','weekly'].includes(kind) || !/^scheduled-\d{4}-\d{2}-\d{2}$/u.test(options.key || '')) {

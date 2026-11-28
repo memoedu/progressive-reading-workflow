@@ -12,6 +12,7 @@ import { recordExceptions, acknowledgeExceptions, exceptionFile } from './except
 import { normalizeVideoRequest, runVideoRequest } from './video-request.mjs';
 import {subscriptionImportIssues,readableImportError} from './import-issues.mjs';
 import { retryReadingPublications } from './reading-publication-outbox.mjs';
+import { acknowledgeRemoteDiscovery, latestDiscoveryCycle, listDiscoveryCycles, readDiscoveryBinding, synchronizeDiscoveryRegistry } from './remote-discovery-capture.mjs';
 
 const execute = promisify(execFile);
 export const JOB_KINDS = ['rss','bilibili','zhihu','daily','weekly','decisions','retry','video_import'];
@@ -46,6 +47,42 @@ export async function enqueue(root, kind, key = localDate()) {
     const job = { id, kind, cycle: key, status: 'queued', created_at: stamp(), steps: {} };
     await writeJson(file,job); return job;
   }, { waitMs: 5000 });
+}
+
+async function settleDiscovery(home,job,binding) {
+  const receipt=job.steps?.scan?.result?.discovery;
+  if (!['zhihu','bilibili'].includes(job.kind) || !['completed','completed_with_issues'].includes(job.status) ||
+    receipt?.origin!=='scheduled_capture' || receipt.cycle!==job.cycle) return;
+  try {
+    binding ||= await readDiscoveryBinding(home,job.kind);
+    if (binding?.enabled!==true || binding.scheduledCapture!==true) return;
+    await acknowledgeRemoteDiscovery(binding,job.kind,job.cycle,{sha256:receipt.captureSha256,jobId:job.id});
+  } catch {
+    // The existing job is durable. The next native schedule checks its receipt again.
+    console.warn(JSON.stringify({event:'scheduled_discovery_ack_pending',kind:job.kind,cycle:job.cycle}));
+  }
+}
+
+export async function enqueueDiscoveryCycles(root,kind,{now=new Date(),list=listDiscoveryCycles,sync=synchronizeDiscoveryRegistry}={}) {
+  if (!['zhihu','bilibili'].includes(kind)) throw Error('Invalid scheduled discovery kind');
+  const p=paths(root);
+  const binding=await readDiscoveryBinding(p.home,kind).catch(()=>null);
+  if (binding?.enabled!==true || binding.scheduledCapture!==true) {
+    const job=await enqueue(root,kind,'scheduled-'+localDate());
+    return {cycle:job.cycle,jobs:[{id:job.id,cycle:job.cycle,status:job.status}]};
+  }
+  const latest=latestDiscoveryCycle(kind,now);
+  await sync(p.home).catch(()=>null);
+  const revision=(await readJson(p.config))?.revision;
+  const pending=(await list(binding,kind,latest).catch(()=>[])).filter(item=>item.revision===revision);
+  const cycles=[...new Set([...pending.map(item=>item.cycle),latest])].sort();
+  const jobs=[];
+  for (const cycle of cycles) {
+    const job=await enqueue(root,kind,cycle);
+    if (pending.some(item=>item.cycle===cycle)) await settleDiscovery(p.home,job,binding);
+    jobs.push({id:job.id,cycle:job.cycle,status:job.status});
+  }
+  return {cycle:latest,jobs};
 }
 
 export async function enqueueVideoRequest(root, input, { retry = false } = {}) {
@@ -315,7 +352,9 @@ export async function drain(root = codeRoot, scheduled = null) {
       job.status='running'; job.pid=process.pid; job.started_at ||= stamp(); await save();
       try { const result = await runJob(root,job,save); job.result=result; job.status=result.status; delete job.error; }
       catch (error) { job.status='failed'; job.error=cleanError(error); await noticeFaults(root,job.kind,[{error:job.error}]); }
-      job.completed_at=stamp(); delete job.current_step; await save(); completed.push({ id:job.id,kind:job.kind,status:job.status });
+      job.completed_at=stamp(); delete job.current_step; await save();
+      await settleDiscovery(paths(root).home,job);
+      completed.push({ id:job.id,kind:job.kind,status:job.status });
     }
     return { status:'idle',completed, ...(target ? {job:target.id} : {}) };
   }, { waitMs: scheduled ? 45000 : 0 });
