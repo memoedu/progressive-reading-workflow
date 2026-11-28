@@ -94,6 +94,57 @@ test('registered public web sources are independently verified without credentia
   assert.equal(requests, 1);
 });
 
+test('shared Markdown supports two 2 MB documents in one publication and pins the download limit to bytes', async t => {
+  const password = 'isolated-fixture-password';
+  const owner = await createSharedAccount(password);
+  const limit = 2_000_000;
+  const heading = '# Fixture\n\n';
+  const paragraph = '字\n"';
+  const repeats = Math.floor((limit - Buffer.byteLength(heading)) / Buffer.byteLength(paragraph));
+  const content = heading + paragraph.repeat(repeats);
+  const original = content + 'x'.repeat(limit - Buffer.byteLength(content));
+  const reading = original.slice(0, -1) + 'y';
+  assert.equal(Buffer.byteLength(original), limit);
+  assert.equal(Buffer.byteLength(reading), limit);
+  const originalRecord = { ...record, original: { ...record.original, sha256: sharedDigest(original) } };
+  const writes = [];
+  const server = createSharedLibraryServer({
+    config: { accounts: { owner }, gitleaks: 'fixture' },
+    scan: async () => true,
+    github: {
+      ready: true,
+      lookup: async () => ({ commit, record: originalRecord }),
+      publishReading: async value => { writes.push(value); return { status: 'available' }; },
+      publishVersion: async () => ({ status: 'available', commit })
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const endpoint = 'http://127.0.0.1:' + server.address().port + '/progressive-reading-sync/';
+  const post = (action, body, token) => fetch(endpoint + action, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) },
+    body: JSON.stringify(body)
+  }).then(response => response.json());
+  const token = (await post('session', { account: 'owner', password })).token;
+  const input = { url: existingUrl, original, reading, processing_sha256: 'a'.repeat(64) };
+  assert.equal((await post('publication', input, token)).status, 'available');
+  assert.equal(sharedDigest(writes[0].reading), sharedDigest(reading));
+  assert.equal((await post('publication', { ...input, original: original + '!' }, token)).error, 'shared_invalid_reading');
+  assert.equal(writes.length, 1);
+  const variant = { url: existingUrl, original_sha256: originalRecord.original.sha256, markdown: reading, kind: 'translation' };
+  assert.equal((await post('variant', variant, token)).status, 'available');
+  assert.equal((await post('variant', { ...variant, markdown: reading + '!' }, token)).error, 'shared_invalid_version');
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shared-markdown-size-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const fetchImpl = body => async url => String(url).endsWith('/resolve') ?
+    Response.json({ status: 'available', commit, record: originalRecord }) : new Response(body);
+  const recovered = await resolveSharedSubscription(root, existingUrl, null, { fetchImpl: fetchImpl(original) });
+  assert.equal(sharedDigest(recovered.article.markdown), originalRecord.original.sha256);
+  await assert.rejects(resolveSharedSubscription(root, existingUrl, null, { fetchImpl: fetchImpl(original + '!') }),
+    /shared_download_too_large/u);
+});
+
 test('Zhihu answer and article URLs go through anonymous source verification', async () => {
   const answer = 'https://www.zhihu.com/question/101/answer/202';
   const post = 'https://zhuanlan.zhihu.com/p/303';
