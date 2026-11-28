@@ -233,7 +233,13 @@ export async function processSiteTask(root,task,{broker,runRequest,planner,fetch
       return inventory;
     },
     verify:async collection=>{
-      if(settings.subscribe_rss&&!run.rss?.subscription_id){run.stage='验证并登记 RSS 订阅';await saveRun(root,run);run.rss=await ensureSiteRss(root,settings,{fetchPage});await saveRun(root,run);}
-      return verifySiteCollection(root,settings,collection,id,{broker,onProgress:async stage=>{run.stage=stage;run.updated_at=now();await saveRun(root,run);}});
+      const verification=await verifySiteCollection(root,settings,collection,id,{broker,onProgress:async stage=>{run.stage=stage;run.updated_at=now();await saveRun(root,run);}});
+      if(collection.inventory.complete&&verification.verified===verification.expected&&settings.subscribe_rss&&!run.rss?.subscription_id){
+        run.stage='验证并登记 RSS 订阅';await saveRun(root,run);
+        try{run.rss=await ensureSiteRss(root,settings,{fetchPage});}
+        catch(error){run.rss={status:'failed',error:error.message};}
+        await saveRun(root,run);
+      }
+      return verification;
     }});
 }

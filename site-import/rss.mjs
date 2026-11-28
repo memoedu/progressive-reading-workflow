@@ -3,17 +3,33 @@ import {canonicalUrl,loadConfig,saveSource} from '../subscription-workflow/confi
 import {fetchSiteText} from './network.mjs';
 import {parseFeedDocument} from '../rss-source/core.mjs';
 
+const FEED_MAX_BYTES=12*1024*1024;
+
+function advertisedFeeds(page){
+  const dom=new JSDOM(page.body,{url:page.url});
+  try{
+    const document=dom.window.document;
+    const links=[...document.querySelectorAll('link[rel~=alternate][href]')].filter(link=>/rss|atom/iu.test(link.type));
+    const anchors=[...document.querySelectorAll('a[href]')].filter(link=>
+      /rss|atom/iu.test(link.type)||/^\s*(?:rss|atom)(?:\s+feed)?\s*$/iu.test(link.textContent)||
+      /^\/(?:rss|atom|feed)\.xml\/?$/iu.test(link.pathname));
+    const candidates=new Set();
+    for(const link of [...links,...anchors]){
+      try{candidates.add(canonicalUrl(new URL(link.getAttribute('href'),page.url).href));}catch{/* Skip invalid links. */}
+    }
+    return [...candidates];
+  }finally{dom.window.close();}
+}
+
 // Uses the existing subscription registry and scheduler. Never creates a second feed queue.
 export async function ensureSiteRss(root,settings,{fetchPage=fetchSiteText}={}){
   if(!settings.subscribe_rss)return null;
   const page=await fetchPage(settings.url,{base:settings.url});
-  const dom=new JSDOM(page.body,{url:page.url});
-  let candidates;
-  try{candidates=[...new Set([...dom.window.document.querySelectorAll('link[rel~=alternate]')].filter(n=>/rss|atom/iu.test(n.type)).map(n=>canonicalUrl(n.href)))];}finally{dom.window.close();}
-  if(!candidates.length)throw Error('网站未声明 RSS/Atom，请取消同时订阅后重试，或在订阅管理中提供订阅地址');
+  const candidates=advertisedFeeds(page);
+  if(!candidates.length)throw Error('网站未声明 RSS/Atom，可在订阅管理中填写已知的订阅地址');
   let feed,error;
   for(const url of candidates){try{
-    const response=await fetchPage(url,{base:url});
+    const response=await fetchPage(url,{base:url,maxBytes:FEED_MAX_BYTES});
     await parseFeedDocument(response.body,response.url);
     feed=canonicalUrl(response.url);break;
   }catch(e){error=e;}}

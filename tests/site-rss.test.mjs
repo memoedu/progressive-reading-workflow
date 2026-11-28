@@ -5,14 +5,17 @@ import path from 'node:path';
 import {JSDOM} from 'jsdom';
 import {pathToFileURL} from 'node:url';
 import {ensureSiteRss} from '../site-import/rss.mjs';
-import {normalizeSiteSource} from '../site-import/store.mjs';
-import {siteProcessingOptions} from '../site-import/tasks.mjs';
+import {normalizeSiteSource,readRun,runId,saveRun} from '../site-import/store.mjs';
+import {processSiteTask,siteProcessingOptions} from '../site-import/tasks.mjs';
 import {paths,writeJson,loadConfig,sourceProcessingOptions,SCHEMA} from '../subscription-workflow/config.mjs';
 import {resolveProcessingPlan} from '../standard-preprocessing/lib/workflow-plan.mjs';
 
 test('site default preserves structure, translates English and omits guide; explicit no-translation remains available',()=>{
  const source=normalizeSiteSource({url:'https://another.example',name:'Independent'}),options=siteProcessingOptions(source);
- assert.equal(source.processing_mode,'standard_preprocess');assert.equal(source.generate_guide,false);assert.equal(source.subscribe_rss,false);
+ assert.equal(source.processing_mode,'standard_preprocess');assert.equal(source.generate_guide,false);assert.equal(source.subscribe_rss,true);
+ assert.equal(normalizeSiteSource({url:source.url,subscribe_rss:false}).subscribe_rss,false);
+ assert.equal(normalizeSiteSource({}, {...source,subscribe_rss:false}).subscribe_rss,false);
+ assert.equal(normalizeSiteSource({}, {...source,subscribe_rss:undefined}).subscribe_rss,false);
  for(const language of ['en','zh']){
   const plan=resolveProcessingPlan(options,{input_form:'written',source_language:language,content_profile:'natural_language'});
   assert.equal(plan.body_mode,'preserve');assert.equal(plan.choices.include_reading_guide.enabled,false);assert.equal(plan.choices.translate.enabled,language==='en');
@@ -29,8 +32,30 @@ test('RSS opt-in validates advertised feed, registers once and keeps existing su
  assert.equal(await ensureSiteRss(root,{...source,subscribe_rss:false},{fetchPage}),null);assert.equal(reads,0);
  const first=await ensureSiteRss(root,source,{fetchPage});assert.equal(first.status,'created');
  const second=await ensureSiteRss(root,source,{fetchPage});assert.equal(second.subscription_id,first.subscription_id);assert.equal(second.status,'existing');
+ const fromAnchor=await ensureSiteRss(root,source,{fetchPage:async(url,options)=>{
+  if(new URL(url).pathname==='/')return {url,body:'<a href="/feed.xml">Atom</a>'};
+  assert.ok(options.maxBytes>6*1024*1024);
+  return fetchPage(url);
+ }});
+ assert.equal(fromAnchor.subscription_id,first.subscription_id);
  const config=await loadConfig(root);assert.equal(config.subscriptions.length,1);assert.equal(config.subscriptions[0].mode,'standard_preprocess');assert.equal(config.subscriptions[0].generate_guide,false);
  await assert.rejects(ensureSiteRss(root,source,{fetchPage:async url=>({url,body:'<head></head>'})}),/未声明 RSS/u);
+});
+test('a missing feed is recorded separately from a completed site collection',async()=>{
+ const root=await fs.mkdtemp('D:/Artifacts/ProgressiveReading/site-rss-result-');
+ const settings=normalizeSiteSource({url:'https://independent.example',generate_index:false});
+ const id=runId(root);
+ await saveRun(root,{id,settings,phase:'queued'});
+ let terminal;
+ await processSiteTask(root,{id:'fixture',site_import:{run_id:id,settings},collection:{
+  inventory:{complete:true,articles:[]},batches:[],results:[]
+ }},{broker:{leaseMs:60000,updateTaskProgress:async()=>{},completeTask:async(_id,result)=>{terminal=result;}},
+  fetchPage:async url=>({url,body:'<head></head>'})});
+ const run=await readRun(root,id);
+ assert.equal(terminal.ok,true);
+ assert.equal(run.phase,'completed');
+ assert.equal(run.rss.status,'failed');
+ assert.match(run.rss.error,/未声明 RSS/u);
 });
 test('site form submits RSS checkbox and no-guide state through the same save endpoint',async()=>{
  const code=(await fs.readFile(new URL('../site-import/web/app.mjs',import.meta.url),'utf8')).replace("'/import/client.mjs'",JSON.stringify(pathToFileURL(path.resolve('scripts/browser-import-web/client.mjs')).href));
@@ -40,7 +65,9 @@ test('site form submits RSS checkbox and no-guide state through the same save en
   if(url==='/api/site-imports/source'){submitted=JSON.parse(options.body);return Response.json({});}
   return Response.json(url==='/api/site-imports'?{revision:1,sources:[]}:url.endsWith('/history')?{requests:[],legacy_jobs:[]}:{});
  }});
- try{mounted.editor();doc.getElementById('site-url').value='https://fixture.example';doc.getElementById('site-rss').checked=true;
+ try{mounted.editor({subscribe_rss:false});assert.equal(doc.getElementById('site-rss').checked,false);
+  mounted.editor();doc.getElementById('site-url').value='https://fixture.example';
+  assert.equal(doc.getElementById('site-rss').checked,true);
   assert.equal(doc.getElementById('site-mode').value,'standard_preprocess');assert.equal(doc.getElementById('site-guide').value,'false');
   doc.getElementById('site-form').dispatchEvent(new dom.window.Event('submit',{cancelable:true}));
   for(let i=0;i<30&&!submitted;i++)await new Promise(r=>setTimeout(r,10));
