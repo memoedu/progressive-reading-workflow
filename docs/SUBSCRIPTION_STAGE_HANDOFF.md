@@ -29,7 +29,13 @@ Windows 订阅数据目录的 `remote-video-discovery.json` 可启用原 08:00 �
 
 Windows 核验绑定当期、修订、来源及结果的哈希，再检查合集身份、`BV + CID`、分 P 顺序和完整性。原程序需要翻页时，回执包含连续页号、各页收录量与平台总数。SSH 失联、列表不完整或回执失配时，原 worker 在同一周期调用 Windows 的 `discover`。关闭绑定也回到同一路径。业务回执在 `steps.scan.result.discovery`。
 
-Windows 保持唯一领取和游标写入，继续使用原字幕和截图入口、处理与发布账本。Mac 的列表调用使用公开接口和相同解析器。
+Windows 保持唯一领取、游标写入、截图与发布账本。Mac 的列表调用使用公开接口和相同解析器。
+
+## B 站平台字幕
+
+原视频订阅任务优先复用现有分 P 的原字幕文件。现有 `remote-video-media.json` 加上 `fetchSubtitles: true` 后，尚无原文件的订阅分 P 可通过固定 SSH 请求 Mac 正式 Chrome 会话读取平台中文字幕。两端核验 BV、CID、分 P、视频时长、时间轴顺序和连续覆盖。只有符合条件的完整轨会以原有字幕文件格式原子落盘。平台访问地址和会话保留在 Mac，SSH 回传字幕、章节与校验哈希。
+
+没有中文版整轨、时间轴缺段、登录失效、无法连接或回执不匹配时，任务继续走 Windows 原提取器。关闭 `fetchSubtitles` 可单独回退该阶段。Windows 继续使用原截图、审核、发布及通知路径。复制经过验证的 `source.json` 和 `transcript.json` 到隔离的同分 P 原始缓存，可用原入口离线重建字幕映射。
 
 ## Mac 自主订阅发现
 
