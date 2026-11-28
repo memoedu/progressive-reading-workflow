@@ -5,15 +5,15 @@ import {materialKey,saveSourceMaterial} from './catalog.mjs';
 import {meaningfulLength} from './content-length.mjs';
 import {includesPublication} from './history.mjs';
 import {readSealedDiscovery} from './remote-discovery-capture.mjs';
-import {readNativeZhihuReportBodies,verifyZhihuDiscovery} from './zhihu-discovery-stage.mjs';
-import {htmlArticleToMarkdown} from '../scripts/browser-page-markdown.mjs';
+import {verifyZhihuDiscovery} from './zhihu-discovery-stage.mjs';
+import {readZhihuReportBodies} from './report-zhihu-body-capture.mjs';
 import {LONG_THRESHOLD,prepareIsolatedReportPreview} from '../rss-reading/core.mjs';
 
 const hash=value=>digest(JSON.stringify(value));
 const localDate=instant=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',dateStyle:'short'}).format(instant);
 const absent=reason=>({status:'waiting_input',reason,items:[],pending:[]});
 
-export async function replayReportZhihu(home,plan,{readBodies=readNativeZhihuReportBodies,preparePreview=prepareIsolatedReportPreview}={}) {
+export async function replayReportZhihu(home,plan,{readBodies=readZhihuReportBodies,preparePreview=prepareIsolatedReportPreview}={}) {
   const checkpoint=plan.zhihuCheckpoint;
   if(!checkpoint?.sources.length)return absent('zhihu_report_checkpoint_missing');
   const captures=path.join(path.dirname(home),'SubscriptionDiscoveryCapture');
@@ -59,7 +59,10 @@ export async function replayReportZhihu(home,plan,{readBodies=readNativeZhihuRep
       });
       return selected.length ? [{url:source.url,source,items:selected}] : [];
     });
-    const bodies=groups.length ? await readBodies(groups.map(({url,items})=>({url,items}))).catch(()=>null) : new Map();
+    let bodies;
+    try { bodies=groups.length ? await readBodies(captures,request,sealed) : new Map(); }
+    catch { return absent('zhihu_report_body_capture_mismatch'); }
+    if(!bodies)return absent('zhihu_report_body_capture_missing');
     const failures=new Map();
     for(const {source,url,items:selected} of groups){
       for(const item of selected){
@@ -67,11 +70,11 @@ export async function replayReportZhihu(home,plan,{readBodies=readNativeZhihuRep
         if(seen.has(key))continue;
         const body=bodies?.get(url)?.get(item.key);
         try{
-          if(!body?.html)throw Error(body?.reason || 'zhihu_report_native_session_unavailable');
+          if(!body?.markdown)throw Error(body?.reason || 'zhihu_report_body_not_sealed');
           if(!item.revision || item.url!==body.url || item.revision!==body.revision)throw Error('zhihu_report_article_revision_changed');
-          if(body.method!=='zhihu_column_embedded_body' || /<\s*(?:script|iframe|form|object|embed)\b|\b(?:access_token|sessionid|xsrf|authorization)=/iu.test(body.html))
+          if(body.method!=='zhihu_column_embedded_body' || body.bodySha256!==digest(body.markdown))
             throw Error('zhihu_report_article_body_unverified');
-          const markdown=htmlArticleToMarkdown({html:body.html,sourceUrl:item.url,title:item.title}).markdown;
+          const markdown=body.markdown;
           const length=meaningfulLength(markdown);
           if(!length)throw Error('zhihu_report_article_body_incomplete');
           if(length<LONG_THRESHOLD)throw Error('short_report_delivery_owned_by_windows');
