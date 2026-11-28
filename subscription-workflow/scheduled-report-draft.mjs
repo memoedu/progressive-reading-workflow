@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {homedir} from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as pause} from 'node:timers/promises';
@@ -44,7 +45,7 @@ function exact(object,keys) {
 }
 
 function validatePlan(plan,kind,cycle) {
-  if(!exact(plan,['schema','kind','cycle','revision','frozenAt','ledgerSha256','coverage','missingPreviews','input']) ||
+  if(!exact(plan,['schema','kind','cycle','revision','frozenAt','ledgerSha256','coverage','missingPreviews','input','rssCheckpoint']) ||
      plan.schema!==reportPlanSchema || plan.kind!==kind || plan.cycle!==cycle ||
      !Number.isSafeInteger(plan.revision) || plan.revision<1 || !Number.isFinite(Date.parse(plan.frozenAt)) ||
      !shaPattern.test(plan.ledgerSha256||'') || !Number.isSafeInteger(plan.missingPreviews) || plan.missingPreviews<0 ||
@@ -61,6 +62,12 @@ function validatePlan(plan,kind,cycle) {
         !exact(p.continue_reading,['level']) ||
         !(p.continue_reading.level==null || ['string','number'].includes(typeof p.continue_reading.level)))fail('preview_invalid');
   }
+  const checkpoint=plan.rssCheckpoint;
+  if(checkpoint!==undefined && (!exact(checkpoint,['knownKeys','sources']) ||
+    !Array.isArray(checkpoint.knownKeys) || !checkpoint.knownKeys.every(key=>shaPattern.test(key)) ||
+    !Array.isArray(checkpoint.sources) || !checkpoint.sources.every(s=>
+      exact(s,['id','url','kind','enabled','mode','history_mode','earliest_date','direct_reading','generate_guide','translation_mode']) &&
+        s.kind==='rss' && s.enabled===true && /^https?:\/\//u.test(s.url || ''))))fail('rss_checkpoint_invalid');
   if(Buffer.byteLength(JSON.stringify(plan))>limit)fail('plan_too_large');
 }
 
@@ -100,21 +107,33 @@ export async function sealReportDraft(home,kind,cycle,{now=new Date(),render}={}
     if(consumed?.planSha256===planSha256 && plan?.revision>=evidence.revision)return prior;
     if(plan)validatePlan(plan,kind,cycle);
     const matchesRevision=plan && plan.revision>=evidence.revision;
-    const input=matchesRevision ? plan.input : [];
+    const earlier=matchesRevision ? [...plan.input] : [];
     const issue=!plan?'missing_plan':!matchesRevision?'stale_revision':plan.coverage.some(row=>!row.jobId)?'source_checkpoint_missing':
       plan.missingPreviews?'previews_missing':null;
+    let rssReplay=null;
+    if(matchesRevision && issue && plan.rssCheckpoint && plan.coverage.some(row=>row.kind==='rss' && !row.jobId)){
+      const {replayReportRss}=await import('./report-rss-replay.mjs');
+      const replay=await replayReportRss(home,plan).catch(()=>({status:'waiting_input',reason:'rss_replay_unavailable',items:[],pending:[]}));
+      const {items,...details}=replay;
+      rssReplay={...details,items:items.map(({input,bodyFile,previewFile,...evidence})=>evidence)};
+      earlier.push(...items.filter(item=>!earlier.some(row=>row.id===item.id)).map(item=>item.input));
+    }
+    const input=earlier;
+    const status=!issue?'draft_ready':rssReplay?.items.length?'provisional_draft':'waiting_input';
     if(prior && prior.planSha256===planSha256 && prior.reason===issue && hash(prior.macSources)===hash(evidence.macSources) &&
-       prior.revision===Math.max(plan?.revision||0,evidence.revision)) {
+       prior.revision===Math.max(plan?.revision||0,evidence.revision) && prior.status===status &&
+       prior.inputSha256===hash(input) && hash(prior.rssReplay ?? null)===hash(rssReplay)) {
       const draft=await readJson(f.draft);
       if(hash(draft)!==prior.resultSha256)fail('draft_changed');
       return prior;
     }
     render ||= (await import('../rss-reading/core.mjs')).renderGeneratedReportDraft;
     const draft=render(input);
-    const receipt={schema:reportPlanSchema,status:issue?'waiting_input':'draft_ready',reason:issue,kind,cycle,
+    const receipt={schema:reportPlanSchema,status,reason:issue,kind,cycle,
       revision:Math.max(plan?.revision||0,evidence.revision),jobId:jobId(kind,cycle),
       planSha256,inputSha256:hash(input),resultSha256:hash(draft),items:input.length,macSources:evidence.macSources,
       missingSources:plan?.coverage.filter(row=>!row.jobId).map(row=>row.kind) ?? null,missingPreviews:plan?.missingPreviews ?? null,
+      ...(rssReplay ? {rssReplay} : {}),
       finishedAt:now.toISOString(),publishable:false};
     await writeJson(f.draft,draft);
     await writeJson(f.receipt,receipt);
@@ -158,7 +177,13 @@ export async function collectReportPlans(root,now=new Date()) {
   const needed=sourceKinds.filter(kind=>cfg.subscriptions.some(s=>s.enabled && sourceKind(s)===kind));
   const periods=reportKinds.map(kind=>({kind,date:reportCycle(kind,now,{next:true}).slice(10)}));
   const {prepareScheduledReportDrafts}=await import('../rss-reading/core.mjs');
-  const plans=await prepareScheduledReportDrafts(root,periods);
+  const {plans,knownUrls}=await prepareScheduledReportDrafts(root,periods);
+  const {materialKey}=await import('./catalog.mjs');
+  const knownKeys=[...new Set(knownUrls.map(url=>digest(materialKey(url))))].sort();
+  const sources=cfg.subscriptions.filter(s=>s.enabled && s.kind==='rss').map(
+    ({id,url,kind,enabled,mode,history_mode,earliest_date,direct_reading,generate_guide,translation_mode})=>
+      ({id,url,kind,enabled,mode,history_mode,earliest_date,direct_reading,generate_guide,translation_mode}));
+  const rssCheckpoint={knownKeys,sources};
   const frozenAt=new Date().toISOString();
   if((await readJson(p.config))?.revision!==cfg.revision)fail('config_changed');
   const scopes=await readJson(path.join(p.home,'applied-source-scopes.json'),{});
@@ -176,7 +201,7 @@ export async function collectReportPlans(root,now=new Date()) {
         !j.steps.scan.result?.reports?.results?.some(result=>!result.ok) && !j.steps.scan.result?.auto?.feeds?.some(feed=>feed.error);
       return {kind:source,jobId:ready?id:null,sha256:ready?digest(raw):null};
     }));
-    return {schema:reportPlanSchema,kind,cycle,revision:cfg.revision,frozenAt,ledgerSha256,coverage,missingPreviews,input};
+    return {schema:reportPlanSchema,kind,cycle,revision:cfg.revision,frozenAt,ledgerSha256,coverage,missingPreviews,input,rssCheckpoint};
   }));
 }
 
@@ -194,7 +219,15 @@ async function main() {
   const [op,home,kind,explicit]=process.argv.slice(2);
   if(!path.isAbsolute(home||''))fail('path_invalid');
   const cycle=explicit||reportCycle(kind);
-  if(op==='run')return sealReportDraft(home,kind,cycle);
+  if(op==='run') {
+    if(process.platform==='darwin'){
+      const cache=path.join(homedir(),'Agent','Caches','ProgressiveReading');
+      process.env.AI_PRODUCER_CODEX_BIN ||= path.join(homedir(),'.local','bin','codex');
+      process.env.AI_PRODUCER_CODEX_WORK_DIR ||= path.join(cache,'codex-exec');
+      process.env.PR_PREPROCESS_CACHE_DIR ||= path.join(cache,'preprocess');
+    }
+    return sealReportDraft(home,kind,cycle);
+  }
   if(op==='publish')return putReportPlan(home,kind,cycle,await stdin());
   if(op==='receive') {
     const input=await stdin();

@@ -123,7 +123,8 @@ export async function readCapturedFeeds(file, cycle, config) {
   if (!info.isFile() || info.size > maxBytes + 1024 * 1024) throw new Error('rss_capture_invalid_file');
   const record = validateCapture(await readJson(file), cycle, feedPlan(config));
   const entries = new Map(record.feeds.map(feed => [feed.url, feed]));
-  return { sha256: record.sha256, fetchedAt: record.finishedAt, fetchFeed: async url => {
+  const completed=record.feeds.filter(feed=>feed.status==='completed').length;
+  return { sha256: record.sha256, fetchedAt: record.finishedAt, completed, failed:record.feeds.length-completed, fetchFeed: async url => {
     const feed = entries.get(normalizeUrl(url));
     if (!feed || feed.status !== 'completed') throw new Error(feed?.error || 'rss_capture_source_missing');
     return { text: feed.xml, finalUrl: feed.finalUrl, response: new Response(null, { headers: feed.headers }) };
