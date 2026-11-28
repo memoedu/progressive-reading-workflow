@@ -81,6 +81,7 @@ import {
   discoverRecentZhihuLikes,
   discoverZhihuLikesSince,
   unlikeZhihuItems,
+  verifyZhihuArchiveAccount,
   verifyZhihuLikesRemoved
 } from "./zhihu-social-archive.mjs";
 import {
@@ -3032,11 +3033,16 @@ async function handle(req, res) {
       }
       const items = Array.isArray(body.items) ? body.items : [];
       if (!items.length || items.length > 50) throw new Error("frozen_zhihu_items_required");
-      if (body.action === "verify") {
+      const accountReadback = body.action === "state" || body.readback === "account";
+      if (accountReadback) await verifyZhihuArchiveAccount(body.profile_token, {
+        cookieHeaderForUrl: runtimeCookieHeaderForUrl, retryDelaysMs: []
+      });
+      if (body.action === "verify" || body.action === "state") {
         const verification = await verifyZhihuLikesRemoved({
           profileToken: body.profile_token,
           removedItems: items,
-          cookieHeaderForUrl: runtimeCookieHeaderForUrl
+          cookieHeaderForUrl: runtimeCookieHeaderForUrl,
+          ...(accountReadback && { attempts: 1, readAccountState: true })
         });
         return sendJson(res, 200, { status: verification.status === "verified" ? "cleanup_verified" : "cleanup_unverified", verification });
       }
@@ -3050,7 +3056,8 @@ async function handle(req, res) {
         verification = await verifyZhihuLikesRemoved({
           profileToken: body.profile_token,
           removedItems: items,
-          cookieHeaderForUrl: runtimeCookieHeaderForUrl
+          cookieHeaderForUrl: runtimeCookieHeaderForUrl,
+          ...(accountReadback && { attempts: 1, readAccountState: true })
         });
       } catch (error) {
         return sendJson(res, 200, {
