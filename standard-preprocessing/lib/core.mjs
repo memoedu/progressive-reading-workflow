@@ -43,7 +43,8 @@ const CONTINUE_READING_LABELS = {
 const VALUE_LABELS = { very_low: "极低", low: "低", medium: "中", high: "高", very_high: "极高" };
 const DENSITY_LABELS = { very_low: "极低", low: "低", medium: "中", high: "高", very_high: "极高" };
 const AUTHOR_ATTRIBUTION_PATTERN=new RegExp(
-  String.raw`\b(?:authors?|researchers?|writers?)(?:\s+of\s+(?:(?:the|this|that|a|an)\s+)?(?:papers?|stud(?:y|ies)|books?|articles?|reports?|reviews?))?\s+`
+  String.raw`\b(?:(?:authors?|researchers?|writers?)(?:\s+of\s+(?:(?:the|this|that|a|an)\s+)?(?:papers?|stud(?:y|ies)|books?|articles?|reports?|reviews?|evaluations?|evals?))?`
+  +String.raw`|(?:there\s+(?:are|were)|some|several|many|other)\s+(?:authors|researchers|writers)\s+(?:who|that))\s+`
   +String.raw`(?:(?:also|further|explicitly|specifically)\s+)?(?:(?:do|does|did|have|has|had)\s+(?:not\s+)?)?(?:(?:also|further|explicitly|specifically|long|previously|already)\s+)?`
   +String.raw`(?:point(?:s|ed)?\s+(?:out|to)|(?:make(?:s)?|made)\s+(?:(?:a|an|the)\s+)?(?:(?:good|valid|important|key|interesting|excellent|useful|fair|following|compelling)\s+)?points?|(?:argue|note|emphasize|suggest|explain|conclude|state|claim|observe|think|thought|believe|consider|propose|maintain|assert|contend|recommend|say|said)(?:s|d|ed)?)\b`,'iu');
 function hasChineseAuthorAttribution(markdown){
