@@ -168,8 +168,8 @@ export function createSharedGitHub({ appId, installationId, keyPath, fetchImpl =
           entries.push({ path: originalEntry.path, content: original });
           changed = true;
         }
-        const existingReading = readingSha256 && record.reading_files?.find(item => item.sha256 === readingSha256 &&
-          item.original_sha256 === originalSha256 && item.processing_sha256 === processingSha256);
+        const existingReading = readingSha256 && record.reading_files?.find(item => item.original_sha256 === originalSha256 &&
+          (item.processing_sha256 === processingSha256 || (optionsSha256 && item.options_sha256 === optionsSha256)));
         if (readingSha256 && !existingReading) {
           const entry = { path: sharedReadingPath(url, readingSha256), sha256: readingSha256,
             original_sha256: originalSha256, processing_sha256: processingSha256,

@@ -1,12 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readJson, withLock, writeJson } from './config.mjs';
-import { sharedLibrarySettings, sharedReadingOptionsKey, syncSharedReading } from './shared-library-client.mjs';
+import { sharedLibrarySettings, sharedReadingOptionsKey, syncSharedReading, syncSharedVersions } from './shared-library-client.mjs';
 import { sha256Pattern, sharedDigest } from './shared-library.mjs';
 
 const directory = root => path.join(root, '.local-ir', 'shared-reading-publications');
 const recordPath = (root, id) => path.join(directory(root), id + '.json');
 const retryDelay = attempts => Math.min(60, 2 ** Math.min(attempts - 1, 6)) * 60_000;
+const formerEligibilityReasons = new Set(['source_not_publicly_verified', 'public_source_body_mismatch',
+  'video_source_not_publicly_verified', 'personal_or_existing_document']);
+const currentReceipt = record => record && !formerEligibilityReasons.has(record.receipt?.reason) ? record.receipt : null;
 
 function publicationId(request) {
   return sharedDigest(JSON.stringify([
@@ -20,10 +23,10 @@ export async function queueReadingPublication(root, request, receipt, now = Date
   const id = publicationId(request);
   const file = recordPath(root, id);
   const existing = await readJson(file);
-  if (existing) return existing.receipt;
+  if (currentReceipt(existing)) return existing.receipt;
   return withLock(file + '.lock', async () => {
     const previous = await readJson(file);
-    if (previous) return previous.receipt;
+    if (currentReceipt(previous)) return previous.receipt;
     const saved = { ...receipt, sync_id: id };
     const attempts = receipt.status === 'queued' ? 0 : 1;
     await writeJson(file, { attempts, retry_at: attempts ? now + retryDelay(attempts) : now, request, receipt: saved });
@@ -37,9 +40,11 @@ export async function readingPublicationReceipt(root, id) {
 }
 
 export async function retryReadingPublications(root, {
-  now = Date.now(), settings = sharedLibrarySettings, syncReading = syncSharedReading
+  now = Date.now(), settings = sharedLibrarySettings, syncReading = syncSharedReading, syncVersions = syncSharedVersions,
+  eventId = null
 } = {}) {
-  const files = await fs.readdir(directory(root)).catch(error => {
+  if (eventId !== null && !sha256Pattern.test(eventId)) throw new Error('invalid_publication_event_id');
+  const files = eventId ? [eventId + '.json'] : await fs.readdir(directory(root)).catch(error => {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
@@ -60,7 +65,9 @@ export async function retryReadingPublications(root, {
           ? await syncReading(root, current.request).catch(() => ({ status:'retry_wait', error:'shared_sync_unavailable' }))
           : { status:'local_only', reason:'queued_publication_changed' };
         if (['sharing_disabled', 'shared_account_or_source_missing'].includes(result.reason)) return null;
-        const receipt = { ...result, sync_id: id };
+        const variants = result.status === 'available' && !result.reused && current.request.versions?.length
+          ? await syncVersions(root, current.request.url, result.original.sha256, current.request.versions) : [];
+        const receipt = { ...result, sync_id: id, ...(variants.length ? { shared_versions: variants } : {}) };
         const attempts = current.attempts + 1;
         await writeJson(file, { attempts, receipt, ...(result.status === 'retry_wait'
           ? { retry_at: now + retryDelay(attempts), request: current.request } : {}) });

@@ -5,8 +5,8 @@ import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { pilotArticleUrl, sharedArticleUrl, sharedDigest, sharedSchema, sharedVariantPath, variantKind,
-  sharedIndexPath, sharedMaterialRecord, sharedReadingSource, sha256Pattern } from './shared-library.mjs';
-import { createPublicRssSources, localOnly, verifyPublicReadingSource } from './shared-library-sources.mjs';
+  sharedIndexPath, sharedMaterialRecord, sha256Pattern } from './shared-library.mjs';
+import { createPublicRssSources, localOnly } from './shared-library-sources.mjs';
 import { createSharedGitHub } from './shared-library-github.mjs';
 import { fetchUrlWithoutBrowser } from '../scripts/url-background-fetch.mjs';
 import { htmlArticleToMarkdown } from '../scripts/browser-page-markdown.mjs';
@@ -71,7 +71,7 @@ function sessionProtocol(config, now = Date.now) {
         const { name, exp, version } = JSON.parse(Buffer.from(value[1], 'base64url'));
         const saved = account(name);
         if (saved && Number.isSafeInteger(exp) && exp > now() && version === saved.hash.slice(0, 12)) {
-          return { trusted_public_source_publisher: saved.trusted_public_source_publisher === true };
+          return true;
         }
         return null;
       } catch { return false; }
@@ -106,15 +106,12 @@ function checkCredentials(markdown, executable) {
 export function createSharedLibraryServer({
   config, github = createSharedGitHub(config.github), fetchArticle = config.public_rss
     ? createPublicRssSources(config.public_rss) : url => pilotArticleUrl(url) ? fetchPilotArticle(url) : localOnly('source_not_in_public_feed'),
-  scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now, fetchMaterial = fetch,
-  verifyReadingSource
+  scan = markdown => checkCredentials(markdown, config.gitleaks), now = Date.now, fetchMaterial = fetch
 }) {
   const sessions = sessionProtocol(config, now);
   const limits = new Map();
   const pending = new Map();
   const writeAvailable = Boolean(github.ready && config.gitleaks);
-  const publicWebOrigins = config.public_web_origins === undefined ? undefined : new Set(config.public_web_origins);
-  const verifySource = verifyReadingSource || (url => verifyPublicReadingSource(url, fetch, publicWebOrigins));
   const publicMaterials = new Map((config.public_materials || []).map(({ url, extension, sha256, bytes, article_url }) => {
     const record = sharedMaterialRecord({ schema: 'progressive-reading.shared-material/v1', url, extension, sha256, bytes,
       path: '原材料/' + String(extension).toUpperCase() + '/' + sha256 + '.' + extension,
@@ -168,34 +165,18 @@ export function createSharedLibraryServer({
     return { status: result.status, commit: result.commit, version };
   }
 
-  async function saveReading(input, publisher) {
+  async function saveReading(input) {
     const url = sharedArticleUrl(input.url);
     const { original, reading, processing_sha256: processingSha256, options_sha256: optionsSha256 } = input;
     const inputs = reading === undefined ? [original] : [original, reading];
     if (!url || (reading !== undefined && !sha256Pattern.test(processingSha256 || '')) ||
       (optionsSha256 !== undefined && (reading === undefined || !sha256Pattern.test(optionsSha256))) || inputs.some(markdown =>
-      typeof markdown !== 'string' || markdown.trim().length < 80 || markdown.startsWith('---') || Buffer.byteLength(markdown) > 700000)) {
+      typeof markdown !== 'string' || !markdown.trim() || markdown.startsWith('---') || Buffer.byteLength(markdown) > 700000)) {
       throw new Error('shared_invalid_reading');
     }
-    const current = await github.lookup(url);
-    const originalSha256 = sharedDigest(original);
-    const alreadyVerified = [current.record?.original, ...(current.record?.original_revisions || [])].some(item => item?.sha256 === originalSha256);
-    const attestation = input.public_source_attestation;
-    const source = sharedReadingSource(url);
-    const canonical = new URL(url);
-    const youtubeProof = source === 'youtube' && attestation?.type === 'youtube_public_channel_listing' &&
-      attestation.video_id === canonical.searchParams.get('v');
-    const bilibiliProof = source === 'bilibili' && attestation?.type === 'bilibili_public_playback' &&
-      attestation.video_id === canonical.pathname.split('/').at(-1) && attestation.part === Number(canonical.searchParams.get('p') || 1);
-    const certifiedVideo = publisher?.trusted_public_source_publisher === true &&
-      (youtubeProof || bilibiliProof) && attestation.original_sha256 === originalSha256 &&
-      typeof attestation.title === 'string' && attestation.title.trim() && attestation.title.length <= 300 &&
-      !publicArchiveContainsPrivateData(url, attestation.title, config.private_email_sha256 || []);
-    const proof = alreadyVerified ? current.record : certifiedVideo ? { title: attestation.title } : await verifySource(url);
-    if (!proof) return localOnly('source_not_publicly_verified');
-    if (proof.markdown && proof.markdown.trim() !== original.trim()) return localOnly('public_source_body_mismatch');
-    const title = String(proof.title || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);
-    if (inputs.some(body => publicArchiveContainsPrivateData(url, body, config.private_email_sha256)) ||
+    const heading = /^#\s+([^\n]+)/mu.exec(original)?.[1];
+    const title = (typeof input.title === 'string' && input.title.trim() || heading || new URL(url).hostname).replace(/\s+/gu, ' ').trim().slice(0, 160);
+    if ([title, ...inputs].some(body => publicArchiveContainsPrivateData(url, body, config.private_email_sha256)) ||
         !await scan([title, ...inputs].join('\n'))) throw new Error('shared_material_not_publication_ready');
     return github.publishReading({ url, title, original, reading, processingSha256, optionsSha256 });
   }
@@ -232,11 +213,10 @@ export function createSharedLibraryServer({
         return json(res, 200, await saveVersion(await readBody(req, 1024 * 1024)));
       }
       if (action === 'publication') {
-        const publisher = sessions.verify(req.headers.authorization);
-        if (!publisher) return json(res, 401, { error: 'shared_login_required' });
+        if (!sessions.verify(req.headers.authorization)) return json(res, 401, { error: 'shared_login_required' });
         if (!writeAvailable) return json(res, 503, { error: 'shared_repository_writer_not_configured' });
         if (!allowed(req, 'publication', 12)) return json(res, 429, { error: 'shared_submission_rate_limited' });
-        return json(res, 200, await saveReading(await readBody(req, 2 * 1024 * 1024), publisher));
+        return json(res, 200, await saveReading(await readBody(req, 2 * 1024 * 1024)));
       }
       const input = await readBody(req);
       if (route.pathname === prefix + 'session') {

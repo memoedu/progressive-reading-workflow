@@ -118,7 +118,10 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
     assert.ok(created.request_id);
     const completed = (await poll('/api/browser-import/requests/'+created.request_id,value=>value.terminal)).results[0];
     assert.equal(completed.status,'imported');
-    const receipt=completed.receipt.shared_reading;
+    assert.ok(completed.receipt.shared_reading.sync_id);
+    const published = await poll('/api/browser-import/requests/'+created.request_id,
+      value => value.results[0]?.receipt?.shared_reading?.status === expected);
+    const receipt=published.results[0].receipt.shared_reading;
     assert.equal(receipt.status,expected);
     if (slug==='verified') assert.equal(await fs.readFile(path.join(root,'readback-completed'),'utf8'),receipt.commit);
     else {
@@ -141,16 +144,16 @@ test('URL imports save locally, verify GitHub readback across reader routes and 
   assert.ok(snapshot.request_id);
   const snapshotResult = (await poll('/api/browser-import/requests/'+snapshot.request_id,value=>value.terminal)).results[0];
   assert.equal(snapshotResult.receipt?.processing_mode,'standard_preprocess',JSON.stringify(snapshotResult.errors));
-  assert.equal(snapshotResult.receipt.shared_reading.status,'available');
-  assert.ok(snapshotResult.receipt.shared_reading.reading.sha256);
+  assert.ok(snapshotResult.receipt.shared_reading.sync_id);
   assert.ok(snapshotResult.receipt.shared_original.sync_id);
   const recovered = await poll('/api/browser-import/requests/'+retryRequest,
     value=>value.results[0]?.receipt?.shared_reading?.status==='available');
   assert.equal(recovered.results[0].receipt.shared_reading.commit,'1'.repeat(40));
   const originalSynced = await poll('/api/browser-import/requests/'+snapshot.request_id,
-    value=>value.results[0]?.receipt?.shared_original?.status==='available');
+    value=>value.results[0]?.receipt?.shared_original?.status==='available' && value.results[0]?.receipt?.shared_reading?.status==='available');
+  assert.ok(originalSynced.results[0].receipt.shared_reading.reading.sha256);
   assert.equal(originalSynced.results[0].receipt.shared_original.original.sha256,
-    snapshotResult.receipt.shared_reading.original.sha256);
+    originalSynced.results[0].receipt.shared_reading.original.sha256);
   assert.equal(originalSynced.results[0].receipt.shared_original.reading,undefined);
   const writesBefore = await fs.readFile(path.join(root, 'publication-writes'), 'utf8');
   const repeated = await fetch(base+'/api/browser-import/requests', {method:'POST', headers:{'content-type':'application/json'},

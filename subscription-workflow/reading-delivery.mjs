@@ -119,7 +119,7 @@ export async function deliverArticle(paths, item, name, options = {}) {
   const runner = options.readingRunner || runPreprocessingRequest;
   const run = await runner(request,{outputDir,publishPath:target,assetSourceDir:item.source_package_path,cacheDir:readingCache,
     automaticFilenameSource:item.item_url,
-    publicationSource: options.readingRunner ? null : { url:item.item_url, archivedOriginalSha256:shareable ? originalSha256 : undefined },
+    publicationSource: options.readingRunner ? null : { url:item.item_url },
     ...(!options.readingRunner ? {producer:await subscriptionProducer()} : {}),
     onProgress:event=>options.onPreviewProgress?.({materialId:item.material_id,status:'processing',...event})});
   accepted(run);
@@ -183,7 +183,7 @@ export async function addReadingGuide(paths,item,options = {}) {
   const generatedReading = !source.user_instruction && originalPublication?.markdown?.sha256 === digest(before) &&
     digest(await fs.readFile(file)) === digest(after);
   if (!options.guideRunner) Object.assign(item.reading_guide, await synchronizeReadingPublication(paths.workflowRoot, {
-    url:item.item_url, original:source.material?.markdown, archivedOriginalSha256:source.source_metadata?.shared_original_sha256,
+    url:item.item_url, title:source.source_metadata?.title, original:source.material?.markdown,
     markdown:generatedReading ? after : undefined,
     standardResult:generatedReading ? run.result : undefined, processingOptions:readingRequest(source,item,true).processing_options
   }));
