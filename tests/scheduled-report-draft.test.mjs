@@ -56,7 +56,9 @@ test('a native draft waits for complete current revision and rejects earlier ove
   const read=operation=>JSON.parse(execFileSync(process.execPath,[cli,operation,home,'weekly',cycle],{encoding:'utf8'}));
   assert.deepEqual(read('status'),result.receipt);
   assert.deepEqual(read('consumed'),one);
-  await assert.rejects(candidate(home,{revision:42}),/already_consumed/u);
+  await assert.rejects(candidate(home,{revision:41,frozenAt:'2026-11-29T12:30:00.000Z'}),/already_consumed/u);
+  await candidate(home,{revision:42});
+  assert.equal((await run()).revision,42);
 });
 
 test('the original renderer uses the sealed result only for its freshly selected exact input',async t=>{
@@ -84,4 +86,24 @@ test('the original renderer uses the sealed result only for its freshly selected
   const job={id:id('weekly'),kind:'weekly',cycle,status:'completed',result:{draftRender:result.receipt}};
   const confirm=(_binding,_op,kind,period,receipt)=>confirmSealedReportDraft(home,kind,period,receipt);
   assert.deepEqual(await settleReportDraft(root,job,confirm),await settleReportDraft(root,job,confirm));
+});
+
+test('an old acknowledgement cannot consume a replacement plan or a newer registry revision',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'report-draft-ack-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const home=path.join(root,'drafts'), registry=path.join(root,'SubscriptionFeedCapture','registry.json');
+  await writeJson(registry,{revision:40});
+  await candidate(home);
+  const first=await sealReportDraft(home,'weekly',cycle,{now:due});
+  const ack=saved=>confirmSealedReportDraft(home,'weekly',cycle,{jobId:saved.jobId,planSha256:saved.planSha256,resultSha256:saved.resultSha256});
+  await candidate(home,{frozenAt:'2026-11-29T11:30:00.000Z'});
+  await assert.rejects(ack(first),/confirmation_stale/u);
+  const second=await sealReportDraft(home,'weekly',cycle,{now:due});
+  await writeJson(registry,{revision:41});
+  await assert.rejects(ack(second),/confirmation_stale/u);
+  await candidate(home,{revision:41});
+  const third=await sealReportDraft(home,'weekly',cycle,{now:due});
+  const confirmed=await ack(third);
+  assert.equal(confirmed.planSha256,third.planSha256);
+  assert.deepEqual(await ack(third),confirmed);
 });
