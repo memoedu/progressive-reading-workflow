@@ -15,6 +15,14 @@ Windows 订阅页面保存或删除来源、CLI 激活订阅后，沿现有 `rem
 
 SSH 失败时，下一次原配置保存或原 RSS 领取会读取 Windows 已保存的最新配置并重试。Mac 已冻结的周期输入保持原样。如果接收时才追回新配置，旧版捕获仍按原规则校验，无法使用时由 Windows 本轮采集。只读对账用 `node subscription-workflow/rss-registry-sync.mjs <Windows订阅数据目录> verify`，返回两端一致的修订、源数及投影哈希。
 
+## 知乎专栏发现
+
+Windows 订阅数据目录的 `remote-zhihu-discovery.json` 可启用原定时知乎扫描的专栏发现阶段。它使用既有固定 SSH 主机密钥、别名 `mac-mini-tailscale` 和绑定的 Mac 用户主目录。Windows 原计划将当期作业送入原队列，原 worker 在锁内读取启用专栏和当前配置修订。
+
+Mac 使用已运行的本机 Chrome 验证现有知乎账号并读取专栏页。它只打开和关闭自己的标签页，通过原有分页解析器生成稳定 ID、标题、时间和修订，记录页偏移、每页结果及总数提示。临时响应在 Mac 解析后删除。响应与当期、修订、来源及结果哈希绑定，正文和浏览器凭据留在原设备。
+
+Windows 只接收完整的阶段回执，累计偏移不连续或缺少末页时使用 Windows 原发现路径。平台确实在末页结束但报告的总数与收录量有差异时，沿用原 `zhihu_column_count_discrepancy`。原作业的 `steps.scan.result.discovery` 记录实际执行端及回退原因。Windows 原游标、正文抓取、审核、归档和通知继续由原 worker 管理。单篇正文读取失败时，Windows 仍可从原专栏接口取同一 ID、同修订的正文。关闭绑定即可回到 Windows 发现，无需重建任务。
+
 ## 日报和周报
 
 候选输入位于 `<stage-home>/<cycle>/<kind>/input`，分为 `workspace`、`state`、`rss`、`video` 四个子目录，另以 `roots.json` 记录四个原 Windows 输入根。已有正文的正式传输由阅读同步负责。冻结输入排除 Local IR 与浏览器凭据。

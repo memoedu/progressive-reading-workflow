@@ -31,7 +31,7 @@ function itemIdentity(item) {
 }
 
 export async function discoverZhihuColumn(value, { cookieHeaderForUrl, fetchImpl = fetch, onProgress = async () => {}, maxPages = 1000,
-  strictCounts = true, includeAnswers = false, onWarning = async () => {} } = {}) {
+  strictCounts = true, includeAnswers = false, onWarning = async () => {}, requestJson = requestZhihuJson } = {}) {
   const column = zhihuColumnIdentity(value);
   if (!column) throw new Error("zhihu_column_url_invalid");
   const options = { cookieHeaderForUrl, retryDelaysMs: [],
@@ -71,7 +71,7 @@ export async function discoverZhihuColumn(value, { cookieHeaderForUrl, fetchImpl
     if (pages >= maxPages) throw new Error("zhihu_column_incomplete_page_limit");
     if (seenPages.has(next)) throw new Error("zhihu_column_incomplete_repeated_page");
     seenPages.add(next);
-    const payload = await requestZhihuJson(next, options);
+    const payload = await requestJson(next, options);
     if (!Array.isArray(payload.data) || typeof payload.paging?.is_end !== "boolean") throw new Error("zhihu_column_paging_invalid");
     if (payload.data.length && payload.data.every(item => listingItems.has(itemIdentity(item)))) throw new Error('zhihu_column_incomplete_repeated_items');
     if (payload.paging.totals != null) {
@@ -97,7 +97,7 @@ export async function discoverZhihuColumn(value, { cookieHeaderForUrl, fetchImpl
       error:`知乎专栏数量异常：平台 ${expectedTotal}，实际 ${listingItems.size}。已获取内容继续处理。` };
     warnings.push(warning); await onWarning(warning);
   }
-  const pinned = await requestZhihuJson(`https://zhuanlan.zhihu.com/api/columns/${column.id}/pinned-items/v2`, options);
+  const pinned = await requestJson(`https://zhuanlan.zhihu.com/api/columns/${column.id}/pinned-items/v2`, options);
   if (!Array.isArray(pinned.data)) throw new Error("zhihu_column_pinned_items_invalid");
   for (const item of pinned.data) { add(item, false); pinnedCount += 1; }
   return {
