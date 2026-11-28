@@ -205,12 +205,14 @@ export function sharedReadingProcessingKey({ kind = 'web', processingOptions } =
     options: sharedReadingOptions(kind, processingOptions) }));
 }
 
-function publicReadingBody(markdown) {
+export function publicReadingBody(markdown) {
   return markdown.replace(/^\uFEFF/u, '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '').trim();
 }
 
-function readingEntry(record, request, originalSha256) {
-  const candidates = record.reading_files?.filter(item => !originalSha256 || item.original_sha256 === originalSha256) ?? [];
+function readingEntry(record, request, originalSha256, readingSha256) {
+  const candidates = record.reading_files?.filter(item =>
+    (!originalSha256 || item.original_sha256 === originalSha256) &&
+    (!readingSha256 || item.sha256 === readingSha256)) ?? [];
   const processingSha256 = sharedReadingProcessingKey(request);
   const optionsSha256 = sharedReadingOptionsKey(request);
   return candidates.findLast(item => item.processing_sha256 === processingSha256) ??
@@ -229,14 +231,14 @@ async function verifiedReadingBytes(commit, item, fetchImpl) {
   return bytes;
 }
 
-export async function lookupSharedReadingArtifacts(root, { url, kind, processingOptions, originalSha256, includeReading = true, includeOriginal = true }, { fetchImpl = fetch } = {}) {
+export async function lookupSharedReadingArtifacts(root, { url, kind, processingOptions, originalSha256, readingSha256, includeReading = true, includeOriginal = true }, { fetchImpl = fetch } = {}) {
   const canonical = sharedArticleUrl(url);
   const state = await settings(root);
   if (!canonical || !state.enabled || !state.endpoint) return null;
   const response = await request(state, 'article', { sha256: sharedDigest(canonical) }, fetchImpl);
   if (response.status !== 'available') return null;
   const record = sharedRecord(response.record, canonical);
-  const entry = includeReading && readingEntry(record, { kind:kind || defaultReadingKind(canonical), processingOptions }, originalSha256);
+  const entry = includeReading && readingEntry(record, { kind:kind || defaultReadingKind(canonical), processingOptions }, originalSha256, readingSha256);
   if (entry) return verifiedReadingPair(response.commit, record, entry, fetchImpl);
   if (!includeOriginal) return null;
   const original = originalSha256
@@ -258,6 +260,7 @@ export async function syncSharedReading(root, { url, title, kind, original, mark
     return { status: 'local_only', reason: !state.enabled ? 'sharing_disabled' : 'shared_account_or_source_missing' };
   }
   const reading = markdown === undefined ? undefined : publicReadingBody(markdown);
+  const readingSha256 = reading === undefined ? undefined : sharedDigest(reading);
   kind ||= defaultReadingKind(canonical);
   const processingSha256 = reading === undefined ? undefined : sharedReadingProcessingKey({ kind, processingOptions });
   const optionsSha256 = reading === undefined ? undefined : sharedReadingOptionsKey({ kind, processingOptions });
@@ -268,7 +271,7 @@ export async function syncSharedReading(root, { url, title, kind, original, mark
   try {
     const originalSha256 = sharedDigest(original);
     const indexed = await lookupSharedReadingArtifacts(root, { url: canonical, kind, processingOptions, originalSha256,
-      includeReading: reading !== undefined }, { fetchImpl });
+      readingSha256, includeReading: reading !== undefined }, { fetchImpl });
     if (indexed && (reading === undefined || indexed.reading)) {
       const { originalBytes, readingBytes, ...receipt } = indexed;
       return { ...receipt, reused: true };
@@ -285,7 +288,7 @@ export async function syncSharedReading(root, { url, title, kind, original, mark
       await verifiedReadingBytes(result.commit, entry, fetchImpl);
       return { status: 'available', commit: result.commit, title: record.title, original: entry };
     }
-    const entry = readingEntry(record, { kind, processingOptions }, originalSha256);
+    const entry = readingEntry(record, { kind, processingOptions }, originalSha256, readingSha256);
     if (!entry) throw new Error('shared_sync_invalid_receipt');
     const { originalBytes, readingBytes, ...receipt } = await verifiedReadingPair(result.commit, record, entry, fetchImpl);
     return receipt;

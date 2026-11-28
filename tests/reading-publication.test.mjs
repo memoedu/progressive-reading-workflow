@@ -99,6 +99,14 @@ test('a locally reused article synchronizes only the provable missing artifacts'
   const result = await reconcileReadingPublication(temp, arguments_, deps);
   assert.equal(result.shared_original.reused, true);
   assert.deepEqual(calls.map(call => call.markdown), [markdown]);
+  calls.length = 0;
+  arguments_.indexed.reading = { sha256:sharedDigest('a previous rendering of the same options') };
+  await reconcileReadingPublication(temp, arguments_, deps);
+  assert.deepEqual(calls.map(call => call.markdown), [markdown]);
+  arguments_.indexed.reading = { sha256:sharedDigest(markdown.trim()) };
+  calls.length = 0;
+  assert.equal((await reconcileReadingPublication(temp, arguments_, deps)).shared_reading.reused, true);
+  assert.deepEqual(calls, []);
   await fs.appendFile(file, '\nReader’s notes.');
   calls.length = 0;
   await reconcileReadingPublication(temp, arguments_, deps);

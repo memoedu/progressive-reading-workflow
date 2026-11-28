@@ -22,9 +22,11 @@ export function sharedArticleUrl(value) {
     const parameters = [...url.searchParams];
     if (parameters.length) {
       const [key, value] = parameters[0];
-      const numbered = (url.hostname === 'kirigaya.cn' && url.pathname === '/api/rss/blog' && key === 'seq') ||
+      const kirigaya = url.hostname === 'kirigaya.cn' && ['/api/rss/blog', '/blog/article'].includes(url.pathname) && key === 'seq';
+      const numbered = kirigaya ||
         (url.hostname === 'www.bilibili.com' && /^\/video\/BV[0-9A-Za-z]{10}$/u.test(url.pathname) && key === 'p');
       if (parameters.length !== 1 || !numbered || !/^[1-9]\d{0,9}$/u.test(value)) return null;
+      if (kirigaya) url.pathname = '/api/rss/blog';
     }
     return url.href;
   } catch { return null; }

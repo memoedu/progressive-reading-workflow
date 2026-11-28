@@ -9,9 +9,8 @@ const archivePath = /^(?!\.|\/)(?!.*(?:^|\/)\.)[^\\:\x00-\x1f]+\.md$/iu;
 const archiveIdentity = { name: 'Progressive Reading Archive', email: 'progressive-reading-archive@users.noreply.github.com' };
 const credentialLink = /https?:\/\/[^\s<>]+(?:\?|&(?:amp;)?)(?:access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?(?:id|key|token)|cookie|x-amz-credential)=/iu;
 const readerData = /(?:\b[a-z]:[\\/](?:Users|AppData)[\\/]|(?:^|\n)(?:reader_(?:email|username|account)|browser_draft_id)\s*:|<!--\s*(?:local-ir:(?:highlight|annotation|musing)|subscriptions:archived-short))/iu;
-// Start at a token boundary so opaque source strings cannot trigger a retry
-// from every character while the scanner looks for a following @.
-const emailAddress = /(?<![a-z0-9.!#$%&'*+/=?^_\x60{|}~-])[a-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/giu;
+// Bound email components so long opaque source strings cannot overflow the scanner.
+const emailAddress = /(?<![a-z0-9.!#$%&'*+/=?^_\x60{|}~-])[a-z0-9.!#$%&'*+/=?^_\x60{|}~-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,126}(?![a-z0-9-]|\.[a-z0-9-])/giu;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const gitBlob = bytes => createHash('sha1').update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
 

@@ -134,7 +134,7 @@ test('a verified publication separates original and reading files and reuses onl
           const version = { path: sharedReadingPath(source, sharedDigest(body)), sha256: sharedDigest(body),
             original_sha256: sha, processing_sha256: processingSha256, options_sha256: optionsSha256 };
           blobs.set(version.path, body);
-          indexed.reading_files = [version];
+          indexed.reading_files = [...(indexed.reading_files || []), version];
         }
         return { status: 'available', commit, record: indexed };
       }
@@ -179,22 +179,27 @@ test('a verified publication separates original and reading files and reuses onl
   assert.equal(receipt.status, 'available');
   assert.notEqual(receipt.original.path, receipt.reading.path);
   assert.equal(blobs.get(receipt.reading.path), reading);
-  const repeated = await syncSharedReading(root, { ...supplied, markdown: reading + '\nAnother rendering.' }, { fetchImpl });
+  const repeated = await syncSharedReading(root, supplied, { fetchImpl });
   assert.equal(repeated.reused, true);
   assert.deepEqual(repeated.reading, receipt.reading);
   assert.equal(publicationWrites, 2);
+  const different = reading + '\nAnother rendering.';
+  const differentReceipt = await syncSharedReading(root, { ...supplied, markdown: different }, { fetchImpl });
+  assert.equal(differentReceipt.status, 'available');
+  assert.equal(differentReceipt.reading.sha256, sharedDigest(different));
+  assert.equal(publicationWrites, 3);
   await updateSharedLibrarySettings(root, { action: 'logout' });
   const same = await downloadSharedReading(root, { url, processingOptions: { include_reading_guide: true, translate: true } }, { fetchImpl });
-  assert.equal(same.readingBytes.toString(), reading);
+  assert.equal(same.readingBytes.toString(), different);
   assert.equal(same.originalBytes.toString(), markdown);
-  const [currentVersion] = indexed.reading_files;
+  const currentVersion = indexed.reading_files.at(-1);
   const historicalReading = reading + ' Earlier rendering.';
   const historicalSha256 = sharedDigest(historicalReading);
   const historical = { ...currentVersion, path: sharedReadingPath(url, historicalSha256), sha256: historicalSha256,
     processing_sha256: sharedDigest('earlier processor') };
   blobs.set(historical.path, historicalReading);
   indexed.reading_files.push(historical);
-  assert.equal((await downloadSharedReading(root, request, { fetchImpl })).readingBytes.toString(), reading);
+  assert.equal((await downloadSharedReading(root, request, { fetchImpl })).readingBytes.toString(), different);
   indexed.reading_files = [historical];
   assert.equal((await downloadSharedReading(root, request, { fetchImpl })).readingBytes.toString(), historicalReading);
   assert.equal(await downloadSharedReading(root, { ...request, originalSha256: sharedDigest('other original') }, { fetchImpl }), null);
@@ -216,6 +221,8 @@ test('public-source acquisition checks feed membership and ignores credential-be
     }
   });
   assert.equal(sharedArticleUrl(item + '?access_token=fixture'), null);
+  assert.equal(sharedArticleUrl('https://kirigaya.cn/blog/article?seq=17'), 'https://kirigaya.cn/api/rss/blog?seq=17');
+  assert.equal(sharedArticleUrl('https://kirigaya.cn/blog/article?seq=17&access_token=fixture'), null);
   assert.equal(sharedArticleUrl('http://127.0.0.1/path'), null);
   assert.equal((await fetchArticle('https://news.example.com/p/unlisted')).status, 'local_only');
   assert.deepEqual(requests, [feed]);
