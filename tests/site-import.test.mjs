@@ -264,8 +264,9 @@ test('all-page scope complements featured links with sitemap pages and reuses in
     hits.push(url);
     const pages={
       [base+'/']:'<ul class="featured"><li><a href="/featured">Featured</a></li></ul>',
-      [base+'/robots.txt']:'',
+      [base+'/robots.txt']:'Sitemap: {{ site.url }}/sitemap.xml\nSitemap: {{site.url}}/broken.xml\nSitemap: /additional-sitemap.xml\n',
       [base+'/sitemap.xml']:'<urlset>'+[featured,unlisted,attachment].map(url=>'<url><loc>'+url+'</loc></url>').join('')+'</urlset>',
+      [base+'/additional-sitemap.xml']:'<urlset><url><loc>'+unlisted+'</loc></url></urlset>',
       [unlisted]:body
     };
     assert.ok(Object.hasOwn(pages,url),'unexpected fetch: '+url);
@@ -286,6 +287,7 @@ test('all-page scope complements featured links with sitemap pages and reuses in
   assert.equal(inventory.shared_library.tree,tree);
   assert.equal(hits.includes(featured),false);
   assert.equal(hits.includes(attachment),false);
+  assert.equal(hits.includes(base+'/additional-sitemap.xml'),true);
   assert.equal(inventory.articles[1].markdown_sha256,digest(body));
 });
 test('an HTML archive preserves articles with different body layouts',async()=>{
